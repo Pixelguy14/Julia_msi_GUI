@@ -12,7 +12,6 @@ using Libz
 #julia
 #]
 #add https://github.com/CINVESTAV-LABI/julia_mzML_imzML
-#Pkg.activate("/julia_mzML_imzML")
 using julia_mzML_imzML #could  add this to a try-catch to verify they're putting the correct name of the file
 @genietools
 
@@ -22,6 +21,7 @@ using julia_mzML_imzML #could  add this to a try-catch to verify they're putting
 function mean_value(x)
     sum(x) / length(x)
 end
+
 function contains_word(x, word)
     occursin(word, x)
 end
@@ -34,14 +34,7 @@ end
     # @out variables can only be modified by the backend
     # @in variables can be modified by both the backend and the browser
     # variables must be initialized with constant values, or variables defined outside of the @app block
-    @in N = 10
-    @out x = collect(1:10)
-    @out y = randn(10) # plot data must be an array or a DataFrame
-    @out msg = "The average is 0."
-    @in shift = false
-
-    #@out test = "/Borrador_Julia_GUI.jpeg"
-    @out test = "/wp"
+    @out test = "/wp.jpeg"
     #mkdir("new_folder")
     @in file_route = "None"
     @out warning_fr = ""
@@ -53,7 +46,11 @@ end
     @out indeximg = 0
     @in ImgPlus = false
     @in ImgMinus = false
+    @in msg = ""
 
+    # == Reactive handlers ==
+    # reactive handlers watch a variable and execute a block of code when
+    # its value changes
     @onchange triqEnabled begin
         if !triqEnabled
             triqProb = 0.0
@@ -66,59 +63,58 @@ end
             warning_fr = "is not an imzML file"
         end
     end
+    
+    # the onbutton handler will set the variable to false after the block is executed
     #/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML/royaimg.imzML
     @onbutton Main_Process begin
-        test = "/Borrador_Julia_GUI.jpeg"
+        test = "/wp2.jpeg"
         indeximg = Nmass
         #spectra = LoadImzml(file_route)
         #slice = getSlice(spectra, Nmass, Tol)
         #SaveBitmap( "$(Nmass).bmp",
         #IntQuant( slice ),
         #ViridisPalette )
-        samplesDir = "/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML"
+        #samplesDir = "/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML"
+        samplesDir = "/home/julian/Documentos/Cinvestav_2024/Web/Julia/JuliaIMZML_GUI/public/Files"
         fileName = "royaimg.imzML"
-        if isfile("/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML/royaimg.imzML")
+        if isfile(joinpath( samplesDir, fileName ))
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol)"
         else
             msg="File does not exist"
         end
         spectra = LoadImzml(joinpath( samplesDir, fileName ))
         slice = getSlice(spectra, Nmass, Tol)
-        SaveBitmap( joinpath( samplesDir, "$(Nmass).bmp" ),
-        IntQuant( slice ),
-        ViridisPalette )
+        if triqProb != 0    
+            SaveBitmap( joinpath( samplesDir, "TrIQ_$(Nmass).bmp" ),
+            TrIQ( slice, Nmass, triqProb ),
+            ViridisPalette )
+        else
+            SaveBitmap( joinpath( samplesDir, "$(Nmass).bmp" ),
+            IntQuant( slice ),
+            ViridisPalette )
+        end
     end
     @onbutton ImgMinus begin
         indeximg-=1
         while !isfile("/$(indeximg).jpeg") && indeximg > 0 && indeximg <999
             indeximg-=1
         end
+        if(indeximg == 0)
+            indeximg = Nmass
+        end
         test = "/$(indeximg).jpeg"
-        msg = string(indeximg)
+        msg = "image with the Nmass of $(indeximg)"
     end
     @onbutton ImgPlus begin
         indeximg+=1
         while !isfile("/$(indeximg).jpeg") && indeximg > 0 && indeximg <999
             indeximg+=1
         end
+        if(indeximg == 999)
+            indeximg = Nmass
+        end
         test = "/$(indeximg).jpeg"
-        msg = string(indeximg)
-    end
-
-    # == Reactive handlers ==
-    # reactive handlers watch a variable and execute a block of code when
-    # its value changes
-    @onchange N begin
-        # the values of x, result and msg in the UI will
-        # be automatically updated
-        x = collect(1:N)
-        y = rand(N)
-        result = mean_value(rand(N))
-        msg = "The average is $result."
-    end
-    # the onbutton handler will set the variable to false after the block is executed
-    @onbutton shift begin
-        y = circshift(y, 1)
+        msg = "image with the Nmass of $(indeximg)"
     end
 end
 # == Pages ==
