@@ -8,8 +8,9 @@
         <div class="row">
             <div class="st-col col-12 col-sm st-module">
                 <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".txt"></q-file>-->
-                <q-input id="ijii1" v-model="file_route" :dense="true" label="Insert the full route of your imzML file"></q-input>
-                <p id="i7brk">route of file: {{file_route}} {{warning_fr}}</p>
+                <q-input id="ijii1" v-model="file_route" :dense="true" label="Insert the full route to your imzML file"></q-input>
+                <q-input id="ijii1-2" v-model="file_name" :dense="true" label="Insert the name of your imzML file"></q-input>
+                <p id="i7brk">full route: {{full_route}} {{warning_fr}}</p>
             </div>
         </div>
         <div class="row">
