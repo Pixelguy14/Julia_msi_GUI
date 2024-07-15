@@ -115,3 +115,23 @@
 └ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
 ┌ Info: 2024-07-13 16:33:46 Autoreloading
 └ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-07-13 16:36:09 Autoreloading
+└ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-07-13 16:36:09 Autoreloading
+└ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-07-13 16:36:12 Autoreloading
+└ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-07-13 16:36:12 Autoreloading
+└ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-07-13 16:36:41 Autoreloading
+└ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-07-13 16:36:41 Autoreloading
+└ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Warning: 2024-07-13 16:37:20 SystemError("opening file \"/home/julian/Documentos/Cinvestav_2024/Web/Julia/JuliaIMZML_GUI/public/Files/royaimg.ibd\"", 2, nothing)
+└ @ Stipple /home/julian/.julia/packages/Stipple/Hr6Qa/src/Stipple.jl:999
+┌ Warning: 2024-07-13 16:39:00 SystemError("opening file \"/home/julian/Documentos/Cinvestav_2024/Web/Julia/JuliaIMZML_GUI/public/Files/royaimg.ibd\"", 2, nothing)
+└ @ Stipple /home/julian/.julia/packages/Stipple/Hr6Qa/src/Stipple.jl:999
+┌ Info: 2024-07-13 16:52:38 Autoreloading
+└ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-07-13 16:52:38 Autoreloading
+└ @ GenieAutoReload /home/julian/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22

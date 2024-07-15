@@ -36,7 +36,8 @@ end
     # variables must be initialized with constant values, or variables defined outside of the @app block
     @out test = "/wp.jpeg"
     #mkdir("new_folder")
-    @in file_route = "None"
+    @in file_route = ""
+    @in file_name = ""
     @out warning_fr = ""
     @in Nmass = 0.0
     @in Tol = 0.0
@@ -47,6 +48,7 @@ end
     @in ImgPlus = false
     @in ImgMinus = false
     @in msg = ""
+    @out full_route = ""
 
     # == Reactive handlers ==
     # reactive handlers watch a variable and execute a block of code when
@@ -56,9 +58,10 @@ end
             triqProb = 0.0
         end
     end
-    @onchange file_route begin
-        if contains_word(file_route, ".imzML")
+    @onchange file_name begin
+        if contains_word(file_name, ".imzML")
             warning_fr = ""
+            full_route = joinpath( file_route, file_name )
         else
             warning_fr = "is not an imzML file"
         end
@@ -74,22 +77,23 @@ end
         #SaveBitmap( "$(Nmass).bmp",
         #IntQuant( slice ),
         #ViridisPalette )
+        
         #samplesDir = "/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML"
-        samplesDir = "/home/julian/Documentos/Cinvestav_2024/Web/Julia/JuliaIMZML_GUI/public/Files"
-        fileName = "royaimg.imzML"
-        if isfile(joinpath( samplesDir, fileName ))
+        #samplesDir = "/home/julian/Documentos/Cinvestav_2024/Web/Julia/JuliaIMZML_GUI/public/Files"
+        #fileName = "royaimg.imzML"
+        if isfile(full_route)
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol)"
         else
             msg="File does not exist"
         end
-        spectra = LoadImzml(joinpath( samplesDir, fileName ))
+        spectra = LoadImzml(full_route)
         slice = getSlice(spectra, Nmass, Tol)
         if triqProb != 0    
             SaveBitmap( joinpath( samplesDir, "TrIQ_$(Nmass).bmp" ),
             TrIQ( slice, Nmass, triqProb ),
             ViridisPalette )
         else
-            SaveBitmap( joinpath( samplesDir, "$(Nmass).bmp" ),
+            SaveBitmap( joinpath( file_route, "$(Nmass).bmp" ),
             IntQuant( slice ),
             ViridisPalette )
         end
@@ -99,7 +103,7 @@ end
         while !isfile("/$(indeximg).jpeg") && indeximg > 0 && indeximg <999
             indeximg-=1
         end
-        if(indeximg == 0)
+        if(indeximg <= 0)
             indeximg = Nmass
         end
         test = "/$(indeximg).jpeg"
@@ -110,7 +114,7 @@ end
         while !isfile("/$(indeximg).jpeg") && indeximg > 0 && indeximg <999
             indeximg+=1
         end
-        if(indeximg == 999)
+        if(indeximg >= 999)
             indeximg = Nmass
         end
         test = "/$(indeximg).jpeg"
