@@ -2,13 +2,14 @@
     <h4>Julia mzML imzML GUI&nbsp;</h4>
 </header>
 <!--<q-file v-model="Juliapkg" filled="" label="Insert the file where 'julia_mzML_imzML' is located" accept=".txt"></q-file>-->
-<h6>Please make sure that the file "julia_mzML_imzML" is located in the directory of this program</h6>
+<h6>Please make sure the ibd file is located in the same directory as the imzML file</h6>
+<h6>Once a directory is loaded, you have to restart the app in order to insert a new one</h6>
 <div class="row">
     <div class="st-col col-12 col-sm st-module">
         <div class="row">
             <div class="st-col col-12 col-sm st-module">
                 <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".txt"></q-file>-->
-                <q-input id="ijii1" v-model="file_route" :dense="true" label="Insert the full route to your imzML file"></q-input>
+                <q-input id="ijii1" v-model="file_route" :dense="true" label="Insert the route to your imzML file"></q-input>
                 <q-input id="ijii1-2" v-model="file_name" :dense="true" label="Insert the name of your imzML file"></q-input>
                 <p id="i7brk">full route: {{full_route}} {{warning_fr}}</p>
             </div>
@@ -36,7 +37,7 @@
                 <q-input id="i28wb" step="0.01" v-model="triqProb" :dense="true" label="TrIQ Probability" type="number" :rules="[
                 val => val >= 0 &amp;&amp; val <= 1  || 'Needs to be in range between 0 and 1',
                 ]" :readonly="!triqEnabled"></q-input>
-                <q-btn id="isfqg" color="primary" icon="true" v-on:click="Main_Process = true" label="Start"></q-btn>
+                <q-btn id="isfqg" color="primary" icon="play_arrow" v-on:click="Main_Process = true" label="Start"></q-btn>
             </div>
         </div>
         <p>{{msg}}</p>
@@ -48,7 +49,7 @@
                 <p></p>
                 <q-btn id="ijhjl-2" color="primary" icon="arrow_back" label="Previous" v-on:click="ImgMinus = true"></q-btn>
                 <q-btn id="i3zt1" color="primary" icon="arrow_forward" label="Next" v-on:click="ImgPlus = true"></q-btn>
-                <q-img id="i6e3p" :src="test"></q-img>
+                <q-img id="i6e3p" src="test"></q-img>
                 <!--<q-img id="i6e3p-2" src="/Borrador_Julia_GUI.jpeg"></q-img>-->
             </div>
         </div>

@@ -5,14 +5,12 @@ module App
 #julia
 #]
 #add Pkg Libz
+##to add the custom package go to terminal:
+#add https://github.com/CINVESTAV-LABI/julia_mzML_imzML
 using GenieFramework
 using Pkg
 using Libz
-#to add the custom package go to terminal:
-#julia
-#]
-#add https://github.com/CINVESTAV-LABI/julia_mzML_imzML
-using julia_mzML_imzML #could  add this to a try-catch to verify they're putting the correct name of the file
+using julia_mzML_imzML 
 @genietools
 
 # == Code import ==
@@ -34,7 +32,8 @@ end
     # @out variables can only be modified by the backend
     # @in variables can be modified by both the backend and the browser
     # variables must be initialized with constant values, or variables defined outside of the @app block
-    @out test = "/wp.jpeg"
+    #@out test = "/wp.jpeg"#slash means it's getting the info from 'public' folder
+    #@out test = "/95.bmp"
     #mkdir("new_folder")
     @in file_route = ""
     @in file_name = ""
@@ -45,6 +44,7 @@ end
     @in triqProb = 0.0
     @in Main_Process = false
     @out indeximg = 0
+    @out lastimg = 0
     @in ImgPlus = false
     @in ImgMinus = false
     @in msg = ""
@@ -66,59 +66,69 @@ end
             warning_fr = "is not an imzML file"
         end
     end
+    @onchange Nmass begin
+        indeximg = Nmass
+        lastimg = Nmass
+    end
     
     # the onbutton handler will set the variable to false after the block is executed
     #/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML/royaimg.imzML
     @onbutton Main_Process begin
-        test = "/wp2.jpeg"
         indeximg = Nmass
-        #spectra = LoadImzml(file_route)
-        #slice = getSlice(spectra, Nmass, Tol)
-        #SaveBitmap( "$(Nmass).bmp",
-        #IntQuant( slice ),
-        #ViridisPalette )
-        
-        #samplesDir = "/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML"
-        #samplesDir = "/home/julian/Documentos/Cinvestav_2024/Web/Julia/JuliaIMZML_GUI/public/Files"
-        #fileName = "royaimg.imzML"
+        full_route = joinpath( file_route, file_name )
         if isfile(full_route)
-            msg="File exists, Nmass=$(Nmass) Tol=$(Tol)"
+            msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Please do not press the start button until confirmation"
+            spectra = LoadImzml(full_route)
+            msg = "File loaded. Please do not press the start button until confirmation"
+            slice = GetSlice(spectra, Nmass, Tol)
+            if triqProb != 0    
+                # SaveBitmap( joinpath( file_route, "TrIQ_$(Int(Nmass)).bmp" ),
+                # TrIQ( slice, Int(Nmass), triqProb ),
+                # ViridisPalette )
+                SaveBitmap( joinpath( "public", "TrIQ_$(Int(Nmass)).bmp" ),
+                TrIQ( slice, Int(Nmass), triqProb ),
+                ViridisPalette )
+            else
+                # SaveBitmap( joinpath( file_route, "$(Int(Nmass)).bmp" ),
+                # IntQuant( slice ),
+                # ViridisPalette )
+                #test
+                SaveBitmap( joinpath( "public", "$(Int(Nmass)).bmp" ),
+                IntQuant( slice ),
+                ViridisPalette )
+            end
+            msg="The file has been created inside the 'public' folder of the app"
         else
             msg="File does not exist"
         end
-        spectra = LoadImzml(full_route)
-        slice = getSlice(spectra, Nmass, Tol)
-        if triqProb != 0    
-            SaveBitmap( joinpath( samplesDir, "TrIQ_$(Nmass).bmp" ),
-            TrIQ( slice, Nmass, triqProb ),
-            ViridisPalette )
-        else
-            SaveBitmap( joinpath( file_route, "$(Nmass).bmp" ),
-            IntQuant( slice ),
-            ViridisPalette )
-        end
+        spectra = nothing   
+        slice = nothing
+        test = "/$(Int(Nmass)).bmp"#we define the starting value of the images
+        GC.gc()
     end
     @onbutton ImgMinus begin
         indeximg-=1
-        while !isfile("/$(indeximg).jpeg") && indeximg > 0 && indeximg <999
-            indeximg-=1
+        while !isfile("public/$(indeximg).bmp") && indeximg > 0
+            indeximg -= 1
         end
-        if(indeximg <= 0)
-            indeximg = Nmass
+        if(indeximg <= 0) #if it doesn't find a lower value image
+            indeximg = lastimg
         end
-        test = "/$(indeximg).jpeg"
+        test = "/$(indeximg).bmp"
         msg = "image with the Nmass of $(indeximg)"
+        lastimg = indeximg
     end
     @onbutton ImgPlus begin
         indeximg+=1
-        while !isfile("/$(indeximg).jpeg") && indeximg > 0 && indeximg <999
-            indeximg+=1
+        while !isfile("public/$(indeximg).bmp") && indeximg < 2001
+            indeximg += 1
         end
-        if(indeximg >= 999)
-            indeximg = Nmass
+        if(indeximg >= 2001)
+            indeximg = lastimg
         end
-        test = "/$(indeximg).jpeg"
+        test = "/$(indeximg).bmp"
         msg = "image with the Nmass of $(indeximg)"
+        lastimg = indeximg
     end
 end
 # == Pages ==
