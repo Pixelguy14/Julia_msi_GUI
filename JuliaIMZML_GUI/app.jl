@@ -10,6 +10,7 @@ module App
 using GenieFramework
 using Pkg
 using Libz
+using Plots
 using julia_mzML_imzML 
 @genietools
 
@@ -44,12 +45,20 @@ end
     @in triqProb = 0.0
     @in Main_Process = false
     @out indeximg = 0
+    @out indeximgTriq = 0
     @out lastimg = 0
+    @out lastimgTriq = 0
     @in ImgPlus = false
     @in ImgMinus = false
+    @out test = "/.bmp"
+    @in ImgPlusT = false
+    @in ImgMinusT = false
+    @out testT = "/.bmp"
     @in msg = ""
+    @in msgimg = ""
+    @in msgtriq = ""
     @out full_route = ""
-
+    
     # == Reactive handlers ==
     # reactive handlers watch a variable and execute a block of code when
     # its value changes
@@ -68,7 +77,9 @@ end
     end
     @onchange Nmass begin
         indeximg = Nmass
+        indeximgTriq = Nmass
         lastimg = Nmass
+        lastimgTriq = Nmass
     end
     
     # the onbutton handler will set the variable to false after the block is executed
@@ -81,29 +92,26 @@ end
             spectra = LoadImzml(full_route)
             msg = "File loaded. Please do not press the start button until confirmation"
             slice = GetSlice(spectra, Nmass, Tol)
-            if triqProb != 0    
-                # SaveBitmap( joinpath( file_route, "TrIQ_$(Int(Nmass)).bmp" ),
-                # TrIQ( slice, Int(Nmass), triqProb ),
-                # ViridisPalette )
+            if triqProb != 0 #if we have TrIQ
                 SaveBitmap( joinpath( "public", "TrIQ_$(Int(Nmass)).bmp" ),
                 TrIQ( slice, Int(Nmass), triqProb ),
                 ViridisPalette )
+                testT = "/TrIQ_$(Int(Nmass)).bmp"#we define the starting value of the images
+                msgtriq = "TrIQ image with the Nmass of $(Int(Nmass))"
             else
-                # SaveBitmap( joinpath( file_route, "$(Int(Nmass)).bmp" ),
-                # IntQuant( slice ),
-                # ViridisPalette )
-                #test
                 SaveBitmap( joinpath( "public", "$(Int(Nmass)).bmp" ),
                 IntQuant( slice ),
                 ViridisPalette )
+                test = "/$(Int(Nmass)).bmp"#we define the starting value of the images
+                msgimg = "image with the Nmass of $(Int(Nmass))"
             end
             msg="The file has been created inside the 'public' folder of the app"
         else
             msg="File does not exist"
         end
-        spectra = nothing   
+        spectra = nothing #Important for memory cleaning
         slice = nothing
-        test = "/$(Int(Nmass)).bmp"#we define the starting value of the images
+        #Important for memory cleaning
         GC.gc()
     end
     @onbutton ImgMinus begin
@@ -115,7 +123,7 @@ end
             indeximg = lastimg
         end
         test = "/$(indeximg).bmp"
-        msg = "image with the Nmass of $(indeximg)"
+        msgimg = "image with the Nmass of $(indeximg)"
         lastimg = indeximg
     end
     @onbutton ImgPlus begin
@@ -127,8 +135,33 @@ end
             indeximg = lastimg
         end
         test = "/$(indeximg).bmp"
-        msg = "image with the Nmass of $(indeximg)"
+        msgimg = "image with the Nmass of $(indeximg)"
         lastimg = indeximg
+    end
+
+    @onbutton ImgMinusT begin
+        indeximgTriq-=1
+        while !isfile("public/TrIQ_$(indeximgTriq).bmp") && indeximgTriq > 0
+            indeximgTriq -= 1
+        end
+        if(indeximgTriq <= 0) #if it doesn't find a lower value image
+            indeximgTriq = lastimgTriq
+        end
+        testT = "/TrIQ_$(indeximgTriq).bmp"
+        msgtriq = "TrIQ image with the Nmass of $(indeximgTriq)"
+        lastimgTriq = indeximgTriq
+    end
+    @onbutton ImgPlusT begin
+        indeximgTriq+=1
+        while !isfile("public/TrIQ_$(indeximgTriq).bmp") && indeximgTriq < 2001
+            indeximgTriq += 1
+        end
+        if(indeximgTriq >= 2001)
+            indeximgTriq = lastimgTriq
+        end
+        testT = "/TrIQ_$(indeximgTriq).bmp"
+        msgtriq = "TrIQ image with the Nmass of $(indeximgTriq)"
+        lastimgTriq = indeximgTriq
     end
 end
 # == Pages ==

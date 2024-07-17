@@ -3,7 +3,7 @@
 </header>
 <!--<q-file v-model="Juliapkg" filled="" label="Insert the file where 'julia_mzML_imzML' is located" accept=".txt"></q-file>-->
 <h6>Please make sure the ibd file is located in the same directory as the imzML file</h6>
-<h6>Once a directory is loaded, you have to restart the app in order to insert a new one</h6>
+<h6>Once an image is loaded, reload the page to clear possible memory usage</h6>
 <div class="row">
     <div class="st-col col-12 col-sm st-module">
         <div class="row">
@@ -41,6 +41,7 @@
             </div>
         </div>
         <p>{{msg}}</p>
+        <plotly id="i1j1o" data="plotdata"></plotly>
     </div>
     <div class="st-col col-12 col-sm st-module">
         <div class="row">
@@ -49,7 +50,12 @@
                 <p></p>
                 <q-btn id="ijhjl-2" color="primary" icon="arrow_back" label="Previous" v-on:click="ImgMinus = true"></q-btn>
                 <q-btn id="i3zt1" color="primary" icon="arrow_forward" label="Next" v-on:click="ImgPlus = true"></q-btn>
-                <q-img id="i6e3p" src="test"></q-img>
+                <q-img id="i6e3p" :src="test"></q-img>
+                <p>{{msgimg}}</p>
+                <q-btn id="ijhjl-2-2" color="primary" icon="arrow_back" label="Previous" v-on:click="ImgMinusT = true"></q-btn>
+                <q-btn id="i3zt1-2" color="primary" icon="arrow_forward" label="Next" v-on:click="ImgPlusT = true"></q-btn>
+                <q-img id="i6e3p-2" :src="testT"></q-img>
+                <p>{{msgtriq}}</p>
                 <!--<q-img id="i6e3p-2" src="/Borrador_Julia_GUI.jpeg"></q-img>-->
             </div>
         </div>
