@@ -5,3 +5,12 @@ julia<br />
 ]<br />
 add Pkg Libz<br />
 add https://github.com/CINVESTAV-LABI/julia_mzML_imzML<br />
+then open a terminal on the directory "JuliaIMZML_GUI"and type: <br />
+julia<br />
+]<br />
+activate .<br />
+(press backspace)<br />
+using Genie (an option may appear, select Y to download genie if that happens)<br />
+Genie.loadapp()<br />
+up()<br />
+and open the port that gets generated to access to the GUI<br />
