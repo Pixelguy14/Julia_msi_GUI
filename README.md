@@ -4,18 +4,18 @@ For this to work you must insert the next lines as they are depicted in your Jul
 ```
 julia
 ]
-add Pkg Libz
-add https://github.com/CINVESTAV-LABI/julia_mzML_imzML
+add Pkg Libz ; add https://github.com/CINVESTAV-LABI/julia_mzML_imzML
 ```
 Then open a terminal on the directory "JuliaIMZML_GUI"and type: <br />
 ```
 julia
 ]
 activate .
-#(press backspace)
+##(press backspace)
 using Genie
-#(an option may appear, select Y to download genie if that happens)
-Genie.loadapp()
-up()
+##(an option may appear, select Y to download genie if that happens)
+Genie.loadapp() ; up()
+##(if it isn't the first time you're running the program:)
+using Genie ; Genie.loadapp() ; up()
 ```
 And finally open the port that gets generated to access to the GUI<br />
