@@ -1,12 +1,12 @@
 # Julia_imzML_GUI<br />
 A Graphical User Interface created with Julia Genie Builder made for this repository: https://github.com/CINVESTAV-LABI/julia_mzML_imzML that generates images with the imzML and ibd files.<br />
-For this to work you must insert the next lines as they are depicted in your Julia terminal for the first time only.<br />
+For this to work you must insert the next lines as they are depicted in your Julia terminal for the first time only: <br />
 ```
 julia
 ]
-add Pkg Libz ; add https://github.com/CINVESTAV-LABI/julia_mzML_imzML ; add Genie
+add Pkg Libz ; add https://github.com/CINVESTAV-LABI/julia_mzML_imzML ; add PlotlyBase
 ```
-Then open a terminal on the directory "JuliaIMZML_GUI"and type: <br />
+Then open a terminal on the directory "JuliaIMZML_GUI" and put the next code: <br />
 ```
 julia
 ]
