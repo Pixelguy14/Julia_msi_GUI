@@ -6,7 +6,8 @@
 <div class="row">
     <div class="st-col col-12 col-sm st-module">
         <div class="row">
-            <div class="st-col col-12 col-sm st-module"> <!--Left DIV-->
+            <div class="st-col col-12 col-sm st-module">
+                <!--Left DIV-->
                 <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".txt"></q-file>-->
                 <q-input id="ijii1" v-model="file_route" :dense="true" label="Insert the route to your imzML file"></q-input>
                 <q-input id="ijii1-2" v-model="file_name" :dense="true" label="Insert the name of your imzML file"></q-input>
@@ -24,34 +25,33 @@
                         ]"></q-input>
                     </div>
                 </div>
-                        <div class="row">
-                            <div class="st-col col-12 col-sm">
-                                <q-toggle id="igqon" v-on:click="triqEnabled" v-model="triqEnabled" color="blue" label="Add TrIQ!"></q-toggle>
-                            </div>
-                        </div>
-                        <div class="row">
-                            <div class="st-col col-12 col-sm-8">
-                                <q-input id="i28wb" step="0.01" v-model="triqProb" :dense="true" label="TrIQ Probability" type="number" :rules="[
+                <div class="row">
+                    <div class="st-col col-12 col-sm">
+                        <q-toggle id="igqon" v-on:click="triqEnabled" v-model="triqEnabled" color="blue" label="Add TrIQ!"></q-toggle>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="st-col col-12 col-sm-8">
+                        <q-input id="i28wb" step="0.01" v-model="triqProb" :dense="true" label="TrIQ Probability" type="number" :rules="[
                                 val => val >= 0 &amp;&amp; val <= 1  || 'Needs to be in range between 0 and 1',
                                 ]" :readonly="!triqEnabled"></q-input>
-                            </div>
-                            <div class="st-col col-12 col-sm-4">
-                                <q-input id="i28wb-2" step="1" v-model="triqColor" :dense="true" label="TrIQ Color" type="number" :rules="[
+                    </div>
+                    <div class="st-col col-12 col-sm-4">
+                        <q-input id="i28wb-2" step="1" v-model="triqColor" :dense="true" label="TrIQ Color" type="number" :rules="[
                                 val => val >= 0 &amp;&amp; val <= 256  || 'Needs to be in range between 1 and 256',
                                 ]" :readonly="!triqEnabled"></q-input>
-                            </div>
-                        </div>
-                        <q-btn id="isfqg" :disabled="Disab_btn" color="primary" icon="play_arrow" v-on:click="Main_Process = true" label="Start"></q-btn>
-                   <p>{{msg}}</p>
+                    </div>
+                </div>
+                <q-btn id="isfqg" :disabled="Disab_btn" color="primary" icon="play_arrow" v-on:click="Main_Process = true" label="Start"></q-btn>
+                <p>{{msg}}</p>
             </div>
         </div>
-        
-        
         <!--<plotly id="i1j1o" data="plotdata"></plotly>-->
     </div>
     <div class="st-col col-12 col-sm st-module">
         <div class="row">
-            <div class="st-col col-12 col-sm st-module"> <!--Right DIV-->
+            <div class="st-col col-12 col-sm st-module">
+                <!--Right DIV-->
                 <h6>Image Visualizer</h6><br>
                 <p></p>
                 <q-btn id="ijhjl-2" color="primary" icon="arrow_back" label="Previous" v-on:click="ImgMinus = true"></q-btn>
