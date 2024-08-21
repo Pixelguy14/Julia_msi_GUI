@@ -1,0 +1,9 @@
+┌ Info: 2024-08-21 11:41:06 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-21 11:41:06 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-21 11:41:07 
+│ Web Server starting at http://127.0.0.1:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-21 11:41:07 Listening on: 127.0.0.1:8000, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382

@@ -17,9 +17,6 @@ using julia_mzML_imzML
 # == Code import ==
 # add your data analysis code here or in the lib folder. Code in lib/ will be
 # automatically loaded 
-function mean_value(x)
-    sum(x) / length(x)
-end
 
 function contains_word(x, word) #ease to read
     occursin(word, x)
@@ -70,7 +67,8 @@ end
         end
     end
     @onchange file_name begin
-        if contains_word(file_name, ".imzML")
+        #if contains_word(file_name, ".imzML")
+        if occursin(".imzML",file_name)
             warning_fr = ""
             full_route = joinpath( file_route, file_name )
         else
@@ -87,11 +85,10 @@ end
     # the onbutton handler will set the variable to false after the block is executed
     #/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML/royaimg.imzML
     @onbutton Main_Process begin
-        GC.gc() # Trigger garbage collection
         Disab_btn = true #We disable the button to avoid multiple requests
         indeximg = Nmass
         full_route = joinpath(file_route, file_name)
-        if isfile(full_route)
+        if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <= 1
             msg = "File exists, Nmass=$(Nmass) Tol=$(Tol). Please do not press the start button until confirmation"
             spectra = LoadImzml(full_route)
             msg = "File loaded. Please do not press the start button until confirmation"
@@ -117,7 +114,7 @@ end
             end
             msg = "The file has been created inside the 'public' folder of the app"
         else
-            msg = "File does not exist"
+            msg = "File does not exist or a parameter was not well inputted"
         end
         spectra = nothing # Important for memory cleaning
         slice = nothing

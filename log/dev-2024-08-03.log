@@ -1,0 +1,95 @@
+┌ Info: 2024-08-03 14:24:50 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 14:24:51 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 14:24:52 
+│ Web Server starting at http://127.0.0.1:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 14:24:52 Listening on: 127.0.0.1:8000, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382
+┌ Info: 2024-08-03 14:31:37 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 14:31:38 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 14:31:39 
+│ Web Server starting at http://127.0.0.1:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 14:31:39 Listening on: 127.0.0.1:8000, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382
+┌ Info: 2024-08-03 14:33:11 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 14:33:12 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 14:33:13 
+│ Web Server starting at http://0.0.0.0:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 14:33:13 Listening on: 0.0.0.0:8000, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382
+┌ Info: 2024-08-03 14:36:48 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 14:36:48 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 14:38:18 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 14:38:18 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 14:38:24 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 14:38:24 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 14:38:25 
+│ Web Server starting at http://0.0.0.0:9101?CHANNEL__=QTIACKBTZTCBQZDBXIXAZJEJYQAWATTT 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 14:38:25 Listening on: 0.0.0.0:9101, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382
+┌ Info: 2024-08-03 14:39:01 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 14:39:01 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 15:10:16 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 15:10:17 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 15:10:18 
+│ Web Server starting at http://127.0.0.1:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 15:10:18 Listening on: 127.0.0.1:8000, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382
+┌ Warning: 2024-08-03 15:12:12 InexactError(:UInt8, UInt8, NaN)
+└ @ Stipple /home/pixelguy14/.julia/packages/Stipple/Hr6Qa/src/Stipple.jl:999
+┌ Info: 2024-08-03 15:15:41 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 15:15:42 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 15:15:43 
+│ Web Server starting at http://127.0.0.1:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 15:15:43 Listening on: 127.0.0.1:8000, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382
+┌ Warning: 2024-08-03 15:17:17 InexactError(:UInt8, UInt8, NaN)
+└ @ Stipple /home/pixelguy14/.julia/packages/Stipple/Hr6Qa/src/Stipple.jl:999
+┌ Info: 2024-08-03 15:27:34 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 15:27:34 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 15:27:35 
+│ Web Server starting at http://127.0.0.1:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 15:28:59 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 15:29:00 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 15:29:01 
+│ Web Server starting at http://127.0.0.1:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 15:29:01 Listening on: 127.0.0.1:8000, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382
+┌ Info: 2024-08-03 15:42:20 Watching ["/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"]
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:19
+┌ Info: 2024-08-03 15:42:21 Autoreloading
+└ @ GenieAutoReload /home/pixelguy14/.julia/packages/GenieAutoReload/ESvsh/src/GenieAutoReload.jl:22
+┌ Info: 2024-08-03 15:42:22 
+│ Web Server starting at http://127.0.0.1:8000 
+└ @ Genie.Server /home/pixelguy14/.julia/packages/Genie/uliWf/src/Server.jl:182
+┌ Info: 2024-08-03 15:42:22 Listening on: 127.0.0.1:8000, thread id: 1
+└ @ HTTP.Servers /home/pixelguy14/.julia/packages/HTTP/sJD5V/src/Servers.jl:382
