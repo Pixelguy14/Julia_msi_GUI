@@ -1,26 +1,16 @@
 module App
 # == Packages ==
-# set up Genie development environment. Use the Package Manager to install new packages
-#MUST FIRST USE IN TERMINAL:
-#julia
-#]
-#add Pkg Libz
-##to add the custom package go to terminal:
-#add https://github.com/CINVESTAV-LABI/julia_mzML_imzML
+# set up Genie development environment. 
 using GenieFramework
 using Pkg
 using Libz
-using Plots
+using PlotlyBase
 using julia_mzML_imzML 
 @genietools
 
 # == Code import ==
 # add your data analysis code here or in the lib folder. Code in lib/ will be
 # automatically loaded 
-
-function contains_word(x, word) #ease to read
-    occursin(word, x)
-end
 
 # == Reactive code ==
 # add reactive code to make the UI interactive
@@ -56,6 +46,22 @@ end
     @in msgimg = ""
     @in msgtriq = ""
     @out full_route = ""
+    layoutSpectra = PlotlyBase.Layout(
+        title = "Spectra Plot",
+        xaxis = PlotlyBase.attr(
+            title = "X Axis",
+            showgrid = true
+        ),
+        yaxis = PlotlyBase.attr(
+            title = "Y Axis",
+            showgrid = true
+        ),
+        width = 450,
+        height = 500
+        )
+    traceSpectra = PlotlyBase.scatter(x=[], y=[], mode="lines+markers")
+    @out plotdata = [traceSpectra]
+    @out plotlayout = layoutSpectra 
     
     # == Reactive handlers ==
     # reactive handlers watch a variable and execute a block of code when
@@ -67,8 +73,7 @@ end
         end
     end
     @onchange file_name begin
-        #if contains_word(file_name, ".imzML")
-        if occursin(".imzML",file_name)
+        if contains(file_name,".imzML")
             warning_fr = ""
             full_route = joinpath( file_route, file_name )
         else
@@ -113,6 +118,8 @@ end
                 msgimg = "image with the Nmass of $(Int(Nmass))"
             end
             msg = "The file has been created inside the 'public' folder of the app"
+            traceSpectra = PlotlyBase.scatter(x = spectra[1, 4], y = spectra[2, 4], mode="lines+markers")
+            plotdata = [traceSpectra] # we add the data of spectra to the plot
         else
             msg = "File does not exist or a parameter was not well inputted"
         end
@@ -170,6 +177,7 @@ end
         msgtriq = "TrIQ image with the Nmass of $(indeximgTriq)"
         lastimgTriq = indeximgTriq
     end
+    GC.gc() # Trigger garbage collection
 end
 # == Pages ==
 # register a new route and the page that will be loaded on access
