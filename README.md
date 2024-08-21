@@ -12,10 +12,6 @@ julia
 ]
 activate .
 ##(press backspace)
-using Genie
-##(an option may appear, select Y to download genie if that happens)
-Genie.loadapp() ; up()
-##(if it isn't the first time you're running the program:)
 using Genie ; Genie.loadapp() ; up()
 ```
 And finally open the port that gets generated to access to the GUI<br />
