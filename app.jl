@@ -47,8 +47,7 @@ using Statistics
     @in msgimg = ""
     @in msgtriq = ""
     @out full_route = ""
-    @out dims = 0
-    @out MicroscansMax = 0
+    @out full_routeMz = ""
     layoutSpectra = PlotlyBase.Layout(
         title = "Spectra Plot",
         xaxis = PlotlyBase.attr(
@@ -59,8 +58,6 @@ using Statistics
             title = "Intensity",
             showgrid = true
         ),
-        width = 450,
-        height = 500
         )
     traceSpectra = PlotlyBase.scatter(x=[], y=[], mode="lines+markers")
     @out plotdata = [traceSpectra]
@@ -79,6 +76,19 @@ using Statistics
         if contains(file_name,".imzML")
             warning_fr = ""
             full_route = joinpath( file_route, file_name )
+            if isfile(full_route) # check if the file exists
+            full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
+		    if isfile(full_routeMz) # check if there is an mzML file around
+			    spectraMz = LoadMzml(full_routeMz)
+			    # dims = size(spectraMz)
+			    # scansMax = dims[2] # we get the total of scansMax
+			    # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines")
+			    traceSpectra = PlotlyBase.scatter(x = mean(spectraMz[1,:]), y = mean(spectraMz[2,:]), mode="lines")
+			    plotdata = [traceSpectra] # we add the data of spectra to the plot
+			    spectraMz = nothing # Important for memory cleaning
+			    GC.gc() # Trigger garbage collection
+		    end
+            end
         else
             warning_fr = "is not an imzML file"
         end
@@ -98,10 +108,6 @@ using Statistics
         if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <= 1
             msg = "File exists, Nmass=$(Nmass) Tol=$(Tol). Please do not press the start button until confirmation"
             spectra = LoadImzml(full_route)
-            full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
-            spectraMz = LoadMzml(full_routeMz)
-            dims = size(spectraMz)
-            MicroscansMax = dims[2] # we get the total of microscans
             msg = "File loaded. Please do not press the start button until confirmation"
             slice = GetSlice(spectra, Nmass, Tol)
             if triqProb != 0 # if we have TrIQ
@@ -124,9 +130,6 @@ using Statistics
                 msgimg = "image with the Nmass of $(Int(Nmass))"
             end
             msg = "The file has been created inside the 'public' folder of the app"
-            # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines+markers")
-            traceSpectra = PlotlyBase.scatter(x = mean(spectraMz, dims=1), y = mean(spectraMz, dims=2), mode="lines+markers")
-            plotdata = [traceSpectra] # we add the data of spectra to the plot
         else
             msg = "File does not exist or a parameter was not well inputted"
         end
@@ -199,3 +202,4 @@ in the UI.
     @private table = DataFrame(a = 1:10, b = 10:19, c = 20:29)
 
 =#
+
