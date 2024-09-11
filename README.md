@@ -4,7 +4,7 @@ For this to work you must insert the next lines as they are depicted in your Jul
 ```
 julia
 ]
-add Pkg Libz ; add https://github.com/CINVESTAV-LABI/julia_mzML_imzML ; add PlotlyBase
+add Pkg Libz ; add https://github.com/CINVESTAV-LABI/julia_mzML_imzML ; add PlotlyBase ; add Genie
 ```
 Then open a terminal on the directory "JuliaIMZML_GUI" and put the next code: <br />
 ```
