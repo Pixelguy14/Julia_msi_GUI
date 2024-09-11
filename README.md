@@ -12,6 +12,7 @@ julia
 ]
 activate .
 ##(press backspace)
-using Genie ; Genie.loadapp() ; up()
+using Genie
+Genie.loadapp() ; up()
 ```
 And finally open the port that gets generated to access to the GUI<br />
