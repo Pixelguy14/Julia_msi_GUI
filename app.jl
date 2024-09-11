@@ -96,6 +96,7 @@ using julia_mzML_imzML
         if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <= 1
             msg = "File exists, Nmass=$(Nmass) Tol=$(Tol). Please do not press the start button until confirmation"
             spectra = LoadImzml(full_route)
+            spectraMz = LoadMzml(full_route)
             msg = "File loaded. Please do not press the start button until confirmation"
             slice = GetSlice(spectra, Nmass, Tol)
             if triqProb != 0 # if we have TrIQ
@@ -118,7 +119,7 @@ using julia_mzML_imzML
                 msgimg = "image with the Nmass of $(Int(Nmass))"
             end
             msg = "The file has been created inside the 'public' folder of the app"
-            traceSpectra = PlotlyBase.scatter(x = spectra[1, 4], y = spectra[2, 4], mode="lines+markers")
+            traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines+markers")
             plotdata = [traceSpectra] # we add the data of spectra to the plot
         else
             msg = "File does not exist or a parameter was not well inputted"
