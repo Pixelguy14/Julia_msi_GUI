@@ -1,7 +1,7 @@
 <header>
     <h4>Julia mzML imzML GUI&nbsp;</h4>
 </header>
-<h6>Please make sure the ibd file is located in the same directory as the imzML file</h6>
+<h6>Please make sure the ibd, the mzML and the imzML files are located in the same directory and have the same name</h6>
 <h6>It may take a while to generate the image, don't press the Start button more than once until it finishes</h6>
 <div class="row">
     <div class="st-col col-12 col-sm st-module">
@@ -27,7 +27,7 @@
                 </div>
                 <div class="row">
                     <div class="st-col col-12 col-sm">
-                        <q-toggle id="igqon" v-on:click="triqEnabled" v-model="triqEnabled" color="blue" label="Add TrIQ!"></q-toggle>
+                        <q-toggle id="igqon" v-on:click="triqEnabled" v-model="triqEnabled" color="blue" label="Add Threshold Intensity Quantization (TrIQ)!"></q-toggle>
                     </div>
                 </div>
                 <div class="row">

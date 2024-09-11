@@ -5,7 +5,8 @@ using GenieFramework
 using Pkg
 using Libz
 using PlotlyBase
-using julia_mzML_imzML 
+using julia_mzML_imzML
+using Statistics
 @genietools
 
 # == Code import ==
@@ -46,14 +47,16 @@ using julia_mzML_imzML
     @in msgimg = ""
     @in msgtriq = ""
     @out full_route = ""
+    @out dims = 0
+    @out MicroscansMax = 0
     layoutSpectra = PlotlyBase.Layout(
         title = "Spectra Plot",
         xaxis = PlotlyBase.attr(
-            title = "X Axis",
+            title = "m/z",
             showgrid = true
         ),
         yaxis = PlotlyBase.attr(
-            title = "Y Axis",
+            title = "Intensity",
             showgrid = true
         ),
         width = 450,
@@ -85,8 +88,7 @@ using julia_mzML_imzML
         indeximgTriq = Nmass
         lastimg = Nmass
         lastimgTriq = Nmass
-    end
-    
+    end    
     # the onbutton handler will set the variable to false after the block is executed
     #/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML/royaimg.imzML
     @onbutton Main_Process begin
@@ -96,7 +98,10 @@ using julia_mzML_imzML
         if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <= 1
             msg = "File exists, Nmass=$(Nmass) Tol=$(Tol). Please do not press the start button until confirmation"
             spectra = LoadImzml(full_route)
-            spectraMz = LoadMzml(full_route)
+            full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
+            spectraMz = LoadMzml(full_routeMz)
+            dims = size(spectraMz)
+            MicroscansMax = dims[2] # we get the total of microscans
             msg = "File loaded. Please do not press the start button until confirmation"
             slice = GetSlice(spectra, Nmass, Tol)
             if triqProb != 0 # if we have TrIQ
@@ -119,7 +124,8 @@ using julia_mzML_imzML
                 msgimg = "image with the Nmass of $(Int(Nmass))"
             end
             msg = "The file has been created inside the 'public' folder of the app"
-            traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines+markers")
+            # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines+markers")
+            traceSpectra = PlotlyBase.scatter(x = mean(spectraMz, dims=1), y = mean(spectraMz, dims=2), mode="lines+markers")
             plotdata = [traceSpectra] # we add the data of spectra to the plot
         else
             msg = "File does not exist or a parameter was not well inputted"
