@@ -51,13 +51,14 @@ using Statistics
     layoutSpectra = PlotlyBase.Layout(
         title = "Spectra Plot",
         xaxis = PlotlyBase.attr(
-            title = "m/z",
+            title = "<i>m/z</i>",
             showgrid = true
         ),
         yaxis = PlotlyBase.attr(
             title = "Intensity",
             showgrid = true
         ),
+        height = 700
         )
     traceSpectra = PlotlyBase.scatter(x=[], y=[], mode="lines+markers")
     @out plotdata = [traceSpectra]

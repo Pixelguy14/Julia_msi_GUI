@@ -11,8 +11,8 @@ Then open a terminal on the directory "JuliaIMZML_GUI" and put the next code: <b
 julia
 ]
 activate .
+add Genie
 ##(press backspace)
-using Genie
-Genie.loadapp() ; up()
+using Genie ; Genie.loadapp() ; up()
 ```
 And finally open the port that gets generated to access to the GUI<br />
