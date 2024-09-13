@@ -1,14 +1,15 @@
 <header>
     <h4>Julia mzML imzML GUI&nbsp;</h4>
+    <h6>Please make sure the ibd, the mzML and the imzML files are located in the same directory and have the same name</h6>
+    <h6>It may take a while to generate the image and the plot, please be patient</h6>
 </header>
-<h6>Please make sure the ibd, the mzML and the imzML files are located in the same directory and have the same name</h6>
-<h6>It may take a while to generate the image, don't press the Start button more than once until it finishes</h6>
+
 <div class="row">
     <div class="st-col col-12 col-sm st-module">
         <div class="row">
             <div class="st-col col-12 col-sm st-module">
                 <!--Left DIV-->
-                <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".txt"></q-file>-->
+                <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".imzML"></q-file>-->
                 <q-input id="ijii1" v-model="file_route" :dense="true" label="Insert the route to your imzML file"></q-input>
                 <q-input id="ijii1-2" v-model="file_name" :dense="true" label="Insert the name of your imzML file"></q-input>
                 <p id="i7brk">full route: {{full_route}} {{warning_fr}}</p>
@@ -66,5 +67,8 @@
         </div>
     </div>
 </div>
+<div class="row">
+<div class="st-col col-12 col-sm st-module">
 <plotly :data="plotdata" :layout="plotlayout"> </plotly>
-
+</div>
+</div>

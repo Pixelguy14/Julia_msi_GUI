@@ -21,8 +21,7 @@ using Statistics
     # @out variables can only be modified by the backend
     # @in variables can be modified by both the backend and the browser
     # variables must be initialized with constant values, or variables defined outside of the @app block
-    #@out test = "/test.bmp"#slash means it's getting the info from 'public' folder
-    #mkdir("new_folder")
+    #@out test = "/test.bmp" #slash means it's getting the info from 'public' folder
     @in file_route = ""
     @in file_name = ""
     @out warning_fr = ""
@@ -48,6 +47,7 @@ using Statistics
     @in msgtriq = ""
     @out full_route = ""
     @out full_routeMz = ""
+    @out full_routeMz2 = ""
     layoutSpectra = PlotlyBase.Layout(
         title = "Spectra Plot",
         xaxis = PlotlyBase.attr(
@@ -58,9 +58,10 @@ using Statistics
             title = "Intensity",
             showgrid = true
         ),
-        height = 700
+        width = 900,
+        height = 500
         )
-    traceSpectra = PlotlyBase.scatter(x=[], y=[], mode="lines+markers")
+    traceSpectra = PlotlyBase.scatter(x=[], y=[], mode="lines")
     @out plotdata = [traceSpectra]
     @out plotlayout = layoutSpectra 
     
@@ -79,32 +80,37 @@ using Statistics
             full_route = joinpath( file_route, file_name )
             if isfile(full_route) # check if the file exists
             full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
-		    if isfile(full_routeMz) # check if there is an mzML file around
-			    spectraMz = LoadMzml(full_routeMz)
-			    # dims = size(spectraMz)
-			    # scansMax = dims[2] # we get the total of scansMax
-			    # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines")
-			    traceSpectra = PlotlyBase.scatter(x = mean(spectraMz[1,:]), y = mean(spectraMz[2,:]), mode="lines")
-			    plotdata = [traceSpectra] # we add the data of spectra to the plot
-			    spectraMz = nothing # Important for memory cleaning
-			    GC.gc() # Trigger garbage collection
-		    end
+            if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # check if there is an mzML file around
+                Disab_btn = true
+                warning_fr = "Loading plot..."
+                spectraMz = LoadMzml(full_routeMz)
+                # dims = size(spectraMz)
+                # scansMax = dims[2] # we get the total of scansMax
+                # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines")
+                traceSpectra = PlotlyBase.scatter(x = mean(spectraMz[1,:]), y = mean(spectraMz[2,:]), mode="lines")
+                plotdata = [traceSpectra] # we add the data of spectra to the plot
+                spectraMz = nothing # Important for memory cleaning
+                GC.gc() # Trigger garbage collection
+                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                warning_fr = "Plot loaded."
+                Disab_btn = false
+                full_routeMz2 = full_routeMz # to avoid creating the plot if its the same file read as before
+                end
             end
         else
             warning_fr = "is not an imzML file"
         end
     end
     @onchange Nmass begin
-        indeximg = Nmass
-        indeximgTriq = Nmass
-        lastimg = Nmass
-        lastimgTriq = Nmass
+        indeximg = floor(Int, Nmass)
+        indeximgTriq = floor(Int, Nmass)
+        lastimg = floor(Int, Nmass)
+        lastimgTriq = floor(Int, Nmass)
     end    
     # the onbutton handler will set the variable to false after the block is executed
-    #/home/julian/Documentos/Cinvestav_2024/Web/Archivos IMZML/royaimg.imzML
     @onbutton Main_Process begin
         Disab_btn = true #We disable the button to avoid multiple requests
-        indeximg = Nmass
+        indeximg = floor(Int, Nmass)
         full_route = joinpath(file_route, file_name)
         if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <= 1
             msg = "File exists, Nmass=$(Nmass) Tol=$(Tol). Please do not press the start button until confirmation"
@@ -118,17 +124,17 @@ using Statistics
                 if triqProb < 0 || triqProb > 1
                     triqProb = 0.1
                 end
-                SaveBitmap(joinpath("public", "TrIQ_$(Int(Nmass)).bmp"),
+                SaveBitmap(joinpath("public", "TrIQ_$(floor(Int, Nmass)).bmp"),
                         TrIQ(slice, Int(triqColor), triqProb),
                         ViridisPalette)
-                testT = "/TrIQ_$(Int(Nmass)).bmp" # we define the starting value of the images
-                msgtriq = "TrIQ image with the Nmass of $(Int(Nmass))"
+                testT = "/TrIQ_$(floor(Int, Nmass)).bmp" # we define the starting value of the images
+                msgtriq = "TrIQ image with the Nmass of $(floor(Int, Nmass))"
             else # if we don't
-                SaveBitmap(joinpath("public", "$(Int(Nmass)).bmp"),
+                SaveBitmap(joinpath("public", "$(floor(Int, Nmass)).bmp"),
                         IntQuant(slice),
                         ViridisPalette)
-                test = "/$(Int(Nmass)).bmp" # we define the starting value of the images
-                msgimg = "image with the Nmass of $(Int(Nmass))"
+                test = "/$(floor(Int, Nmass)).bmp" # we define the starting value of the images
+                msgimg = "image with the Nmass of $(floor(Int, Nmass))"
             end
             msg = "The file has been created inside the 'public' folder of the app"
         else
@@ -137,6 +143,7 @@ using Statistics
         spectra = nothing # Important for memory cleaning
         slice = nothing
         GC.gc() # Trigger garbage collection
+        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
         Disab_btn = false
     end
     @onbutton ImgMinus begin
@@ -150,6 +157,8 @@ using Statistics
         test = "/$(indeximg).bmp"
         msgimg = "image with the Nmass of $(indeximg)"
         lastimg = indeximg
+        GC.gc() # Trigger garbage collection
+        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
     @onbutton ImgPlus begin
         indeximg+=1
@@ -162,6 +171,8 @@ using Statistics
         test = "/$(indeximg).bmp"
         msgimg = "image with the Nmass of $(indeximg)"
         lastimg = indeximg
+        GC.gc() # Trigger garbage collection
+        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
 
     @onbutton ImgMinusT begin
@@ -175,6 +186,8 @@ using Statistics
         testT = "/TrIQ_$(indeximgTriq).bmp"
         msgtriq = "TrIQ image with the Nmass of $(indeximgTriq)"
         lastimgTriq = indeximgTriq
+        GC.gc() # Trigger garbage collection
+        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
     @onbutton ImgPlusT begin
         indeximgTriq+=1
@@ -187,8 +200,11 @@ using Statistics
         testT = "/TrIQ_$(indeximgTriq).bmp"
         msgtriq = "TrIQ image with the Nmass of $(indeximgTriq)"
         lastimgTriq = indeximgTriq
+        GC.gc() # Trigger garbage collection
+        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
     GC.gc() # Trigger garbage collection
+    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
 end
 # == Pages ==
 # register a new route and the page that will be loaded on access
