@@ -1,20 +1,22 @@
 module App
 # == Packages ==
-# set up Genie development environment. 
-using GenieFramework
+using GenieFramework # set up Genie development environment.
 using Pkg
 using Libz
 using PlotlyBase
+using CairoMakie
+using Colors
 using julia_mzML_imzML
 using Statistics
 @genietools
 
 # == Code import ==
 # add your data analysis code here or in the lib folder. Code in lib/ will be
-# automatically loaded 
+# automatically loaded
+rgb_ViridisPalette =reinterpret(ColorTypes.RGB24, ViridisPalette)
 
 # == Reactive code ==
-# add reactive code to make the UI interactive
+# reactive code to make the UI interactive
 @app begin
     # == Reactive variables ==
     # reactive variables exist in both the Julia backend and the browser with two-way synchronization
@@ -42,14 +44,16 @@ using Statistics
     @in ImgPlusT = false
     @in ImgMinusT = false
     @out testT = "/.bmp"
-    @in msg = ""
-    @in msgimg = ""
-    @in msgtriq = ""
+    @out msg = ""
+    @out msgimg = ""
+    @out msgtriq = ""
     @out full_route = ""
     @out full_routeMz = ""
     @out full_routeMz2 = ""
+    @out colorbar = "/.png"
+    @out colorbarT = "/.png"
     layoutSpectra = PlotlyBase.Layout(
-        title = "Spectra Plot",
+        title = "SUM Spectrum plot",
         xaxis = PlotlyBase.attr(
             title = "<i>m/z</i>",
             showgrid = true
@@ -63,41 +67,45 @@ using Statistics
         )
     traceSpectra = PlotlyBase.scatter(x=[], y=[], mode="lines")
     @out plotdata = [traceSpectra]
-    @out plotlayout = layoutSpectra 
-    
+    @out plotlayout = layoutSpectra
+
     # == Reactive handlers ==
     # reactive handlers watch a variable and execute a block of code when
     # its value changes
     @onchange triqEnabled begin
         if !triqEnabled
-            triqProb = 0.0
-            triqColor = 0
+            #triqProb = 0.0
+            #triqColor = 0
         end
     end
     @onchange file_name begin
+        msg = ""
         if contains(file_name,".imzML")
             warning_fr = ""
             full_route = joinpath( file_route, file_name )
             if isfile(full_route) # check if the file exists
-            full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
-            if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # check if there is an mzML file around
-                Disab_btn = true
-                warning_fr = "Loading plot..."
-                spectraMz = LoadMzml(full_routeMz)
-                # dims = size(spectraMz)
-                # scansMax = dims[2] # we get the total of scansMax
-                # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines")
-                traceSpectra = PlotlyBase.scatter(x = mean(spectraMz[1,:]), y = mean(spectraMz[2,:]), mode="lines")
-                plotdata = [traceSpectra] # we add the data of spectra to the plot
-                spectraMz = nothing # Important for memory cleaning
-                GC.gc() # Trigger garbage collection
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
-                warning_fr = "Plot loaded."
-                Disab_btn = false
-                full_routeMz2 = full_routeMz # to avoid creating the plot if its the same file read as before
+                full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
+                if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # check if there is an mzML file around
+                    Disab_btn = true
+                    warning_fr = "Loading plot..."
+                    spectraMz = LoadMzml(full_routeMz)
+                    # dims = size(spectraMz)
+                    # scansMax = dims[2] # we get the total of scansMax
+                    # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines")
+                    traceSpectra = PlotlyBase.scatter(x = mean(spectraMz[1,:]), y = mean(spectraMz[2,:]), mode="lines")
+                    plotdata = [traceSpectra] # we add the data of spectra to the plot
+                    spectraMz = nothing # Important for memory cleaning
+                    GC.gc() # Trigger garbage collection
+                    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                    warning_fr = "Plot loaded."
+                    Disab_btn = false
+                    full_routeMz2 = full_routeMz # to avoid creating the plot if its the same file read as before
                 end
+            else
+                warning_fr = "is not an imzML file"
             end
         else
+            full_route = "/"
             warning_fr = "is not an imzML file"
         end
     end
@@ -106,39 +114,45 @@ using Statistics
         indeximgTriq = floor(Int, Nmass)
         lastimg = floor(Int, Nmass)
         lastimgTriq = floor(Int, Nmass)
-    end    
-    # the onbutton handler will set the variable to false after the block is executed
+    end
+    # The onbutton handler will set the variable to false after the block is executed
     @onbutton Main_Process begin
-        Disab_btn = true #We disable the button to avoid multiple requests
+        Disab_btn = true # We disable the button to avoid multiple requests
         indeximg = floor(Int, Nmass)
         full_route = joinpath(file_route, file_name)
         if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <= 1
-            msg = "File exists, Nmass=$(Nmass) Tol=$(Tol). Please do not press the start button until confirmation"
-            spectra = LoadImzml(full_route)
-            msg = "File loaded. Please do not press the start button until confirmation"
-            slice = GetSlice(spectra, Nmass, Tol)
-            if triqProb != 0 # if we have TrIQ
-                if triqColor < 1 || triqColor > 256
-                    triqColor = 1
+            msg = "File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
+            try
+                spectra = LoadImzml(full_route)
+                msg = "File loaded. Creating Spectra with the specific mass and tolerance, please be patient."
+                slice = GetSlice(spectra, Nmass, Tol)
+                fig = CairoMakie.Figure(size = (100, 200)) #container
+                if triqEnabled # if we have TrIQ
+                    if triqColor < 1 || triqColor > 256 ||triqProb < 0 || triqProb > 1
+                        msg = "Incorrect TrIQ values, please adjust accordingly and try again."
+                    else
+                        SaveBitmap(joinpath("public", "TrIQ_$(floor(Int, Nmass)).bmp"),TrIQ(slice, Int(triqColor), triqProb),ViridisPalette)
+                        testT = "/TrIQ_$(floor(Int, Nmass)).bmp" # we define the starting value of the images
+                        msgtriq = "TrIQ image with the Nmass of $(floor(Int, Nmass))"
+                        Colorbar(fig[1, 1], colormap = rgb_ViridisPalette, limits = (0, maximum(TrIQ(slice, Int(triqColor), triqProb))))
+                        save("public/colorbar_TrIQ_$(floor(Int, Nmass)).png", fig)
+                        msg = "The file has been created successfully inside the 'public' folder of the app."
+                        colorbarT = "/colorbar_TrIQ_$(floor(Int, Nmass)).png"
+                    end
+                else # if we don't use TrIQ
+                    SaveBitmap(joinpath("public", "$(floor(Int, Nmass)).bmp"),IntQuant(slice),ViridisPalette)
+                    test = "/$(floor(Int, Nmass)).bmp" # we define the starting value of the images
+                    msgimg = "image with the Nmass of $(floor(Int, Nmass))"
+                    Colorbar(fig[1, 1], colormap = rgb_ViridisPalette, limits = (0, maximum(slice)))
+                    save("public/colorbar_$(floor(Int, Nmass)).png", fig)
+                    msg = "The file has been created successfully inside the 'public' folder of the app."
+                    colorbar = "/colorbar_$(floor(Int, Nmass)).png"
                 end
-                if triqProb < 0 || triqProb > 1
-                    triqProb = 0.1
-                end
-                SaveBitmap(joinpath("public", "TrIQ_$(floor(Int, Nmass)).bmp"),
-                        TrIQ(slice, Int(triqColor), triqProb),
-                        ViridisPalette)
-                testT = "/TrIQ_$(floor(Int, Nmass)).bmp" # we define the starting value of the images
-                msgtriq = "TrIQ image with the Nmass of $(floor(Int, Nmass))"
-            else # if we don't
-                SaveBitmap(joinpath("public", "$(floor(Int, Nmass)).bmp"),
-                        IntQuant(slice),
-                        ViridisPalette)
-                test = "/$(floor(Int, Nmass)).bmp" # we define the starting value of the images
-                msgimg = "image with the Nmass of $(floor(Int, Nmass))"
+            catch e
+                msg = "There was an error loading the ImzML file, please verify the file accordingly and try again. $(e)"
             end
-            msg = "The file has been created inside the 'public' folder of the app"
         else
-            msg = "File does not exist or a parameter was not well inputted"
+            msg = "File does not exist or a parameter is incorrect, please try again."
         end
         spectra = nothing # Important for memory cleaning
         slice = nothing
@@ -155,10 +169,9 @@ using Statistics
             indeximg = lastimg
         end
         test = "/$(indeximg).bmp"
+        colorbar = "/colorbar_$(indeximg).png"
         msgimg = "image with the Nmass of $(indeximg)"
         lastimg = indeximg
-        GC.gc() # Trigger garbage collection
-        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
     @onbutton ImgPlus begin
         indeximg+=1
@@ -169,10 +182,9 @@ using Statistics
             indeximg = lastimg
         end
         test = "/$(indeximg).bmp"
+        colorbar = "/colorbar_$(indeximg).png"
         msgimg = "image with the Nmass of $(indeximg)"
         lastimg = indeximg
-        GC.gc() # Trigger garbage collection
-        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
 
     @onbutton ImgMinusT begin
@@ -184,10 +196,9 @@ using Statistics
             indeximgTriq = lastimgTriq
         end
         testT = "/TrIQ_$(indeximgTriq).bmp"
+        colorbarT = "/colorbar_TrIQ_$(indeximgTriq).png"
         msgtriq = "TrIQ image with the Nmass of $(indeximgTriq)"
         lastimgTriq = indeximgTriq
-        GC.gc() # Trigger garbage collection
-        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
     @onbutton ImgPlusT begin
         indeximgTriq+=1
@@ -198,10 +209,9 @@ using Statistics
             indeximgTriq = lastimgTriq
         end
         testT = "/TrIQ_$(indeximgTriq).bmp"
+        colorbarT = "/colorbar_TrIQ_$(indeximgTriq).png"
         msgtriq = "TrIQ image with the Nmass of $(indeximgTriq)"
         lastimgTriq = indeximgTriq
-        GC.gc() # Trigger garbage collection
-        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
     GC.gc() # Trigger garbage collection
     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -213,7 +223,7 @@ end
 
 # == Advanced features ==
 #=
-- The @private macro defines a reactive variable that is not sent to the browser. 
+- The @private macro defines a reactive variable that is not sent to the browser.
 This is useful for storing data that is unique to each user session but is not needed
 in the UI.
     @private table = DataFrame(a = 1:10, b = 10:19, c = 20:29)
