@@ -134,7 +134,8 @@ rgb_ViridisPalette =reinterpret(ColorTypes.RGB24, ViridisPalette)
                         SaveBitmap(joinpath("public", "TrIQ_$(floor(Int, Nmass)).bmp"),TrIQ(slice, Int(triqColor), triqProb),ViridisPalette)
                         testT = "/TrIQ_$(floor(Int, Nmass)).bmp" # we define the starting value of the images
                         msgtriq = "TrIQ image with the Nmass of $(floor(Int, Nmass))"
-                        Colorbar(fig[1, 1], colormap = rgb_ViridisPalette, limits = (0, maximum(TrIQ(slice, Int(triqColor), triqProb))))
+                        ticks = round.(range(0, stop = maximum(TrIQ(slice, Int(triqColor), triqProb)), length = 10), digits = 2)
+                        Colorbar(fig[1, 1], colormap = rgb_ViridisPalette, limits = (0, maximum(TrIQ(slice, Int(triqColor), triqProb))),ticks = ticks, label = "Intensity")
                         save("public/colorbar_TrIQ_$(floor(Int, Nmass)).png", fig)
                         msg = "The file has been created successfully inside the 'public' folder of the app."
                         colorbarT = "/colorbar_TrIQ_$(floor(Int, Nmass)).png"
@@ -143,7 +144,8 @@ rgb_ViridisPalette =reinterpret(ColorTypes.RGB24, ViridisPalette)
                     SaveBitmap(joinpath("public", "$(floor(Int, Nmass)).bmp"),IntQuant(slice),ViridisPalette)
                     test = "/$(floor(Int, Nmass)).bmp" # we define the starting value of the images
                     msgimg = "image with the Nmass of $(floor(Int, Nmass))"
-                    Colorbar(fig[1, 1], colormap = rgb_ViridisPalette, limits = (0, maximum(slice)))
+                    ticks = round.(range(0, stop = maximum(slice), length = 10), digits = 2)
+                    Colorbar(fig[1, 1], colormap = rgb_ViridisPalette, limits = (0, maximum(slice)),ticks = ticks, label = "Intensity")
                     save("public/colorbar_$(floor(Int, Nmass)).png", fig)
                     msg = "The file has been created successfully inside the 'public' folder of the app."
                     colorbar = "/colorbar_$(floor(Int, Nmass)).png"
