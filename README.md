@@ -1,26 +1,24 @@
 # Julia_msi_GUI<br />
-A Graphical User Interface created with <i>Julia Genie Builder</i> made for to assist in the use of this repository: https://github.com/CINVESTAV-LABI/julia_mzML_imzML which generates images with the mzMl, imzML and ibd files.<br />
-For the correct implementation and use of this repository one must insert the next lines just as they are depicted in your <b>Julia</b> terminal to install the dependencies needed, this part is only needed once. <br />
+A Graphical User Interface for IMS in Julia: https://github.com/CINVESTAV-LABI/julia_mzML_imzML
+
+## Local installation
+* Launch Julia
 ```
 julia
 ```
-press closing square bracket:
+* Enter Pkg mode by pressing the close square bracket once Julia has been loaded: ** Mostrar imagen del modo pkg**
 ```
 ]
 ```
-To enter Pkg mode, and then add the next libraries:
+* Install the following libraries
 ```
 add Pkg Libz ; add https://github.com/CINVESTAV-LABI/julia_mzML_imzML ; add PlotlyBase ; add Statistics ; add CairoMakie ; add Colors ; add Genie
 ```
-Then open a <b>Julia</b> terminal on the directory <i>"Julia_msi_GUI"</i> and put the next code, this is needed every time you want to run the GUI: <br />
-```
-]
-```
-To enter Pkg mode again, then paste the next lines:
+*In the Pkg mode (enter by pressing "]" once Julia is rining) enter:
 ```
 activate .
 ```
-Press backspace key to exit Pkg mode and continue with:
+* Get out from Pkg mode by pressing the backspace key and enter next line:
 ```
 using Genie ; Genie.loadapp() ; up()
 ```
