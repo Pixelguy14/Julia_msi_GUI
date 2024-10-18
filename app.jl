@@ -80,33 +80,57 @@ rgb_ViridisPalette =reinterpret(ColorTypes.RGB24, ViridisPalette)
     end
     @onchange file_name begin
         msg = ""
-        if contains(file_name,".imzML")
-            warning_fr = ""
-            full_route = joinpath( file_route, file_name )
-            if isfile(full_route) # check if the file exists
-                full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
-                if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # check if there is an mzML file around
+        try
+            if contains(file_name,".imzML")
+                warning_fr = ""
+                full_route = joinpath( file_route, file_name )
+                if isfile(full_route) # check if the file exists
+                    full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
+                    if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # check if there is an mzML file around
+                        Disab_btn = true
+                        warning_fr = "Loading plot..."
+                        spectraMz = LoadMzml(full_routeMz)
+                        # dims = size(spectraMz)
+                        # scansMax = dims[2] # we get the total of scansMax
+                        # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines")
+                        traceSpectra = PlotlyBase.scatter(x = mean(spectraMz[1,:]), y = mean(spectraMz[2,:]), mode="lines")
+                        plotdata = [traceSpectra] # we add the data of spectra to the plot
+                        spectraMz = nothing # Important for memory cleaning
+                        GC.gc() # Trigger garbage collection
+                        if Sys.islinux()
+                            ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                        end
+                        warning_fr = "Plot loaded."
+                        Disab_btn = false
+                        full_routeMz2 = full_routeMz # to avoid creating the plot if its the same file read as before
+                    end
+                else
+                    warning_fr = "is not an imzML file"
+                end
+            elseif contains(file_name,".mzML")
+                full_routeMz = joinpath( file_route, file_name )
+                warning_fr = "$(full_routeMz)"
+                if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # check if there is an mzML file around # check if the file exists
                     Disab_btn = true
                     warning_fr = "Loading plot..."
                     spectraMz = LoadMzml(full_routeMz)
-                    # dims = size(spectraMz)
-                    # scansMax = dims[2] # we get the total of scansMax
-                    # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines")
                     traceSpectra = PlotlyBase.scatter(x = mean(spectraMz[1,:]), y = mean(spectraMz[2,:]), mode="lines")
                     plotdata = [traceSpectra] # we add the data of spectra to the plot
                     spectraMz = nothing # Important for memory cleaning
                     GC.gc() # Trigger garbage collection
-                    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                    if Sys.islinux()
+                        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                    end
                     warning_fr = "Plot loaded."
                     Disab_btn = false
                     full_routeMz2 = full_routeMz # to avoid creating the plot if its the same file read as before
                 end
             else
-                warning_fr = "is not an imzML file"
+                full_route = "/"
+                warning_fr = "is not an imzML or mzML file"
             end
-        else
-            full_route = "/"
-            warning_fr = "is not an imzML file"
+        catch e
+            msg = "There was an error, please verify the file and try again. $(e)"
         end
     end
     @onchange Nmass begin
@@ -159,7 +183,9 @@ rgb_ViridisPalette =reinterpret(ColorTypes.RGB24, ViridisPalette)
         spectra = nothing # Important for memory cleaning
         slice = nothing
         GC.gc() # Trigger garbage collection
-        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+        if Sys.islinux()
+            ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+        end
         Disab_btn = false
     end
     @onbutton ImgMinus begin
@@ -216,7 +242,9 @@ rgb_ViridisPalette =reinterpret(ColorTypes.RGB24, ViridisPalette)
         lastimgTriq = indeximgTriq
     end
     GC.gc() # Trigger garbage collection
-    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+    if Sys.islinux()
+        ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+    end
 end
 # == Pages ==
 # register a new route and the page that will be loaded on access
