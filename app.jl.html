@@ -53,15 +53,15 @@
                 <p></p>
                 <q-btn id="ijhjl-2" color="primary" icon="arrow_back" label="Previous" v-on:click="ImgMinus = true"></q-btn>
                 <q-btn id="i3zt1" color="primary" icon="arrow_forward" label="Next" v-on:click="ImgPlus = true"></q-btn>
-                <div id="image-container" class="row col-12">
-                    <div class="col-10"><q-img id="i6e3p" :src="test"></q-img></div>
+                <div id="image-container" class="row col-12 items-center">
+                    <div class="col-10"><q-img id="i6e3p" :src="test" style="max-height: 500px; max-width: 100%; object-fit: contain;" class="q-ma-none q-pa-none"></q-img></div>
                     <div class="col-2"><q-img id="colorbar" :src="colorbar"></q-img></div>
                 </div>
                 <p>{{msgimg}}</p>
                 <q-btn id="ijhjl-2-2" color="primary" icon="arrow_back" label="Previous" v-on:click="ImgMinusT = true"></q-btn>
                 <q-btn id="i3zt1-2" color="primary" icon="arrow_forward" label="Next" v-on:click="ImgPlusT = true"></q-btn>
-                <div id="image-container" class="row col-12">
-                    <div class="col-10"><q-img id="i6e3p-2" :src="testT"></q-img></div>
+                <div id="image-container" class="row col-12 items-center">
+                    <div class="col-10"><q-img id="i6e3p-2" :src="testT" style="max-height: 500px; max-width: 100%; object-fit: contain;" class="q-ma-none q-pa-none"></q-img></div>
                     <div class="col-2"><q-img id="colorbar-2" :src="colorbarT"></q-img></div>
                 </div>
                 <p>{{msgtriq}}</p>
