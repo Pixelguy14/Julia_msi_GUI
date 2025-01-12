@@ -1,0 +1,18 @@
+PENDING
+
+    rmsi julia coherence with image creation
+        avoid image enlargement -> CURRENT WIP
+        image rotation?
+        colorbar revamp
+    3d topography for images
+    better blind search for images -> CURRENT WIP
+    multiple plot types?
+
+DONE
+    quicker start for julia GUI
+    better UI
+        better style of page
+        more responsiveness
+        UI functionality added
+    code cleaning
+    better code readability

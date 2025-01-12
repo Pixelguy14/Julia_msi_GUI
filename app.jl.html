@@ -1,76 +1,134 @@
-<header id="ikbk"><!--<img src="/css/biotech_100dp_1B1F3B.png" alt="Bioteck Icon" id="i65e">-->
-<img src="/css/LABI_logo.jpeg" alt="Labi Logo Icon" id="i65e">
-    <div>
-        <h4>Julia mzML imzML analysis GUI&nbsp;</h4>
-        <h6>Please make sure the ibd, the mzML and the imzML files are located in the same directory and have the same name.</h6>
-        <h6>It may take a while to generate the image and the plot, please be patient.</h6>
-    </div>
-</header>
-<div class="row">
-    <div class="st-col col-12 col-sm st-module" id="i0xj8">
-        <div class="row">
-            <div class="st-col col-12 col-sm st-module" id="idbha">
-                <!--Left DIV-->
-                <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".imzML"></q-file>-->
-                <q-input id="ijii1" v-model="file_route" :dense="true" label="Insert the route to your imzML file"></q-input>
-                <q-input id="ijii1-2" v-model="file_name" :dense="true" label="Insert the name of your imzML file"></q-input>
-                <p id="i7brk">full route: {{full_route}} {{warning_fr}}</p>
-                <div class="row">
-                    <div class="st-col col-12 col-sm">
-                        <q-input id="icc9d" v-model="Nmass" :dense="true" label="Mass-to-charge ratio of interest" type="number" :rules="[ val => !!val || '* Required', val => val >= 0 &amp;&amp; val <= 2000 || 'Need positive mass values',]"></q-input>
+<template>
+    <header id="header">
+        <img src="/css/LABI_logo.jpeg" alt="Labi Logo Icon" id="imgLogo">
+        <div>
+            <h4>Julia mzML imzML analysis GUI&nbsp;</h4>
+            <h6>Please make sure the ibd, the mzML and the imzML files are located in the same directory and have the same name.</h6>
+            <h6>It may take a while to generate the image and the plot, please be patient.</h6>
+        </div>
+    </header>
+    <!-- TOP -->
+    <div class="row">
+        <div id="extDivStyle" class="st-col col-12 col-sm st-module">
+            <div class="row">
+                <!-- Left DIV -->
+                <div id="intDivStyle" class="st-col col-12 col-sm st-module">
+                    <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".imzML"></q-file>-->
+                    <q-input id="textRoute" standout="custom-standout" v-model="file_route" label="Insert the route to your imzML file"></q-input>
+                    <div class="row st-col col-14 col-sm">
+                        <q-input id="textName" class="col-8" standout="custom-standout" v-model="file_name" label="Insert the name of your imzML file"></q-input>
+                        <q-btn id="btnStyle" class="col-4" :loading="progressPlot" :disabled="btnPlotDisable" icon="play_arrow" v-on:click="Generate_Plot = true">
+                            Generate Plot
+                            <template v-slot:loading>
+                            <q-spinner-hourglass class="on-left" />
+                            Loading Plot
+                            </template>
+                        </q-btn>
                     </div>
-                    <div class="st-col col-12 col-sm">
-                        <q-input id="iqt3l" step="0.01" v-model="Tol" :dense="true" label="Mass-to-charge ratio Tolerance" type="number" :rules="[val => !!val || '* Required', val => val >= 0 &amp;&amp; val <= 1  || 'Needs to be in range between 0 and 1',]"></q-input>
+                    <p id="lblFullRoute">full route: {{full_route}} {{warning_fr}}</p>
+                    <!-- Variable Manipulation -->
+                    <div class="row">
+                        <div class="st-col col-12 col-sm">
+                            <q-input standout="custom-standout" id="textNmass" v-model="Nmass" :dense="true" label="Mass-to-charge ratio of interest" type="number" :rules="[ val => !!val || '* Required', val => val >= 0 &amp;&amp; val <= 2000 || 'Need positive mass values',]"></q-input>
+                        </div>
+                        <div class="st-col col-12 col-sm">
+                            <q-input standout="custom-standout" id="textTol" step="0.01" v-model="Tol" :dense="true" label="Mass-to-charge ratio Tolerance" type="number" :rules="[val => !!val || '* Required', val => val >= 0 &amp;&amp; val <= 1  || 'Needs to be in range between 0 and 1',]"></q-input>
+                        </div>
                     </div>
-                </div>
-                <div class="row">
-                    <div class="st-col col-12 col-sm">
-                        <q-toggle id="igqon" v-on:click="triqEnabled" v-model="triqEnabled" color="blue" label="Add Threshold Intensity Quantization (TrIQ)!"></q-toggle>
+                    <div class="row">
+                        <div class="st-col col-12 col-sm">
+                            <q-toggle id="btnEnableTriq" v-on:click="triqEnabled" v-model="triqEnabled" color="blue" label="Add Threshold Intensity Quantization (TrIQ)!"></q-toggle>
+                        </div>
                     </div>
-                </div>
-                <div class="row">
-                    <div class="st-col col-12 col-sm-8">
-                        <q-input id="i28wb" step="0.01" v-model="triqProb" :dense="true" label="TrIQ Probability" type="number" :rules="[
-                                val => val >= 0 &amp;&amp; val <= 1  || 'Needs to be in range between 0 and 1',
-                                ]" :readonly="!triqEnabled"></q-input>
+                    <!-- Triq Variable Manipulation -->
+                    <div class="row">
+                        <div class="st-col col-12 col-sm-8">
+                            <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb" :dense="true" label="TrIQ Probability" type="number" :rules="[
+                                    val => triqEnabled ? ( '* Required', val >= 0 &amp;&amp; val <= 1 || 'Needs to be in range between 0 and 1') : true
+                                    ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
+                        </div>
+                        <div class="st-col col-12 col-sm-4">
+                            <q-input standout="custom-standout" id="textTriqColor" step="1" v-model="triqColor" :dense="true" label="TrIQ Color Levels" type="number" :rules="[
+                                    val => triqEnabled ? ( '* Required', val >= 0 &amp;&amp; val <= 256  || 'Needs to be in range between 1 and 256') : true
+                                    ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
+                        </div>
                     </div>
-                    <div class="st-col col-12 col-sm-4">
-                        <q-input id="i28wb-2" step="1" v-model="triqColor" :dense="true" label="TrIQ Color Levels" type="number" :rules="[
-                                val => val >= 0 &amp;&amp; val <= 256  || 'Needs to be in range between 1 and 256',
-                                ]" :readonly="!triqEnabled"></q-input>
+                    <q-btn id="btnStyle" :loading="progress" :disabled="btnStartDisable" icon="play_arrow" v-on:click="Main_Process = true" padding="lg">
+                        Start Process
+                        <template v-slot:loading>
+                        <q-spinner-hourglass class="on-left" />
+                        Loading...
+                        </template>
+                    </q-btn>
+                    <p>{{msg}}</p>
+                </div>
+            </div><!--        <plotly :data="plotdata" :layout="plotlayout"> </plotly>-->
+        </div>
+        <div id="extDivStyle" class="st-col col-12 col-sm st-module">
+            <div class="row">
+                <!-- Right DIV -->
+                <div id="intDivStyle" class="st-col col-12 col-sm st-module">
+                    <h6>Image Visualizer</h6>
+                    <!-- Btn image changer -->
+                    <div>
+                        <q-btn id="btnStyle" icon="arrow_back" rounded v-on:click="ImgMinus = true"></q-btn>
+                        <q-btn id="btnStyle" icon="arrow_forward" rounded v-on:click="ImgPlus = true"></q-btn>
                     </div>
+                    <!-- Image manager -->
+                    <div id="image-container" class="row st-col col-12 col-sm items-center">
+                        <div style="max-height: 500px; overflow: auto;" class="st-col col-10">
+                            <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" fit="scale-down"></q-img>
+                        </div>
+                        <div class="st-col col-2">
+                            <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
+                        </div>
+                    </div>
+                    <p>{{msgimg}}</p>
+                    <!-- Triq Btn image changer -->
+                    <div>
+                        <q-btn id="btnStyle" icon="arrow_back" rounded v-on:click="ImgMinusT = true"></q-btn>
+                        <q-btn id="btnStyle" icon="arrow_forward" rounded v-on:click="ImgPlusT = true"></q-btn>
+                    </div>
+                    <!-- Triq Image manager -->
+                    <div id="image-container" class="row st-col col-12 col-sm items-center">
+                        <div style="max-height: 500px; overflow: auto;" class="st-col col-10">
+                            <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" fit="scale-down"></q-img>
+                        </div>
+                        <div class="st-col col-2">
+                            <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
+                        </div>
+                    </div>
+                    <p>{{msgtriq}}</p>
                 </div>
-                <q-btn id="isfqg" :disabled="Disab_btn" color="primary" icon="play_arrow" v-on:click="Main_Process = true" label="Start"></q-btn>
-                <p>{{msg}}</p>
-            </div>
-        </div><!--        <plotly :data="plotdata" :layout="plotlayout"> </plotly>-->
-    </div>
-    <div class="st-col col-12 col-sm st-module" id="i8pdn">
-        <div class="row">
-            <div class="st-col col-12 col-sm st-module" id="ihxlc">
-                <!--Right DIV-->
-                <h6>Image Visualizer</h6><br>
-                <p></p>
-                <q-btn id="ijhjl-2" color="primary" icon="arrow_back" label="Previous" v-on:click="ImgMinus = true"></q-btn>
-                <q-btn id="i3zt1" color="primary" icon="arrow_forward" label="Next" v-on:click="ImgPlus = true"></q-btn>
-                <div id="image-container" class="row col-12 items-center">
-                    <div class="col-10"><q-img id="i6e3p" :src="test" style="max-height: 500px; max-width: 100%; object-fit: contain;" class="q-ma-none q-pa-none"></q-img></div>
-                    <div class="col-2"><q-img id="colorbar" :src="colorbar"></q-img></div>
-                </div>
-                <p>{{msgimg}}</p>
-                <q-btn id="ijhjl-2-2" color="primary" icon="arrow_back" label="Previous" v-on:click="ImgMinusT = true"></q-btn>
-                <q-btn id="i3zt1-2" color="primary" icon="arrow_forward" label="Next" v-on:click="ImgPlusT = true"></q-btn>
-                <div id="image-container" class="row col-12 items-center">
-                    <div class="col-10"><q-img id="i6e3p-2" :src="testT" style="max-height: 500px; max-width: 100%; object-fit: contain;" class="q-ma-none q-pa-none"></q-img></div>
-                    <div class="col-2"><q-img id="colorbar-2" :src="colorbarT"></q-img></div>
-                </div>
-                <p>{{msgtriq}}</p>
             </div>
         </div>
     </div>
-</div>
-<div class="row">
-    <div class="st-col col-12 col-sm st-module">
-        <plotly id="iiglk" :data="plotdata" :layout="plotlayout"></plotly>
+    <!-- Bottom -->
+    <div class="row">
+        <!-- Bottom Left Div -->
+        <div class="st-col col-12 col-sm st-module" >
+            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="st-col col-12 col-sm-12"></plotly>
+        </div>
+        <!-- Bottom Right Div -->
+        <div class="st-col col-12 col-sm st-module" >
+            <h1>3d plot goes here</h1>
+        </div>
     </div>
-</div>
+
+    <q-dialog v-model="warning_msg">
+        <q-card>
+        <q-card-section>
+            <div class="text-h6">Warning</div>
+        </q-card-section>
+
+        <q-card-section class="q-pt-none">
+            {{msg}}
+        </q-card-section>
+
+        <q-card-actions align="right">
+            <q-btn flat label="OK" style="color:#009f90" v-close-popup />
+        </q-card-actions>
+        </q-card>
+    </q-dialog>
+
+</template>

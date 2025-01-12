@@ -1,6 +1,7 @@
 [deps]
 Genie = "c43c736e-a2d1-11e8-161f-af95117fbd1e"
 GenieFramework = "a59fdf5c-6bf0-4f5d-949c-a137c9e2f353"
+julia_mzML_imzML = "38eb50d3-2fb6-4afa-992a-964ed8562ed9"
 
 [Genie]
-instantiated_pwd = "/var/home/pixelguy14/Documentos/Julia_imzML_GUI-main/JuliaIMZML_GUI"
+instantiated_pwd = "/var/home/pixelguy14/Documentos/CINVESTAV_2025/Julia_msi_GUI"
