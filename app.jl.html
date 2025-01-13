@@ -15,24 +15,50 @@
                 <div id="intDivStyle" class="st-col col-12 col-sm st-module">
                     <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".imzML"></q-file>-->
                     <q-input id="textRoute" standout="custom-standout" v-model="file_route" label="Insert the route to your imzML file"></q-input>
-                    <div class="row st-col col-14 col-sm">
-                        <q-input id="textName" class="col-8" standout="custom-standout" v-model="file_name" label="Insert the name of your imzML file"></q-input>
-                        <q-btn id="btnStyle" class="col-4" :loading="progressPlot" :disabled="btnPlotDisable" icon="play_arrow" v-on:click="Generate_Plot = true">
-                            Generate Plot
-                            <template v-slot:loading>
-                            <q-spinner-hourglass class="on-left" />
-                            Loading Plot
-                            </template>
-                        </q-btn>
+                    <div class="row st-col col-12 col-sm">
+                        <q-input id="textName" class="col-9" standout="custom-standout" v-model="file_name" label="Insert the name of your imzML file"></q-input>
+                        <q-btn-dropdown
+                        id="btnStyle"
+                        class="col-3"
+                        :loading="progressPlot"
+                        :disable="btnPlotDisable"
+                        label="Generate Plots"
+                        icon="play_arrow"
+                      >
+                        <template v-slot:loading>
+                          <q-spinner-hourglass class="on-left" />
+                          Loading Plot
+                        </template>
+                        
+                        <q-list>
+                          <q-item clickable v-close-popup v-on:click="createSumPlot = true">
+                            <q-item-section>
+                              <q-item-label>Sum Spectrum Plot</q-item-label>
+                            </q-item-section>
+                          </q-item>
+                          
+                          <q-item clickable v-close-popup v-on:click="image3dPlot = true">
+                            <q-item-section>
+                              <q-item-label>Image 3D Plot</q-item-label>
+                            </q-item-section>
+                          </q-item>
+                          
+                          <q-item clickable v-close-popup v-on:click="triq3dPlot = true">
+                            <q-item-section>
+                              <q-item-label>TrIQ 3D Plot</q-item-label>
+                            </q-item-section>
+                          </q-item>
+                        </q-list>
+                      </q-btn-dropdown>
                     </div>
                     <p id="lblFullRoute">full route: {{full_route}} {{warning_fr}}</p>
                     <!-- Variable Manipulation -->
                     <div class="row">
                         <div class="st-col col-12 col-sm">
-                            <q-input standout="custom-standout" id="textNmass" v-model="Nmass" :dense="true" label="Mass-to-charge ratio of interest" type="number" :rules="[ val => !!val || '* Required', val => val >= 0 &amp;&amp; val <= 2000 || 'Need positive mass values',]"></q-input>
+                            <q-input standout="custom-standout" id="textNmass" step="0.01" v-model="Nmass" label="Mass-to-charge ratio of interest" type="number" :rules="[ val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 2000.0 || 'Need positive mass values',]"></q-input>
                         </div>
                         <div class="st-col col-12 col-sm">
-                            <q-input standout="custom-standout" id="textTol" step="0.01" v-model="Tol" :dense="true" label="Mass-to-charge ratio Tolerance" type="number" :rules="[val => !!val || '* Required', val => val >= 0 &amp;&amp; val <= 1  || 'Needs to be in range between 0 and 1',]"></q-input>
+                            <q-input standout="custom-standout" id="textTol" step="0.01" v-model="Tol" label="Mass-to-charge ratio Tolerance" type="number" :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1',]"></q-input>
                         </div>
                     </div>
                     <div class="row">
@@ -43,17 +69,17 @@
                     <!-- Triq Variable Manipulation -->
                     <div class="row">
                         <div class="st-col col-12 col-sm-8">
-                            <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb" :dense="true" label="TrIQ Probability" type="number" :rules="[
+                            <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb" label="TrIQ Probability" type="number" :rules="[
                                     val => triqEnabled ? ( '* Required', val >= 0 &amp;&amp; val <= 1 || 'Needs to be in range between 0 and 1') : true
                                     ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
                         </div>
                         <div class="st-col col-12 col-sm-4">
-                            <q-input standout="custom-standout" id="textTriqColor" step="1" v-model="triqColor" :dense="true" label="TrIQ Color Levels" type="number" :rules="[
+                            <q-input standout="custom-standout" id="textTriqColor" step="1" v-model="triqColor" label="TrIQ Color Levels" type="number" :rules="[
                                     val => triqEnabled ? ( '* Required', val >= 0 &amp;&amp; val <= 256  || 'Needs to be in range between 1 and 256') : true
                                     ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
                         </div>
                     </div>
-                    <q-btn id="btnStyle" :loading="progress" :disabled="btnStartDisable" icon="play_arrow" v-on:click="Main_Process = true" padding="lg">
+                    <q-btn id="btnStyle" :loading="progress" :disabled="btnStartDisable" icon="play_arrow" v-on:click="mainProcess = true" padding="lg">
                         Start Process
                         <template v-slot:loading>
                         <q-spinner-hourglass class="on-left" />
@@ -111,7 +137,7 @@
         </div>
         <!-- Bottom Right Div -->
         <div class="st-col col-12 col-sm st-module" >
-            <h1>3d plot goes here</h1>
+            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="st-col col-12 col-sm-12"></plotly>
         </div>
     </div>
 
