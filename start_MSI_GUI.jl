@@ -1,8 +1,10 @@
 using Pkg
 Pkg.activate(".")
+Pkg.add("Libz") ; Pkg.add("PlotlyBase") ; Pkg.add("CairoMakie") ; Pkg.add("Colors") ; Pkg.add("Statistics") ; Pkg.add("NaturalSort")
+Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML") # With this we ensure it uses the latest library iteration
 Pkg.instantiate()
 Pkg.update()
-# Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML") # with this we ensure it uses the latest library iteration
+
 using Genie
 
 # Load and configure Genie

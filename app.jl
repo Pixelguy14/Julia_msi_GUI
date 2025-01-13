@@ -138,7 +138,16 @@ end
     )
 
     # Dummy 3D surface plot
-    trace3D = PlotlyBase.surface(x=[1:10], y=[1:10], z=[1:10], colorscale="Viridis")
+    x = 1:10
+    y = 1:10
+    z = [sin(i * j / 10) for i in x, j in y]
+    trace3D = PlotlyBase.surface(x=x, y=y, z=z,
+                                contours_z=attr(
+                                    show=true,
+                                    usecolormap=true,
+                                    highlightcolor="limegreen",
+                                    project_z=true
+                                ), colorscale="Viridis")
     # Create conection to frontend
     @out plotdata3d = [trace3D]
     @out plotlayout3d = layout3D

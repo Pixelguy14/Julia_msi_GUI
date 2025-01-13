@@ -2,7 +2,7 @@
 A Graphical User Interface for IMS in Julia: https://github.com/CINVESTAV-LABI/julia_mzML_imzML
 
 ## Local Installation
-1. Make sure you have Julia installed, if not, follow the next installation guide for [juliaup](https://github.com/JuliaLang/juliaup) (recommended) or [julia] (https://julialang.org/downloads/platform/)
+1. Make sure you have Julia installed, if not, follow the next installation guide for [juliaup](https://github.com/JuliaLang/juliaup) (recommended) or [julia](https://julialang.org/downloads/platform/)
 2. Access the repository using this link:<br>
    https://github.com/Pixelguy14/Julia_msi_GUI<br>
    click "<b><> Code</b>" button then hit "<b>Download ZIP</b>"<br>
