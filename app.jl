@@ -58,17 +58,19 @@ end
     @out btnStartDisable = true
     @out btnPlotDisable = true
     @in warning_msg = false
+    @in CompareDialog = false
 
     # Interface Variables
     @in file_route = ""
     @in file_name = ""
     @in Nmass = 0.0
     @in Tol = 0.0
-    @in triqProb = 0.0
-    @in triqColor = 0
+    @in triqProb = 0.98
+    @in triqColor = 256
 
     # Interface Buttons
     @in mainProcess = false # To generate images
+    @in CompareBtn = false # to open dialog
     @in createSumPlot = false # To generate sum spectrum plot
     @in image3dPlot = false # To generate 3d plot based on current image
     @in triq3dPlot = false # To generate 3d plot based on current triq image
@@ -438,7 +440,7 @@ end
                 elevation = Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
                 #println("Elevation size:", size(elevation)) 
                 # Smooth the image 
-                sigma = 1.0
+                sigma = 3.0
                 kernel = Kernel.gaussian(sigma)
                 #println(size(kernel))
                 elevation_smoothed = imfilter(elevation, kernel) 
@@ -455,7 +457,7 @@ end
                 x_nticks = min(20, length(x))
                 y_nticks = min(20, length(y))
                 z_nticks = 5
-                aspect_ratio = attr(x = 1, y = length(y) / length(x), z = 1)
+                aspect_ratio = attr(x = 1, y = length(y) / length(x), z = 0.5)
 
                 # Define the layout for the 3D plot
                 layout3D = PlotlyBase.Layout(
@@ -513,7 +515,7 @@ end
                 img_array = Array(img_gray)
                 elevation = Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
                 # Smooth the image 
-                sigma = 4.0
+                sigma = 3.0
                 kernel = Kernel.gaussian(sigma)
                 elevation_smoothed = imfilter(elevation, kernel) 
                 
@@ -588,7 +590,7 @@ end
                 elevation = Float32.(Array(img_gray)) ./ 255.0  # Normalize between 0 and 1
     
                 # Smooth the image
-                sigma = 4.0
+                sigma = 3.0
                 kernel = Kernel.gaussian(sigma)
                 elevation_smoothed = imfilter(elevation, kernel)
     
@@ -646,7 +648,7 @@ end
                 elevation = Float32.(Array(img_gray)) ./ 255.0  # Normalize between 0 and 1
     
                 # Smooth the image
-                sigma = 4.0
+                sigma = 3.0
                 kernel = Kernel.gaussian(sigma)
                 elevation_smoothed = imfilter(elevation, kernel)
     
@@ -687,6 +689,10 @@ end
             msg = "Image could not be 2D plotted"
             warning_msg = true
         end
+    end
+
+    @onbutton CompareBtn begin
+        CompareDialog = true
     end
 
     GC.gc() # Trigger garbage collection

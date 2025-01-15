@@ -1,5 +1,4 @@
 PENDING
-
     Rmsi & julia coherence with image creation and colorbar
         avoid image enlargement -> CURRENT WIP
         image flip upside down
@@ -9,6 +8,11 @@ PENDING
     Create function that makes the imzML from mzML files
     Possibility to add multiple imzML to process at once ?
     Pixel selection marks 
+    
+    Rotate vertical images
+    Easier input for files
+    TrIQ default values 
+    Comparative for two values
 
 DONE
     Quicker start for julia GUI

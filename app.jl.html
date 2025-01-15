@@ -70,7 +70,7 @@
                             <q-input standout="custom-standout" id="textNmass" step="0.01" v-model="Nmass" label="Mass-to-charge ratio of interest" type="number" :rules="[ val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 2000.0 || 'Need positive mass values',]"></q-input>
                         </div>
                         <div class="st-col col-12 col-sm">
-                            <q-input standout="custom-standout" id="textTol" step="0.01" v-model="Tol" label="Mass-to-charge ratio Tolerance" type="number" :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1',]"></q-input>
+                            <q-input standout="custom-standout" id="textTol" step="0.01" v-model="Tol" label="Mass-to-charge ratio tolerance" type="number" :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1',]"></q-input>
                         </div>
                     </div>
                     <div class="row">
@@ -81,23 +81,28 @@
                     <!-- Triq Variable Manipulation -->
                     <div class="row">
                         <div class="st-col col-12 col-sm-8">
-                            <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb" label="TrIQ Probability" type="number" :rules="[
+                            <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb" label="TrIQ probability" type="number" :rules="[
                                     val => triqEnabled ? ( '* Required', val >= 0 &amp;&amp; val <= 1 || 'Needs to be in range between 0 and 1') : true
                                     ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
                         </div>
                         <div class="st-col col-12 col-sm-4">
-                            <q-input standout="custom-standout" id="textTriqColor" step="1" v-model="triqColor" label="TrIQ Color Levels" type="number" :rules="[
+                            <q-input standout="custom-standout" id="textTriqColor" step="1" v-model="triqColor" label="TrIQ color levels" type="number" :rules="[
                                     val => triqEnabled ? ( '* Required', val >= 0 &amp;&amp; val <= 256  || 'Needs to be in range between 1 and 256') : true
                                     ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
                         </div>
                     </div>
-                    <q-btn id="btnStyle" :loading="progress" :disabled="btnStartDisable" icon="play_arrow" v-on:click="mainProcess = true" padding="lg">
-                        Start Process
-                        <template v-slot:loading>
-                        <q-spinner-hourglass class="on-left" />
-                        Loading...
-                        </template>
-                    </q-btn>
+                    <div class = "row">
+                        <q-btn id="btnStyle" :loading="progress" :disabled="btnStartDisable" icon="play_arrow" v-on:click="mainProcess = true" padding="lg">
+                            Start Process
+                            <template v-slot:loading>
+                            <q-spinner-hourglass class="on-left" />
+                            Loading...
+                            </template>
+                        </q-btn>
+                        <q-btn id="btnStyle" icon="zoom_out_map" v-on:click="CompareBtn = true" padding="sm" class="on-right">
+                            Compare
+                        </q-btn>
+                    </div>
                     <p>{{msg}}</p>
                 </div>
             </div>
@@ -161,7 +166,30 @@
         </q-card-section>
 
         <q-card-actions align="right">
-            <q-btn flat label="OK" style="color:#009f90" v-close-popup />
+            <q-btn flat label="Ok" style="color:#009f90" v-close-popup />
+        </q-card-actions>
+        </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="CompareDialog" full-width>
+        <q-card>
+        <q-card-section>
+            <div class="text-h6">Compare two diferent images or plots in a larger screen</div>
+        </q-card-section>
+
+        <q-card-section class="q-pt-none col-12">
+            <div class="row">
+                <div class="col-6">
+                    {{msg}}
+                </div>
+                <div class="col-6">
+                    {{msg}}
+                </div>
+            </div>
+        </q-card-section>
+
+        <q-card-actions align="right">
+            <q-btn flat label="Done" style="color:#009f90" v-close-popup />
         </q-card-actions>
         </q-card>
     </q-dialog>
