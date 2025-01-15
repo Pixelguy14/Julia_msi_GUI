@@ -438,7 +438,7 @@ end
                 elevation = Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
                 #println("Elevation size:", size(elevation)) 
                 # Smooth the image 
-                sigma = 4.0
+                sigma = 1.0
                 kernel = Kernel.gaussian(sigma)
                 #println(size(kernel))
                 elevation_smoothed = imfilter(elevation, kernel) 
@@ -455,7 +455,7 @@ end
                 x_nticks = min(20, length(x))
                 y_nticks = min(20, length(y))
                 z_nticks = 5
-                aspect_ratio = attr(x = 1, y = length(y) / length(x), z = 0.5)
+                aspect_ratio = attr(x = 1, y = length(y) / length(x), z = 1)
 
                 # Define the layout for the 3D plot
                 layout3D = PlotlyBase.Layout(
