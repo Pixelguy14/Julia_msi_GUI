@@ -5,17 +5,17 @@
             <h4>Julia mzML imzML analysis GUI&nbsp;</h4>
             <h6>Please make sure the ibd, the mzML and the imzML files are located in the same directory and have the same name.</h6>
             <h6>It may take a while to generate the image and the plot, please be patient.</h6>
+            <h6>To generate the contour or 3D plot, you have to select it using the User Interface</h6>
         </div>
     </header>
     <!-- TOP -->
-    <div class="row">
-        <div id="extDivStyle" class="st-col col-12 col-sm st-module">
-            <div class="row">
+        <div id="extDivStyle" class="row col-12 q-pa-xl">
+            <div class="row col-6">
                 <!-- Left DIV -->
-                <div id="intDivStyle" class="st-col col-12 col-sm st-module">
+                <div id="intDivStyle" class="st-col col-12 st-module">
                     <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".imzML"></q-file>-->
                     <q-input id="textRoute" standout="custom-standout" v-model="file_route" label="Insert the route to your imzML file"></q-input>
-                    <div class="row st-col col-12 col-sm">
+                    <div class="row st-col col-12">
                         <q-input id="textName" class="col-9" standout="custom-standout" v-model="file_name" label="Insert the name of your imzML file"></q-input>
                         <q-btn-dropdown
                         id="btnStyle"
@@ -36,7 +36,19 @@
                               <q-item-label>Sum Spectrum Plot</q-item-label>
                             </q-item-section>
                           </q-item>
+
+                          <q-item clickable v-close-popup v-on:click="imageCPlot = true">
+                            <q-item-section>
+                              <q-item-label>Image Contour Plot</q-item-label>
+                            </q-item-section>
+                          </q-item>
                           
+                          <q-item clickable v-close-popup v-on:click="triqCPlot = true">
+                            <q-item-section>
+                              <q-item-label>TrIQ Contour Plot</q-item-label>
+                            </q-item-section>
+                          </q-item>
+
                           <q-item clickable v-close-popup v-on:click="image3dPlot = true">
                             <q-item-section>
                               <q-item-label>Image 3D Plot</q-item-label>
@@ -88,12 +100,10 @@
                     </q-btn>
                     <p>{{msg}}</p>
                 </div>
-            </div><!--        <plotly :data="plotdata" :layout="plotlayout"> </plotly>-->
-        </div>
-        <div id="extDivStyle" class="st-col col-12 col-sm st-module">
-            <div class="row">
+            </div>
+            <div class="row col-6">
                 <!-- Right DIV -->
-                <div id="intDivStyle" class="st-col col-12 col-sm st-module">
+                <div id="intDivStyle" class="st-col col-12 st-module">
                     <h6>Image Visualizer</h6>
                     <!-- Btn image changer -->
                     <div>
@@ -101,8 +111,8 @@
                         <q-btn id="btnStyle" icon="arrow_forward" rounded v-on:click="ImgPlus = true"></q-btn>
                     </div>
                     <!-- Image manager -->
-                    <div id="image-container" class="row st-col col-12 col-sm items-center">
-                        <div style="max-height: 500px; overflow: auto;" class="st-col col-10">
+                    <div id="image-container" class="row st-col col-12 items-center">
+                        <div class="st-col col-10">
                             <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" fit="scale-down"></q-img>
                         </div>
                         <div class="st-col col-2">
@@ -116,11 +126,11 @@
                         <q-btn id="btnStyle" icon="arrow_forward" rounded v-on:click="ImgPlusT = true"></q-btn>
                     </div>
                     <!-- Triq Image manager -->
-                    <div id="image-container" class="row st-col col-12 col-sm items-center">
-                        <div style="max-height: 500px; overflow: auto;" class="st-col col-10">
+                    <div id="image-container" class="row st-col col-12 items-center">
+                        <div class="col-10">
                             <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" fit="scale-down"></q-img>
                         </div>
-                        <div class="st-col col-2">
+                        <div class="col-2">
                             <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
                         </div>
                     </div>
@@ -128,16 +138,15 @@
                 </div>
             </div>
         </div>
-    </div>
-    <!-- Bottom -->
-    <div class="row">
+        <!-- Bottom -->
+    <div id="extDivStyle" class="row col-12 q-pa-xl">
         <!-- Bottom Left Div -->
-        <div class="st-col col-12 col-sm st-module" >
-            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="st-col col-12 col-sm-12"></plotly>
+        <div class="st-col col-12 st-module q-pa-none" >
+            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="col-12"></plotly>
         </div>
         <!-- Bottom Right Div -->
-        <div class="st-col col-12 col-sm st-module" >
-            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="st-col col-12 col-sm-12"></plotly>
+        <div class="st-col col-12 st-module q-pa-none" >
+            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="col-12"></plotly>
         </div>
     </div>
 

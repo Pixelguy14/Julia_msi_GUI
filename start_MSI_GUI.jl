@@ -1,7 +1,11 @@
 using Pkg
 Pkg.activate(".")
-Pkg.add("Libz") ; Pkg.add("PlotlyBase") ; Pkg.add("CairoMakie") ; Pkg.add("Colors") ; Pkg.add("Statistics") ; Pkg.add("NaturalSort")
+Pkg.instantiate()
+Pkg.update()
+Pkg.gc()
+Pkg.add("Libz") ; Pkg.add("PlotlyBase") ; Pkg.add("CairoMakie") ; Pkg.add("Colors") ; Pkg.add("Statistics") ; Pkg.add("NaturalSort") ; Pkg.add("GenieFramework")
 Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML") # With this we ensure it uses the latest library iteration
+Pkg.add("Images") ; Pkg.add("LinearAlgebra")
 Pkg.instantiate()
 Pkg.update()
 

@@ -9,7 +9,8 @@ using Colors
 using julia_mzML_imzML
 using Statistics
 using NaturalSort
-# using ImageMagick
+using Images
+using LinearAlgebra
 @genietools
 
 # == Code import ==
@@ -19,6 +20,9 @@ rgb_ViridisPalette = reinterpret(ColorTypes.RGB24, ViridisPalette)
 
 # == Search functions ==
 function increment_image(current_image, image_list)
+    if isempty(image_list)
+        return nothing
+    end
     current_index = findfirst(isequal(current_image), image_list)
     if current_index == nothing || current_index == length(image_list) || current_image === ""
         return image_list[length(image_list)]  # Return the current image if it's the last one or not found
@@ -28,6 +32,9 @@ function increment_image(current_image, image_list)
 end
 
 function decrement_image(current_image, image_list)
+    if isempty(image_list)
+        return nothing
+    end
     current_index = findfirst(isequal(current_image), image_list)
     if current_index == nothing || current_index == 1 || current_image === ""
         return image_list[1]  # Return the current image if it's the first one or not found
@@ -65,6 +72,8 @@ end
     @in createSumPlot = false # To generate sum spectrum plot
     @in image3dPlot = false # To generate 3d plot based on current image
     @in triq3dPlot = false # To generate 3d plot based on current triq image
+    @in imageCPlot = false # To generate contour plots of current image
+    @in triqCPlot = false # To generate contour plots of current triq image
     @in progress = false
     @in progressPlot = false
     @in triqEnabled = false
@@ -133,7 +142,12 @@ end
         scene = attr(
             xaxis_title = "X",
             yaxis_title = "Y",
-            zaxis_title = "Z"
+            zaxis_title = "Z",
+            xaxis_nticks = 20, 
+            yaxis_nticks = 20, 
+            zaxis_nticks = 4, 
+            camera = attr(eye = attr(x = 0, y = -1, z = 0.5)), 
+            aspectratio = attr(x = 1, y = 1, z = 0.2)
         )
     )
 
@@ -141,7 +155,7 @@ end
     x = 1:10
     y = 1:10
     z = [sin(i * j / 10) for i in x, j in y]
-    trace3D = PlotlyBase.surface(x=x, y=y, z=z,
+    trace3D = PlotlyBase.surface(x=[], y=[], z=[],
                                 contours_z=attr(
                                     show=true,
                                     usecolormap=true,
@@ -157,15 +171,7 @@ end
     # == Reactive handlers ==
     # Reactive handlers watch a variable and execute a block of code when its value changes
     # The onbutton handler will set the variable to false after the block is executed
-    @onchange triqEnabled begin
-        # just in case that they remove an image manually, we use the least intensive button to get all images and re-order them.
-        msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-        triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-    end
     
-
     @onchange file_name begin
         msg = ""
         progress = false
@@ -219,7 +225,12 @@ end
                         msg = "Incorrect TrIQ values, please adjust accordingly and try again."
                         warning_msg = true
                     else
+                        image_path = joinpath("./public", "TrIQ_$(text_nmass).bmp")
                         SaveBitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"),TrIQ(slice, Int(triqColor), triqProb),ViridisPalette)
+                        # Flip te image vertically then save it again
+                        img = load(image_path) 
+                        flipped_img = reverse(img, dims=1)
+                        save(image_path, flipped_img)
                         # Use timestamp to refresh image interface container
                         imgIntT = "/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
                         # Get current image 
@@ -241,7 +252,12 @@ end
                         #println("all col msi in folder= ",col_triq_png)
                     end
                 else # If we don't use TrIQ
+                    image_path = joinpath("./public", "MSI_$(text_nmass).bmp")
                     SaveBitmap(joinpath("public", "MSI_$(text_nmass).bmp"),IntQuant(slice),ViridisPalette)
+                    # Flip te image vertically then save it again
+                    img = load(image_path) 
+                    flipped_img = reverse(img, dims=1)
+                    save(image_path, flipped_img)
                     # Use timestamp to refresh image interface container
                     imgInt = "/MSI_$(text_nmass).bmp?t=$(timestamp)"
                     # Get current image 
@@ -293,11 +309,23 @@ end
                 btnPlotDisable = true
                 msg = "Loading plot..."
                 spectraMz = LoadMzml(full_routeMz)
+                layoutSpectra = PlotlyBase.Layout(
+                    title = "SUM Spectrum plot",
+                    xaxis = PlotlyBase.attr(
+                        title = "<i>m/z</i>",
+                        showgrid = true
+                    ),
+                    yaxis = PlotlyBase.attr(
+                        title = "Intensity",
+                        showgrid = true
+                    )
+                )
                 # dims = size(spectraMz)
                 # scansMax = dims[2] # we get the total of scansMax
                 # traceSpectra = PlotlyBase.scatter(x = spectraMz[1, 1], y = spectraMz[2, 1], mode="lines")
                 traceSpectra = PlotlyBase.scatter(x = mean(spectraMz[1,:]), y = mean(spectraMz[2,:]), mode="lines")
                 plotdata = [traceSpectra] # We add the data from spectra to the plot
+                plotlayout = layoutSpectra
                 spectraMz = nothing # Important for memory cleaning
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
@@ -319,6 +347,10 @@ end
     @onbutton ImgMinus begin
         # Append a query string to force the image to refresh 
         timestamp = string(time_ns()) 
+        # Update the array of images listed in the public folder
+        msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
+        col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        
         new_msi = decrement_image(current_msi, msi_bmp)
         new_col_msi = decrement_image(current_col_msi, col_msi_png)
         
@@ -333,7 +365,11 @@ end
     end
     @onbutton ImgPlus begin
         # Append a query string to force the image to refresh 
-        timestamp = string(time_ns()) 
+        timestamp = string(time_ns())
+        # Update the array of images listed in the public folder
+        msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
+        col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        
         new_msi = increment_image(current_msi, msi_bmp)
         new_col_msi = increment_image(current_col_msi, col_msi_png)
 
@@ -352,6 +388,9 @@ end
         timestamp = string(time_ns()) 
         new_msi = decrement_image(current_triq, triq_bmp)
         new_col_msi = decrement_image(current_col_triq, col_triq_png)
+        # Update the array of images with TrIQ filter listed in the public folder
+        triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
+        col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
 
         current_triq = new_msi
         current_col_triq = new_col_msi
@@ -368,7 +407,10 @@ end
         timestamp = string(time_ns()) 
         new_msi = increment_image(current_triq, triq_bmp)
         new_col_msi = increment_image(current_col_triq, col_triq_png)
-
+        # Update the array of images with TrIQ filter listed in the public folder
+        triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
+        col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        
         current_triq = new_msi
         current_col_triq = new_col_msi
         imgIntT = "/$(current_triq)"
@@ -379,77 +421,270 @@ end
         msgtriq = "image with the Nmass of $(replace(text_nmass, "_" => "."))"
     end
 
-    # 3d plot 
+    # 3d plot
     @onbutton image3dPlot begin
         msg = "Image 3D plot selected"
         cleaned_imgInt = replace(imgInt, r"\?.*" => "")
         cleaned_imgInt = lstrip(cleaned_imgInt, '/')
-        var1 = joinpath( "public", cleaned_imgInt )
-        if isfile(var1)
+        var = joinpath( "./public", cleaned_imgInt )
+
+        if isfile(var)
             try
-                img = FileIO.load(File{DataFormat{:BMP}}(var1))
-                img_gray = Gray.(img) # Convert to grayscale 
+                img = load(var)
+                #println("Image type:", typeof(img))
+                img_gray = Gray.(img) # Convert to grayscale
+                #println("Grayscale image type:", typeof(img_gray)) 
                 img_array = Array(img_gray)
+                elevation = Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
+                #println("Elevation size:", size(elevation)) 
+                # Smooth the image 
+                sigma = 4.0
+                kernel = Kernel.gaussian(sigma)
+                #println(size(kernel))
+                elevation_smoothed = imfilter(elevation, kernel) 
+                #println("Smoothed elevation size:", size(elevation_smoothed))
+                # Transpose the elevation_smoothed array
+                # Create the X, Y meshgrid coordinates 
+                x = 1:size(elevation_smoothed, 2) 
+                y = 1:size(elevation_smoothed, 1)
+                X = repeat(reshape(x, 1, length(x)), length(y), 1)
+                #println("Size of X:", size(X))
+                Y = repeat(reshape(y, length(y), 1), 1, length(x))
+                #println("Size of Y:", size(Y))
+                # Calculate the number of ticks and aspect ratio for the 3d plot
+                x_nticks = min(20, length(x))
+                y_nticks = min(20, length(y))
+                z_nticks = 5
+                aspect_ratio = attr(x = 1, y = length(y) / length(x), z = 0.5)
+
+                # Define the layout for the 3D plot
+                layout3D = PlotlyBase.Layout(
+                    title = "3D Surface Plot",
+                    scene = attr(
+                        xaxis_nticks = x_nticks,
+                        yaxis_nticks = y_nticks,
+                        zaxis_nticks = z_nticks, 
+                        camera = attr(eye = attr(x = 0, y = -1, z = 0.5)), 
+                        aspectratio = aspect_ratio
+                    )
+                )
+                if size(elevation_smoothed, 1) < size(elevation_smoothed, 2)
+                    # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
+                    elevation_smoothed = transpose(elevation_smoothed)
+                    Y = -Y
+                end
+
+                trace3D = PlotlyBase.surface(x = X[1, :], y = Y[:, 1], z = elevation_smoothed,
+                contours_z = attr(
+                    show = true,
+                    usecolormap = true,
+                    highlightcolor = "limegreen",
+                    project_z = true
+                ), colorscale = "Viridis")
+                plotdata3d = [trace3D] # We add the data from the image to the plot
+                plotlayout3d = layout3D # we update the style of the plot to fit the image.
+                spectraMz = nothing # Important for memory cleaning
+                GC.gc() # Trigger garbage collection
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                end
+                msg = "Plot loaded."
             catch e 
                 msg = "Failed to load and process image: $e" 
                 warning_msg = true 
-                println(msg) 
+                println(msg)
             end
-            elevation = img_array / 255.0 # Normalize between 0 and 1
-            # Smooth the image 
-            sigma = 4.0 
-            elevation_smoothed = imfilter(elevation, Kernel.gaussian(sigma)) 
-            # Create the X, Y meshgrid coordinates 
-            x = 1:size(elevation_smoothed, 2) 
-            y = 1:size(elevation_smoothed, 1) 
-            X, Y = ndgrid(x, y)
-            trace3D = PlotlyBase.scatter(x = X[1, :], y =Y[:, 1], z=elevation_smoothed, colorscale="Viridis")
-            plotdata3d = [trace3D] # We add the data from the image to the plot
-            spectraMz = nothing # Important for memory cleaning
-            GC.gc() # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+        else
+            msg = "image could not be 3d plotted"
+            warning_msg = true
+        end
+    end
+    # 3d plot for TrIQ
+    @onbutton triq3dPlot begin
+        msg = "TrIQ 3D plot selected"
+        cleaned_imgIntT = replace(imgIntT, r"\?.*" => "")
+        cleaned_imgIntT = lstrip(cleaned_imgIntT, '/')
+        var = joinpath( "./public", cleaned_imgIntT )
+
+        if isfile(var)
+            try
+                img = load(var)
+                img_gray = Gray.(img) # Convert to grayscale
+                img_array = Array(img_gray)
+                elevation = Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
+                # Smooth the image 
+                sigma = 4.0
+                kernel = Kernel.gaussian(sigma)
+                elevation_smoothed = imfilter(elevation, kernel) 
+                
+                # Create the X, Y meshgrid coordinates 
+                x = 1:size(elevation_smoothed, 2) 
+                y = 1:size(elevation_smoothed, 1)
+                X = repeat(reshape(x, 1, length(x)), length(y), 1)
+                Y = repeat(reshape(y, length(y), 1), 1, length(x))
+                
+                # Calculate the number of ticks and aspect ratio for the 3d plot
+                x_nticks = min(20, length(x))
+                y_nticks = min(20, length(y))
+                z_nticks = 5
+                aspect_ratio = attr(x = 1, y = length(y) / length(x), z = 0.5)
+
+                # Define the layout for the 3D plot
+                layout3D = PlotlyBase.Layout(
+                    title = "3D Surface Plot",
+                    scene = attr(
+                        xaxis_nticks = x_nticks,
+                        yaxis_nticks = y_nticks,
+                        zaxis_nticks = z_nticks, 
+                        camera = attr(eye = attr(x = 0, y = -1, z = 0.5)), 
+                        aspectratio = aspect_ratio
+                    )
+                )
+                if size(elevation_smoothed, 1) < size(elevation_smoothed, 2)
+                    # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
+                    elevation_smoothed = transpose(elevation_smoothed)
+                    Y = -Y
+                end
+
+                trace3D = PlotlyBase.surface(x = X[1, :], y = Y[:, 1], z = elevation_smoothed,
+                contours_z = attr(
+                    show = true,
+                    usecolormap = true,
+                    highlightcolor = "limegreen",
+                    project_z = true
+                ), colorscale = "Viridis")
+                plotdata3d = [trace3D] # We add the data from the image to the plot
+                plotlayout3d = layout3D # we update the style of the plot to fit the image.
+                spectraMz = nothing # Important for memory cleaning
+                GC.gc() # Trigger garbage collection
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                end
+                msg = "Plot loaded."
+            catch e 
+                msg = "Failed to load and process image: $e" 
+                warning_msg = true 
+                println(msg)
             end
-             msg = "Plot loaded."
         else
             msg = "image could not be 3d plotted"
             warning_msg = true
         end
     end
 
-    @onbutton triq3dPlot begin
-        msg = "TrIQ 3D plot selected"
+    # Contour 2d plot
+    @onbutton imageCPlot begin
+        msg = "Image 2D plot selected"
+        cleaned_imgInt = replace(imgInt, r"\?.*" => "")
+        cleaned_imgInt = lstrip(cleaned_imgInt, '/')
+        var = joinpath("./public", cleaned_imgInt)
+    
+        if isfile(var)
+            try
+                img = load(var)
+                # Convert to grayscale
+                img_gray = Gray.(img)
+                img_array = Array(img_gray)
+                elevation = Float32.(Array(img_gray)) ./ 255.0  # Normalize between 0 and 1
+    
+                # Smooth the image
+                sigma = 4.0
+                kernel = Kernel.gaussian(sigma)
+                elevation_smoothed = imfilter(elevation, kernel)
+    
+                # Create the X, Y meshgrid coordinates
+                x = 1:size(elevation_smoothed, 2)
+                y = 1:size(elevation_smoothed, 1)
+                X = repeat(reshape(x, 1, length(x)), length(y), 1)
+                Y = repeat(reshape(y, length(y), 1), 1, length(x))
+                
+                layoutContour = PlotlyBase.Layout(
+                    title = "2D Topographic Map",
+                    xaxis_title = "X",
+                    yaxis_title = "Y",
+                    margin = attr(l = 65, r = 50, b = 65, t = 90)
+                )
+                traceContour = PlotlyBase.contour(
+                    z = elevation_smoothed,
+                    x = X[1, :],  # Use the first row
+                    y = -Y[:, 1],  # Use the first column
+                    contours_coloring = "lines",
+                    colorscale = "Viridis"
+                )
+                plotdata = [traceContour]
+                plotlayout = layoutContour
+    
+                spectraMz = nothing  # Important for memory cleaning
+                GC.gc()  # Trigger garbage collection
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
+                end
+                msg = "Plot loaded."
+            catch e
+                msg = "Failed to load and process image: $e"
+                warning_msg = true
+                println(msg)
+            end
+        else
+            msg = "Image could not be 2D plotted"
+            warning_msg = true
+        end
+    end
+    # Contour 2d plot for TrIQ
+    @onbutton triqCPlot begin
+        msg = "Image 2D plot selected"
         cleaned_imgIntT = replace(imgIntT, r"\?.*" => "")
         cleaned_imgIntT = lstrip(cleaned_imgIntT, '/')
-        var1 = joinpath( "public", cleaned_imgIntT )
-        if isfile(var1)
+        var = joinpath("./public", cleaned_imgIntT)
+    
+        if isfile(var)
             try
-                img = FileIO.load(File{DataFormat{:BMP}}(var1))
-                img_gray = Gray.(img) # Convert to grayscale 
+                img = load(var)
+                # Convert to grayscale
+                img_gray = Gray.(img)
                 img_array = Array(img_gray)
-            catch e 
-                msg = "Failed to load and process image: $e" 
-                warning_msg = true 
-                println(msg) 
+                elevation = Float32.(Array(img_gray)) ./ 255.0  # Normalize between 0 and 1
+    
+                # Smooth the image
+                sigma = 4.0
+                kernel = Kernel.gaussian(sigma)
+                elevation_smoothed = imfilter(elevation, kernel)
+    
+                # Create the X, Y meshgrid coordinates
+                x = 1:size(elevation_smoothed, 2)
+                y = 1:size(elevation_smoothed, 1)
+                X = repeat(reshape(x, 1, length(x)), length(y), 1)
+                Y = repeat(reshape(y, length(y), 1), 1, length(x))
+                
+                layoutContour = PlotlyBase.Layout(
+                    title = "2D Topographic Map",
+                    xaxis_title = "X",
+                    yaxis_title = "Y",
+                    margin = attr(l = 65, r = 50, b = 65, t = 90)
+                )
+                traceContour = PlotlyBase.contour(
+                    z = elevation_smoothed,
+                    x = X[1, :],  # Use the first row
+                    y = -Y[:, 1],  # Use the first column
+                    contours_coloring = "lines",
+                    colorscale = "Viridis"
+                )
+                plotdata = [traceContour]
+                plotlayout = layoutContour
+    
+                spectraMz = nothing  # Important for memory cleaning
+                GC.gc()  # Trigger garbage collection
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
+                end
+                msg = "Plot loaded."
+            catch e
+                msg = "Failed to load and process image: $e"
+                warning_msg = true
+                println(msg)
             end
-            elevation = img_array / 255.0 # Normalize between 0 and 1
-            # Smooth the image 
-            sigma = 4.0 
-            elevation_smoothed = imfilter(elevation, Kernel.gaussian(sigma)) 
-            # Create the X, Y meshgrid coordinates 
-            x = 1:size(elevation_smoothed, 2) 
-            y = 1:size(elevation_smoothed, 1) 
-            X, Y = ndgrid(x, y)
-            trace3D = PlotlyBase.scatter(x = X[1, :], y =Y[:, 1], z=elevation_smoothed, colorscale="Viridis")
-            plotdata3d = [trace3D] # We add the data from the image to the plot
-            spectraMz = nothing # Important for memory cleaning
-            GC.gc() # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
-            end
-             msg = "Plot loaded."
         else
-            msg = "image could not be 3d plotted"
+            msg = "Image could not be 2D plotted"
             warning_msg = true
         end
     end

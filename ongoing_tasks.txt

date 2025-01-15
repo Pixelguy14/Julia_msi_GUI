@@ -4,9 +4,11 @@ PENDING
         avoid image enlargement -> CURRENT WIP
         image flip upside down
         colorbar revamp
-    3d topography for images -> CURRENT WIP
     Multiple plot types
-
+    Tag for time it takes in creating image and creating plots -> CURRENT WIP
+    Create function that makes the imzML from mzML files
+    Possibility to add multiple imzML to process at once ?
+    Pixel selection marks 
 
 DONE
     Quicker start for julia GUI
@@ -16,4 +18,5 @@ DONE
         UI functionality added
     Code cleanse
         better code readability
-    Better blind search for images 
+    Better blind search for images
+    3d topography for images 
