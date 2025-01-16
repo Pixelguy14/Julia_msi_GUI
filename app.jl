@@ -84,6 +84,11 @@ end
     @in ImgPlusT = false
     @in ImgMinusT = false
 
+    #TABS
+    @out tabIDs = ["tab0","tab1","tab2","tab3"]
+    @out tabLabels = ["Image", "TrIQ", "2D Plot","3D Plot"]
+    @in selectedTab =  "tab0"
+
     # Interface Images
     @out imgInt = "/.bmp" # image Interface
     @out imgIntT = "/.bmp" # image Interface TrIQ
@@ -230,7 +235,10 @@ end
                         image_path = joinpath("./public", "TrIQ_$(text_nmass).bmp")
                         SaveBitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"),TrIQ(slice, Int(triqColor), triqProb),ViridisPalette)
                         # Flip te image vertically then save it again
-                        img = load(image_path) 
+                        img = load(image_path)
+                        if size(img, 1) > size(img, 2) # fix to taller images 
+                            img = reverse(permutedims(img, (2, 1)), dims=1)
+                        end
                         flipped_img = reverse(img, dims=1)
                         save(image_path, flipped_img)
                         # Use timestamp to refresh image interface container
@@ -257,7 +265,10 @@ end
                     image_path = joinpath("./public", "MSI_$(text_nmass).bmp")
                     SaveBitmap(joinpath("public", "MSI_$(text_nmass).bmp"),IntQuant(slice),ViridisPalette)
                     # Flip te image vertically then save it again
-                    img = load(image_path) 
+                    img = load(image_path)
+                    if size(img, 1) > size(img, 2) # fix to taller images 
+                        img = reverse(permutedims(img, (2, 1)), dims=1) 
+                    end
                     flipped_img = reverse(img, dims=1)
                     save(image_path, flipped_img)
                     # Use timestamp to refresh image interface container
@@ -301,14 +312,15 @@ end
     @onbutton createSumPlot begin
         msg = "Sum spectrum plot selected"
         full_route = joinpath( file_route, file_name )
-        progressPlot = true
         if isfile(full_route) # Check if the file exists
             btnPlotDisable = false
             btnStartDisable = false
             full_routeMz = split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
             if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # Check if the mzml exists
                 println("I'm working as intended")
+                progressPlot = true
                 btnPlotDisable = true
+                btnStartDisable = true
                 msg = "Loading plot..."
                 spectraMz = LoadMzml(full_routeMz)
                 layoutSpectra = PlotlyBase.Layout(
@@ -334,7 +346,6 @@ end
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
                 end
                 msg = "Plot loaded."
-                btnPlotDisable = false
                 full_routeMz2 = full_routeMz # To avoid creating the plot if its the same file read as before
             end
         else
@@ -342,6 +353,8 @@ end
             warning_msg = true
         end
         progressPlot = false
+        btnPlotDisable = false
+        btnStartDisable = false
     end
 
     # Image loaders based on the position of the current image (increment and decrement for both normal and filter)
@@ -431,6 +444,9 @@ end
         var = joinpath( "./public", cleaned_imgInt )
 
         if isfile(var)
+            progressPlot = true
+            btnPlotDisable = true
+            btnStartDisable = true
             try
                 img = load(var)
                 #println("Image type:", typeof(img))
@@ -500,6 +516,9 @@ end
             msg = "image could not be 3d plotted"
             warning_msg = true
         end
+        progressPlot = false
+        btnPlotDisable = false
+        btnStartDisable = false
     end
     # 3d plot for TrIQ
     @onbutton triq3dPlot begin
@@ -509,6 +528,9 @@ end
         var = joinpath( "./public", cleaned_imgIntT )
 
         if isfile(var)
+            progressPlot = true
+            btnPlotDisable = true
+            btnStartDisable = true
             try
                 img = load(var)
                 img_gray = Gray.(img) # Convert to grayscale
@@ -572,6 +594,9 @@ end
             msg = "image could not be 3d plotted"
             warning_msg = true
         end
+        progressPlot = false
+        btnPlotDisable = false
+        btnStartDisable = false
     end
 
     # Contour 2d plot
@@ -582,6 +607,9 @@ end
         var = joinpath("./public", cleaned_imgInt)
     
         if isfile(var)
+            progressPlot = true
+            btnPlotDisable = true
+            btnStartDisable = true
             try
                 img = load(var)
                 # Convert to grayscale
@@ -610,7 +638,7 @@ end
                     z = elevation_smoothed,
                     x = X[1, :],  # Use the first row
                     y = -Y[:, 1],  # Use the first column
-                    contours_coloring = "lines",
+                    contours_coloring = "Viridis",
                     colorscale = "Viridis"
                 )
                 plotdata = [traceContour]
@@ -631,6 +659,9 @@ end
             msg = "Image could not be 2D plotted"
             warning_msg = true
         end
+        progressPlot = false
+        btnPlotDisable = false
+        btnStartDisable = false
     end
     # Contour 2d plot for TrIQ
     @onbutton triqCPlot begin
@@ -640,6 +671,9 @@ end
         var = joinpath("./public", cleaned_imgIntT)
     
         if isfile(var)
+            progressPlot = true
+            btnPlotDisable = true
+            btnStartDisable = true
             try
                 img = load(var)
                 # Convert to grayscale
@@ -668,7 +702,7 @@ end
                     z = elevation_smoothed,
                     x = X[1, :],  # Use the first row
                     y = -Y[:, 1],  # Use the first column
-                    contours_coloring = "lines",
+                    contours_coloring = "Viridis",
                     colorscale = "Viridis"
                 )
                 plotdata = [traceContour]
@@ -689,6 +723,9 @@ end
             msg = "Image could not be 2D plotted"
             warning_msg = true
         end
+        progressPlot = false
+        btnPlotDisable = false
+        btnStartDisable = false
     end
 
     @onbutton CompareBtn begin
