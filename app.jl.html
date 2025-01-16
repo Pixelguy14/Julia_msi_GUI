@@ -9,16 +9,19 @@
         </div>
     </header>
         <div id="extDivStyle" class="row col-12 q-pa-xl">
-            <div class="row col-6">
+            <div class="row col-7">
                 <!-- Left DIV -->
                 <div id="intDivStyle" class="st-col col-12 st-module">
                     <!--<q-file v-model="file_route" filled="" label="Select your imzML file" accept=".imzML"></q-file>-->
-                    <q-input id="textRoute" standout="custom-standout" v-model="file_route" label="Insert the route to your imzML file"></q-input>
+                    <!--<q-input id="textRoute" standout="custom-standout" v-model="file_route" label="Insert the route to your imzML file"></q-input>-->
+                    <h6>Search for your imzML file in your device</h6>
+                    <q-btn id="btnStyle" icon="search" class="q-ma-sm" v-on:click="btnSearch=true" label="Search in your device for the imzML file"></q-btn>
+                    <!--<p>{{full_route}}</p>-->
                     <div class="row st-col col-12">
-                        <q-input id="textName" class="col-9" standout="custom-standout" v-model="file_name" label="Insert the name of your imzML file"></q-input>
+                        <!--<q-input id="textName" class="col-9" standout="custom-standout" v-model="file_name" label="Insert the name of your imzML file"></q-input>-->
                         <q-btn-dropdown
                         id="btnStyle"
-                        class="col-3"
+                        class="q-ma-sm"
                         :loading="progressPlot"
                         :disable="btnPlotDisable"
                         label="Generate Plots"
@@ -30,31 +33,31 @@
                         </template>
                         
                         <q-list>
-                          <q-item clickable v-close-popup v-on:click="createSumPlot = true">
+                          <q-item clickable v-close-popup v-on:click="createSumPlot=true">
                             <q-item-section>
                               <q-item-label>Sum Spectrum Plot</q-item-label>
                             </q-item-section>
                           </q-item>
 
-                          <q-item clickable v-close-popup v-on:click="imageCPlot = true">
+                          <q-item clickable v-close-popup v-on:click="imageCPlot=true">
                             <q-item-section>
                               <q-item-label>Image Contour Plot</q-item-label>
                             </q-item-section>
                           </q-item>
                           
-                          <q-item clickable v-close-popup v-on:click="triqCPlot = true">
+                          <q-item clickable v-close-popup v-on:click="triqCPlot=true">
                             <q-item-section>
                               <q-item-label>TrIQ Contour Plot</q-item-label>
                             </q-item-section>
                           </q-item>
 
-                          <q-item clickable v-close-popup v-on:click="image3dPlot = true">
+                          <q-item clickable v-close-popup v-on:click="image3dPlot=true">
                             <q-item-section>
                               <q-item-label>Image 3D Plot</q-item-label>
                             </q-item-section>
                           </q-item>
                           
-                          <q-item clickable v-close-popup v-on:click="triq3dPlot = true">
+                          <q-item clickable v-close-popup v-on:click="triq3dPlot=true">
                             <q-item-section>
                               <q-item-label>TrIQ 3D Plot</q-item-label>
                             </q-item-section>
@@ -91,32 +94,29 @@
                         </div>
                     </div>
                     <div class="row">
-                        <q-btn id="btnStyle" :loading="progress" :disabled="btnStartDisable" icon="play_arrow" v-on:click="mainProcess = true" padding="lg">
-                            Start Process
+                        <q-btn id="btnStyle" :loading="progress" class="q-ma-sm" :disabled="btnStartDisable" icon="play_arrow" v-on:click="mainProcess=true" padding="lg" label="Main process">
                             <template v-slot:loading>
                             <q-spinner-hourglass class="on-left" />
                             Loading...
                             </template>
                         </q-btn>
-                        <q-btn id="btnStyle" icon="zoom_out_map" v-on:click="CompareBtn = true" padding="sm" class="on-right">
-                            Compare
-                        </q-btn>
+                        <q-btn id="btnStyle" icon="zoom_out_map" class="q-ma-sm on-right" v-on:click="CompareBtn=true" padding="sm" label="Compare"></q-btn>
                     </div>
                     <p>{{msg}}</p>
                 </div>
             </div>
-            <div class="row col-6">
+            <div class="row col-5">
                 <!-- Right DIV -->
                 <div id="intDivStyle" class="st-col col-12 col-sm st-module">
-                    <st-tabs class="bg-primary text-white shadow-2" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab"></st-tabs>
+                    <st-tabs id="tabHeader":ids="tabIDs" :labels="tabLabels" v-model="selectedTab" no-arrows></st-tabs>
                     <q-tab-panels v-model="selectedTab">
                         <q-tab-panel name="tab0">
                           <!-- Content for Tab 0 -->
                           <!-- Btn image changer -->
                           <h6>Image Visualizer</h6>
                           <div>
-                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinus = true"></q-btn>
-                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlus = true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinus=true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlus=true"></q-btn>
                           </div>
                           <!-- Image manager -->
                           <div id="image-container" class="row st-col col-12 items-center">
@@ -135,8 +135,8 @@
                           <!-- Triq Btn image changer -->
                           <h6>TrIQ Visualizer</h6>
                           <div>
-                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinusT = true"></q-btn>
-                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlusT = true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinusT=true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlusT=true"></q-btn>
                           </div>
                           <!-- Triq Image manager -->
                           <div id="image-container" class="row st-col col-12 items-center">
@@ -151,11 +151,15 @@
                         </q-tab-panel>
                         <q-tab-panel name="tab2">
                             <!-- Content for Tab 2 -->
-                            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pt-none"></plotly>
+                            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
                         </q-tab-panel>
                         <q-tab-panel name="tab3">
-                            <!-- Content for Tab 3 -->
-                            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pt-none"></plotly>
+                          <!-- Content for Tab 3 -->
+                          <plotly id="plotStyle" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
+                      </q-tab-panel>
+                        <q-tab-panel name="tab4">
+                            <!-- Content for Tab 4 -->
+                            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
                           </q-tab-panel>
                     </q-tab-panels>
                 </div>
@@ -187,14 +191,14 @@
         <q-card-section class="q-pt-none col-12">
             <div class="row">
                 <div class="col-6">
-                    <st-tabs class="bg-primary text-white shadow-2" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab"></st-tabs>
+                  <st-tabs id="tabHeader":ids="tabIDs" :labels="tabLabels" v-model="selectedTab"></st-tabs>
                     <q-tab-panels v-model="selectedTab">
                         <q-tab-panel name="tab0">
                           <!-- Content for Tab 0 -->
                           <!-- Btn image changer -->
                           <div>
-                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinus = true"></q-btn>
-                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlus = true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinus=true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlus=true"></q-btn>
                           </div>
                           <!-- Image manager -->
                           <div id="image-container" class="row st-col col-12 items-center">
@@ -212,8 +216,8 @@
                           <!-- Content for Tab 1 -->
                           <!-- Triq Btn image changer -->
                           <div>
-                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinusT = true"></q-btn>
-                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlusT = true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinusT=true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlusT=true"></q-btn>
                           </div>
                           <!-- Triq Image manager -->
                           <div id="image-container" class="row st-col col-12 items-center">
@@ -228,23 +232,27 @@
                         </q-tab-panel>
                         <q-tab-panel name="tab2">
                             <!-- Content for Tab 2 -->
-                            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="col-12"></plotly>
+                            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
                         </q-tab-panel>
                         <q-tab-panel name="tab3">
-                            <!-- Content for Tab 3 -->
-                            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="col-12"></plotly>
+                          <!-- Content for Tab 3 -->
+                          <plotly id="plotStyle" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
+                      </q-tab-panel>
+                        <q-tab-panel name="tab4">
+                            <!-- Content for Tab 4 -->
+                            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
                           </q-tab-panel>
                     </q-tab-panels>
                 </div>
                 <div class="col-6">
-                    <st-tabs class="bg-primary text-white shadow-2" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab"></st-tabs>
-                    <q-tab-panels v-model="selectedTab">
+                  <st-tabs id="tabHeader" :ids="CompTabIDs" :labels="CompTabLabels" v-model="CompSelectedTab" outside-arrows mobile-arrows></st-tabs>
+                    <q-tab-panels v-model="CompSelectedTab">
                         <q-tab-panel name="tab0">
                           <!-- Content for Tab 0 -->
                           <!-- Btn image changer -->
                           <div>
-                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinus = true"></q-btn>
-                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlus = true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinus=true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlus=true"></q-btn>
                           </div>
                           <!-- Image manager -->
                           <div id="image-container" class="row st-col col-12 items-center">
@@ -262,8 +270,8 @@
                           <!-- Content for Tab 1 -->
                           <!-- Triq Btn image changer -->
                           <div>
-                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinusT = true"></q-btn>
-                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlusT = true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="ImgMinusT=true"></q-btn>
+                            <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="ImgPlusT=true"></q-btn>
                           </div>
                           <!-- Triq Image manager -->
                           <div id="image-container" class="row st-col col-12 items-center">
@@ -278,11 +286,15 @@
                         </q-tab-panel>
                         <q-tab-panel name="tab2">
                             <!-- Content for Tab 2 -->
-                            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="col-12"></plotly>
+                            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
                         </q-tab-panel>
                         <q-tab-panel name="tab3">
-                            <!-- Content for Tab 3 -->
-                            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="col-12"></plotly>
+                          <!-- Content for Tab 3 -->
+                          <plotly id="plotStyle" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
+                      </q-tab-panel>
+                        <q-tab-panel name="tab4">
+                            <!-- Content for Tab 4 -->
+                            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
                           </q-tab-panel>
                     </q-tab-panels>
                 </div>
