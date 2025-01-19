@@ -1,18 +1,11 @@
 PENDING
     Rmsi & julia coherence with image creation and colorbar
-        avoid image enlargement -> CURRENT WIP
-        image flip upside down
         colorbar revamp
-    Multiple plot types
-    Tag for time it takes in creating image and creating plots -> CURRENT WIP
-    Create function that makes the imzML from mzML files
+    Create function that makes the imzML from mzML files ?
     Possibility to add multiple imzML to process at once ?
-    Pixel selection marks 
-    
-    Rotate vertical images
-    Easier input for files
-    TrIQ default values 
-    Comparative for two values
+    Per pixel of image plot creation for spectra
+        Multiple spectra plot types
+    Even faster initial boot and subsectuential boot 
 
 DONE
     Quicker start for julia GUI
@@ -23,4 +16,11 @@ DONE
     Code cleanse
         better code readability
     Better blind search for images
-    3d topography for images 
+    3d topology plots for images 
+    2d contour plots for images
+    Image flip upside down
+    Tag for time it takes in creating image and creating plots
+    Rotate vertical images
+    Easier input for files
+    TrIQ default values 
+    Comparative for two views

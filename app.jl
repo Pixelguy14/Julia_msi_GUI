@@ -11,7 +11,7 @@ using Statistics
 using NaturalSort
 using Images
 using LinearAlgebra
-using NativeFileDialog
+using NativeFileDialog # Opens the file explorer depending on the OS
 @genietools
 
 # == Code import ==
@@ -69,10 +69,10 @@ end
     @in triqProb=0.98
     @in triqColor=256
 
-    # Interface Buttons
+    # Interface Buttons and Validations
     @in btnSearch=false # To search for files in your device
     @in mainProcess=false # To generate images
-    @in CompareBtn=false # to open dialog
+    @in compareBtn=false # To open dialog
     @in createSumPlot=false # To generate sum spectrum plot
     @in image3dPlot=false # To generate 3d plot based on current image
     @in triq3dPlot=false # To generate 3d plot based on current triq image
@@ -81,12 +81,12 @@ end
     @in progress=false
     @in progressPlot=false
     @in triqEnabled=false
-    @in ImgPlus=false
-    @in ImgMinus=false
-    @in ImgPlusT=false
-    @in ImgMinusT=false
+    @in imgPlus=false
+    @in imgMinus=false
+    @in imgPlusT=false
+    @in imgMinusT=false
 
-    #TABS
+    # TAB variables
     @out tabIDs=["tab0","tab1","tab2","tab3","tab4"]
     @out tabLabels=["Image", "TrIQ", "Spectrum Plot", "Topology Plot","Surface Plot"]
     @in selectedTab= "tab0"
@@ -100,10 +100,12 @@ end
     @out colorbar="/.png"
     @out colorbarT="/.png"
 
+    # Messages to interface Variables
     @out msg=""
     @out msgimg=""
     @out msgtriq=""
 
+    # Saves the route where imzML and mzML files are located
     @out full_route=""
     @out full_routeMz=""
     @out full_routeMz2=""
@@ -111,23 +113,22 @@ end
     # For the creation of images with a more specific mass charge
     @out text_nmass=""
 
-    # For image search
-    # Image lists we apply a filter that searches specific type of images into our public folder, then we sort it in a "numerical" order
+    # For image search image lists we apply a filter that searches specific type of images into our public folder, then we sort it in a "numerical" order
     @in msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
     @in col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
     @in triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
     @in col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-    # Set current image for the list
+    
+    # Set current image for the list to display
     @out current_msi=""
     @out current_col_msi=""
     @out current_triq=""
     @out current_col_triq=""
 
-    @out indeximg=0
-    @out indeximgTriq=0
-
-    @out lastimg=0
-    @out lastimgTriq=0
+    # Starting and finishing times to measure how long it takes for a function to finish in elapse time
+    @out sTime=time()
+    @out fTime=time()
+    @out eTime=time()
 
     # Interface Plot Spectrum
     layoutSpectra=PlotlyBase.Layout(
@@ -219,22 +220,13 @@ end
             col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
         end
     end
-
-    """
-    @onchange Nmass begin
-        indeximg=floor(Int, Nmass)
-        indeximgTriq=floor(Int, Nmass)
-        lastimg=floor(Int, Nmass)
-        lastimgTriq=floor(Int, Nmass)
-    end
-    """
     
     @onbutton mainProcess begin
         progress=true # Start progress button animation
         btnStartDisable=true # We disable the button to avoid multiple requests
         btnPlotDisable=true
-        indeximg=floor(Int, Nmass)
         text_nmass=replace(string(Nmass), "." => "_")
+        sTime=time()
         #full_route=joinpath(file_route, file_name)
         if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <= 1
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
@@ -274,7 +266,9 @@ end
                         # We update the directory to include the new placed images.
                         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
                         col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-                        msg="The file has been created successfully inside the 'public' folder of the app."
+                        fTime=time()
+                        eTime=round(fTime-sTime,digits=3)
+                        msg="The file has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
                         selectedTab="tab1"
                         #println("all msi in folder=",triq_bmp)
                         #println("all col msi in folder= ",col_triq_png)
@@ -305,7 +299,9 @@ end
                     msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
                     col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
                     selectedTab="tab0"
-                    msg="The file has been created successfully inside the 'public' folder of the app."
+                    fTime=time()
+                    eTime=round(fTime-sTime,digits=3)
+                    msg="The file has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
                     #println("all msi in folder=",msi_bmp)
                     #println("all col msi in folder= ",col_msi_png)
                 end
@@ -330,13 +326,13 @@ end
 
     @onbutton createSumPlot begin
         msg="Sum spectrum plot selected"
+        sTime=time()
         #full_route=joinpath( file_route, file_name )
         if isfile(full_route) # Check if the file exists
             btnPlotDisable=false
             btnStartDisable=false
             full_routeMz=split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
             if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # Check if the mzml exists
-                println("I'm working as intended")
                 progressPlot=true
                 btnPlotDisable=true
                 btnStartDisable=true
@@ -366,10 +362,12 @@ end
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
                 end
                 selectedTab="tab2"
-                msg="Plot loaded."
+                fTime=time()
+                eTime=round(fTime-sTime,digits=3)
+                msg="Plot loaded in $(eTime) seconds"
                 full_routeMz2=full_routeMz # To avoid creating the plot if its the same file read as before
             else
-                msg="the mzML file was not found"
+                msg="the mzML file was not found or you're trying to load the same mzML"
                 warning_msg=true
             end
         else
@@ -383,7 +381,7 @@ end
 
     # Image loaders based on the position of the current image (increment and decrement for both normal and filter)
     # And a pre-generated list from all image files from /public folder
-    @onbutton ImgMinus begin
+    @onbutton imgMinus begin
         # Append a query string to force the image to refresh 
         timestamp=string(time_ns()) 
         # Update the array of images listed in the public folder
@@ -402,7 +400,7 @@ end
         text_nmass=replace(text_nmass, ".bmp" => "")
         msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
     end
-    @onbutton ImgPlus begin
+    @onbutton imgPlus begin
         # Append a query string to force the image to refresh 
         timestamp=string(time_ns())
         # Update the array of images listed in the public folder
@@ -422,7 +420,7 @@ end
         msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
     end
 
-    @onbutton ImgMinusT begin
+    @onbutton imgMinusT begin
         # Append a query string to force the image to refresh 
         timestamp=string(time_ns()) 
         new_msi=decrement_image(current_triq, triq_bmp)
@@ -441,7 +439,7 @@ end
         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
         
     end
-    @onbutton ImgPlusT begin
+    @onbutton imgPlusT begin
         # Append a query string to force the image to refresh 
         timestamp=string(time_ns()) 
         new_msi=increment_image(current_triq, triq_bmp)
@@ -466,6 +464,7 @@ end
         cleaned_imgInt=replace(imgInt, r"\?.*" => "")
         cleaned_imgInt=lstrip(cleaned_imgInt, '/')
         var=joinpath( "./public", cleaned_imgInt )
+        sTime=time()
 
         if isfile(var)
             progressPlot=true
@@ -531,7 +530,9 @@ end
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
                 end
                 selectedTab="tab4"
-                msg="Plot loaded."
+                fTime=time()
+                eTime=round(fTime-sTime,digits=3)
+                msg="Plot loaded in $(eTime) seconds"
             catch e 
                 msg="Failed to load and process image: $e" 
                 warning_msg=true 
@@ -551,6 +552,7 @@ end
         cleaned_imgIntT=replace(imgIntT, r"\?.*" => "")
         cleaned_imgIntT=lstrip(cleaned_imgIntT, '/')
         var=joinpath( "./public", cleaned_imgIntT )
+        sTime=time()
 
         if isfile(var)
             progressPlot=true
@@ -610,7 +612,9 @@ end
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
                 end
                 selectedTab="tab4"
-                msg="Plot loaded."
+                fTime=time()
+                eTime=round(fTime-sTime,digits=3)
+                msg="Plot loaded in $(eTime) seconds"
             catch e 
                 msg="Failed to load and process image: $e" 
                 warning_msg=true 
@@ -631,6 +635,7 @@ end
         cleaned_imgInt=replace(imgInt, r"\?.*" => "")
         cleaned_imgInt=lstrip(cleaned_imgInt, '/')
         var=joinpath("./public", cleaned_imgInt)
+        sTime=time()
     
         if isfile(var)
             progressPlot=true
@@ -676,7 +681,9 @@ end
                     ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
                 end
                 selectedTab="tab3"
-                msg="Plot loaded."
+                fTime=time()
+                eTime=round(fTime-sTime,digits=3)
+                msg="Plot loaded in $(eTime) seconds"
             catch e
                 msg="Failed to load and process image: $e"
                 warning_msg=true
@@ -696,6 +703,7 @@ end
         cleaned_imgIntT=replace(imgIntT, r"\?.*" => "")
         cleaned_imgIntT=lstrip(cleaned_imgIntT, '/')
         var=joinpath("./public", cleaned_imgIntT)
+        sTime=time()
     
         if isfile(var)
             progressPlot=true
@@ -741,7 +749,9 @@ end
                     ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
                 end
                 selectedTab="tab3"
-                msg="Plot loaded."
+                fTime=time()
+                eTime=round(fTime-sTime,digits=3)
+                msg="Plot loaded in $(eTime) seconds"
             catch e
                 msg="Failed to load and process image: $e"
                 warning_msg=true
@@ -756,7 +766,7 @@ end
         btnStartDisable=false
     end
 
-    @onbutton CompareBtn begin
+    @onbutton compareBtn begin
         CompareDialog=true
     end
 
