@@ -12,6 +12,7 @@ using NaturalSort
 using Images
 using LinearAlgebra
 using NativeFileDialog # Opens the file explorer depending on the OS
+using StipplePlotly
 @genietools
 
 # == Code import ==
@@ -148,6 +149,11 @@ end
     @out plotdata=[traceSpectra]
     @out plotlayout=layoutSpectra
 
+    # Interactive plot reactions
+    @in data_click = Dict{String,Any}()
+    #@in data_selected = Dict{String,Any}() # Selected is for areas, this can work for the masks
+    #<plotly id="plotStyle" :data="plotdata" :layout="plotlayout" @click="data_selected" class="q-pa-none q-ma-none sync_data"></plotly>
+
     # Interface Plot Surface
     layoutContour=PlotlyBase.Layout(
         title="2D Topographic Map",
@@ -196,8 +202,6 @@ end
     # Create conection to frontend
     @out plotdata3d=[trace3D]
     @out plotlayout3d=layout3D
-    
-    # println("3D trace defined: ", trace3D)
 
     # == Reactive handlers ==
     # Reactive handlers watch a variable and execute a block of code when its value changes
@@ -767,6 +771,20 @@ end
     @onbutton compareBtn begin
         CompareDialog=true
     end
+
+
+    # Event detection for clicking on the spectrum plot
+    @onchange data_click begin
+        println("Clicked data on sum spectrum plot : ", data_click)
+        # Now it needs to compare if there is a value from the spectrum close (to make sure it does not select invalid m/z)
+        # and then, add it to the mass-to-charge ratio of interest input to the frontend to ease with inputs
+        # optional: red line signaling which m/z got selected in the spectrum plot
+    end
+
+    # WIP add an x and y input and a plot to select pixels in an image and then calculate a plot (not the sum of plots)
+    # optional: red lines to signal which pixel is selected in the image plot
+
+    @mounted watchplots()
 
     GC.gc() # Trigger garbage collection
     if Sys.islinux()

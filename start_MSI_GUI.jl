@@ -7,6 +7,7 @@ Pkg.add("Libz") ; Pkg.add("PlotlyBase") ; Pkg.add("CairoMakie") ; Pkg.add("Color
 Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML") # With this we ensure it uses the latest library iteration
 Pkg.add("Images") ; Pkg.add("LinearAlgebra")
 Pkg.add("NativeFileDialog")
+Pkg.add("StipplePlotly")
 
 using Genie
 

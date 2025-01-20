@@ -151,7 +151,8 @@
                         </q-tab-panel>
                         <q-tab-panel name="tab2">
                             <!-- Content for Tab 2 -->
-                            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
+                            <!--<plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>-->
+                            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" @click="data_click" class="q-pa-none q-ma-none sync_data"></plotly>
                         </q-tab-panel>
                         <q-tab-panel name="tab3">
                           <!-- Content for Tab 3 -->
