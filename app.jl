@@ -142,7 +142,7 @@ end
             showgrid=true
         )
     )
-    # Dummy 2D surface plot
+    # Dummy 2D scatter plot
     traceSpectra=PlotlyBase.scatter(x=[], y=[], mode="lines")
     # Create conection to frontend
     @out plotdata=[traceSpectra]
@@ -234,7 +234,7 @@ end
                 spectra=LoadImzml(full_route)
                 msg="File loaded. Creating Spectra with the specific mass and tolerance, please be patient."
                 slice=GetSlice(spectra, Nmass, Tol)
-                fig=CairoMakie.Figure(size=(100, 200)) # Container
+                fig=CairoMakie.Figure(size=(120, 220)) # Container
                 # Append a query string to force the image to refresh 
                 timestamp=string(time_ns()) 
                 if triqEnabled # If we have TrIQ
@@ -257,7 +257,7 @@ end
                         current_triq="TrIQ_$(text_nmass).bmp"
                         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
                         # Create colorbar 
-                        ticks=round.(range(0, stop=maximum(TrIQ(slice, Int(triqColor), triqProb)), length=10), digits=2)
+                        ticks=round.(range(0, stop=maximum(TrIQ(slice, Int(triqColor), triqProb)), length=10), sigdigits=3)
                         Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(TrIQ(slice, Int(triqColor), triqProb))),ticks=ticks, label="Intensity")
                         save("public/colorbar_TrIQ_$(text_nmass).png", fig)
                         colorbarT="/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
@@ -289,7 +289,7 @@ end
                     current_msi="MSI_$(text_nmass).bmp"
                     msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
                     # Create colorbar 
-                    ticks=round.(range(0, stop=maximum(slice), length=10), digits=2)
+                    ticks=round.(range(0, stop=maximum(slice), length=10), sigdigits=3)
                     Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(slice)),ticks=ticks, label="Intensity")
                     save("public/colorbar_MSI_$(text_nmass).png", fig)
                     colorbar="/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
@@ -663,7 +663,6 @@ end
                     title="2D Topographic Map",
                     xaxis_title="X",
                     yaxis_title="Y"
-                    
                 )
                 traceContour=PlotlyBase.contour(
                     z=elevation_smoothed,
@@ -730,8 +729,7 @@ end
                 layoutContour=PlotlyBase.Layout(
                     title="2D Topographic Map",
                     xaxis_title="X",
-                    yaxis_title="Y",
-                    
+                    yaxis_title="Y"
                 )
                 traceContour=PlotlyBase.contour(
                     z=elevation_smoothed,
