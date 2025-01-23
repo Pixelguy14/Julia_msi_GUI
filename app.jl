@@ -231,7 +231,8 @@ end
             #println("Selected file path: ", full_route)
             btnStartDisable=false
             btnPlotDisable=false
-            full_routeMz=split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
+            # Splitting the route with regex from imzml to mzml so the plotting can work
+            full_routeMz=replace(full_route, r"\.[^.]*$" => ".mzML") 
             if isfile(full_routeMz)
                 # We enable coord search and spectra plot creation
                 btnSpectraDisable=false
