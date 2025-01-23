@@ -1,13 +1,25 @@
 using Pkg
 Pkg.activate(".")
 Pkg.instantiate()
-Pkg.update()
 Pkg.gc()
-Pkg.add("Libz") ; Pkg.add("PlotlyBase") ; Pkg.add("CairoMakie") ; Pkg.add("Colors") ; Pkg.add("Statistics") ; Pkg.add("NaturalSort") ; Pkg.add("GenieFramework") ;Pkg.add("Genie")
-Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML") # With this we ensure it uses the latest library iteration
-Pkg.add("Images") ; Pkg.add("LinearAlgebra")
-Pkg.add("NativeFileDialog")
-Pkg.add("StipplePlotly")
+
+packages = [
+    "GenieFramework", "Libz", "PlotlyBase", "CairoMakie", "Colors", 
+    "Statistics", "NaturalSort",  "Genie", 
+    "Images", "LinearAlgebra", "NativeFileDialog", "StipplePlotly"
+]
+
+# Check for missing packages
+for pkg in packages
+    if !(pkg in keys(Pkg.dependencies()))
+        Pkg.add(pkg)
+    end
+end
+
+# Add library for mzML imzML from GitHub if missing
+if !("julia_mzML_imzML" in keys(Pkg.dependencies()))
+    Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML")
+end
 
 using Genie
 
@@ -27,3 +39,5 @@ Genie.loadapp()
         @async run(`start $url`) # For Windows
     end
 end
+
+wait()

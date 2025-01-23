@@ -9,20 +9,16 @@ A Graphical User Interface for IMS in Julia: https://github.com/CINVESTAV-LABI/j
    unzip the file in your desired location<br>
 
 ## Load User Interface
-1. Launch Julia in your terminal using:
+1. Set working directory to Julia_msi_GUI (this repository) in your terminal using:
 ```
-julia
+cd PathToRepository/Julia_msi_GUI-main
 ```
-2. Set working directory to Julia_msi_GUI (this repository) code using:
+2. Launch the Julia project in your terminal using:
 ```
-cd("PathToRepository/Julia_msi_GUI-main")
+julia --project=. start_MSI_GUI.jl
 ```
-3. With the active directory being Julia_msi_GUI run the next script:
+3. Alternatively, you can open a terminal in the path of the repository and run the command and skip the next step:
 ```
-include("start_MSI_GUI.jl")
+julia --project=. start_MSI_GUI.jl
 ```
-4. Alternatively, you can open a terminal in the path of the repository and run the command and skip the next step:
-```
-julia start_MSI_GUI.jl
-```
-5. After the script has finished loading, it should open a page in your browser with the web app running.
+4. After the script has finished loading, it should open a page (http://127.0.0.1:1481/) in your browser with the web app running.

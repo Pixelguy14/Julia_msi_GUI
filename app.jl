@@ -1,5 +1,5 @@
 module App
-# == Packages ==
+# ==Packages ==
 using GenieFramework # Set up Genie development environment.
 using Pkg
 using Libz
@@ -15,18 +15,18 @@ using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
 @genietools
 
-# == Code import ==
+# ==Code import ==
 # add your data analysis code here or in the lib folder. Code in lib/ will be
 # automatically loaded
 rgb_ViridisPalette=reinterpret(ColorTypes.RGB24, ViridisPalette)
 
-# == Search functions ==
+# ==Search functions ==
 function increment_image(current_image, image_list)
     if isempty(image_list)
         return nothing
     end
     current_index=findfirst(isequal(current_image), image_list)
-    if current_index == nothing || current_index == length(image_list) || current_image === ""
+    if current_index ==nothing || current_index ==length(image_list) || current_image ===""
         return image_list[length(image_list)]  # Return the current image if it's the last one or not found
     else
         return image_list[current_index + 1]  # Move to the next image
@@ -38,31 +38,39 @@ function decrement_image(current_image, image_list)
         return nothing
     end
     current_index=findfirst(isequal(current_image), image_list)
-    if current_index == nothing || current_index == 1 || current_image === ""
+    if current_index ==nothing || current_index ==1 || current_image ===""
         return image_list[1]  # Return the current image if it's the first one or not found
     else
         return image_list[current_index - 1]  # Move to the previous image
     end
 end
 
-# == Reactive code ==
+# ==Reactive code ==
 # reactive code to make the UI interactive
 @app begin
-    # == Reactive variables ==
+    # ==Reactive variables ==
     # reactive variables exist in both the Julia backend and the browser with two-way synchronization
     # @out variables can only be modified by the backend
     # @in variables can be modified by both the backend and the browser
     # variables must be initialized with constant values, or variables defined outside of the @app block
     #@out test="/test.bmp" #slash means it's getting the info from 'public' folder
 
-    # Interface non Variables
-    @out warning_fr=""
+    ## Interface non Variables
     @out btnStartDisable=true
     @out btnPlotDisable=false
+    @out btnSpectraDisable=true
+    # Loading animations
+    @in progress=false
+    @in progressPlot=false
+    @in progressSpectraPlot=false
+    # Text field validations
+    @in triqEnabled=false
+    @in SpectraEnabled=false
+    # Dialogs
     @in warning_msg=false
     @in CompareDialog=false
 
-    # Interface Variables
+    ## Interface Variables
     @in file_route=""
     @in file_name=""
     @in Nmass=0.0
@@ -70,38 +78,39 @@ end
     @in triqProb=0.98
     @in triqColor=256
 
-    # Interface Buttons and Validations
+    ## Interface Buttons
     @in btnSearch=false # To search for files in your device
     @in mainProcess=false # To generate images
     @in compareBtn=false # To open dialog
     @in createSumPlot=false # To generate sum spectrum plot
+    @in createXYPlot=false # To generate an spectrum plot according to the xy values inputed
     @in image3dPlot=false # To generate 3d plot based on current image
     @in triq3dPlot=false # To generate 3d plot based on current triq image
     @in imageCPlot=false # To generate contour plots of current image
     @in triqCPlot=false # To generate contour plots of current triq image
-    @in progress=false
-    @in progressPlot=false
-    @in triqEnabled=false
+    # Image change buttons
     @in imgPlus=false
     @in imgMinus=false
     @in imgPlusT=false
     @in imgMinusT=false
 
-    # TAB variables
+    ## Tabulation variables
     @out tabIDs=["tab0","tab1","tab2","tab3","tab4"]
     @out tabLabels=["Image", "TrIQ", "Spectrum Plot", "Topology Plot","Surface Plot"]
-    @in selectedTab= "tab0"
+    @in selectedTab="tab0"
     @out CompTabIDs=["tab0","tab1","tab2","tab3","tab4"]
     @out CompTabLabels=["Image", "TrIQ", "Spectrum Plot", "Topology Plot","Surface Plot"]
-    @in CompSelectedTab= "tab0"
+    @in CompSelectedTab="tab0"
 
     # Interface Images
     @out imgInt="/.bmp" # image Interface
     @out imgIntT="/.bmp" # image Interface TrIQ
     @out colorbar="/.png"
     @out colorbarT="/.png"
+    @out img_width=0
+    @out img_height=0
 
-    # Messages to interface Variables
+    # Messages to interface variables
     @out msg=""
     @out msgimg=""
     @out msgtriq=""
@@ -126,11 +135,12 @@ end
     @out current_triq=""
     @out current_col_triq=""
 
-    # Starting and finishing times to measure how long it takes for a function to finish in elapse time
+    ## Time measurement variables
     @out sTime=time()
     @out fTime=time()
     @out eTime=time()
 
+    ## Plots
     # Interface Plot Spectrum
     layoutSpectra=PlotlyBase.Layout(
         title="SUM Spectrum plot",
@@ -148,10 +158,14 @@ end
     # Create conection to frontend
     @out plotdata=[traceSpectra]
     @out plotlayout=layoutSpectra
+    @in xCoord=0
+    @in yCoord=0
+    @out xSpectraMz=Float64[]
+    @out ySpectraMz=Float64[]
 
     # Interactive plot reactions
-    @in data_click = Dict{String,Any}()
-    #@in data_selected = Dict{String,Any}() # Selected is for areas, this can work for the masks
+    @in data_click=Dict{String,Any}()
+    #@in data_selected=Dict{String,Any}() # Selected is for areas, this can work for the masks
     #<plotly id="plotStyle" :data="plotdata" :layout="plotlayout" @click="data_selected" class="q-pa-none q-ma-none sync_data"></plotly>
 
     # Interface Plot Surface
@@ -159,13 +173,12 @@ end
         title="2D Topographic Map",
         xaxis=PlotlyBase.attr(
             title="X",
-            showgrid=true
-        ),
-        yaxis=PlotlyBase.attr(
-            title="Y",
-            showgrid=true
+            scaleanchor="y"
+            ),
+            yaxis=PlotlyBase.attr(
+                title="Y"
+                ),
         )
-    )
     # Dummy 2D surface plot
     traceContour=PlotlyBase.scatter(x=[], y=[], mode="lines")
     # Create conection to frontend
@@ -203,7 +216,7 @@ end
     @out plotdata3d=[trace3D]
     @out plotlayout3d=layout3D
 
-    # == Reactive handlers ==
+    # ==Reactive handlers ==
     # Reactive handlers watch a variable and execute a block of code when its value changes
     # The onbutton handler will set the variable to false after the block is executed
 
@@ -218,10 +231,12 @@ end
             #println("Selected file path: ", full_route)
             btnStartDisable=false
             btnPlotDisable=false
-            msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-            col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-            triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-            col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+            full_routeMz=split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
+            if isfile(full_routeMz)
+                # We enable coord search and spectra plot creation
+                btnSpectraDisable=false
+                SpectraEnabled=true
+            end
         end
     end
     
@@ -229,10 +244,11 @@ end
         progress=true # Start progress button animation
         btnStartDisable=true # We disable the button to avoid multiple requests
         btnPlotDisable=true
+        btnSpectraDisable=true
         text_nmass=replace(string(Nmass), "." => "_")
         sTime=time()
         #full_route=joinpath(file_route, file_name)
-        if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <= 1
+        if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <=1
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
             try
                 spectra=LoadImzml(full_route)
@@ -254,6 +270,8 @@ end
                             img=reverse(permutedims(img, (2, 1)), dims=1)
                         end
                         flipped_img=reverse(img, dims=1)
+                        img_width=size(flipped_img, 2)
+                        img_height=size(flipped_img, 1)
                         save(image_path, flipped_img)
                         # Use timestamp to refresh image interface container
                         imgIntT="/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
@@ -275,7 +293,7 @@ end
                         msg="The file has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
                         selectedTab="tab1"
                         #println("all msi in folder=",triq_bmp)
-                        #println("all col msi in folder= ",col_triq_png)
+                        #println("all col msi in folder=",col_triq_png)
                     end
                 else # If we don't use TrIQ
                     image_path=joinpath("./public", "MSI_$(text_nmass).bmp")
@@ -286,6 +304,8 @@ end
                         img=reverse(permutedims(img, (2, 1)), dims=1) 
                     end
                     flipped_img=reverse(img, dims=1)
+                    img_width=size(flipped_img, 2)
+                    img_height=size(flipped_img, 1)
                     save(image_path, flipped_img)
                     # Use timestamp to refresh image interface container
                     imgInt="/MSI_$(text_nmass).bmp?t=$(timestamp)"
@@ -307,7 +327,7 @@ end
                     eTime=round(fTime-sTime,digits=3)
                     msg="The file has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
                     #println("all msi in folder=",msi_bmp)
-                    #println("all col msi in folder= ",col_msi_png)
+                    #println("all col msi in folder=",col_msi_png)
                 end
             catch e
                 msg="There was an error loading the ImzML file, please verify the file accordingly and try again. $(e)"
@@ -325,6 +345,11 @@ end
         end
         btnStartDisable=false
         btnPlotDisable=false
+        if isfile(full_routeMz)
+            # We enable coord search and spectra plot creation
+            btnSpectraDisable=false
+            SpectraEnabled=true
+        end
         progress=false
     end
 
@@ -332,55 +357,101 @@ end
         msg="Sum spectrum plot selected"
         sTime=time()
         #full_route=joinpath( file_route, file_name )
-        if isfile(full_route) # Check if the file exists
-            btnPlotDisable=false
-            btnStartDisable=false
-            full_routeMz=split( full_route, "." )[1] * ".mzML" # Splitting the route from imzml to mzml so the plotting can work
-            if isfile(full_routeMz) && (full_routeMz2 == "" || full_routeMz2 != full_routeMz) # Check if the mzml exists
-                progressPlot=true
-                btnPlotDisable=true
-                btnStartDisable=true
-                msg="Loading plot..."
-                spectraMz=LoadMzml(full_routeMz)
-                layoutSpectra=PlotlyBase.Layout(
-                    title="SUM Spectrum plot",
-                    xaxis=PlotlyBase.attr(
-                        title="<i>m/z</i>",
-                        showgrid=true
-                        
-                    ),
-                    yaxis=PlotlyBase.attr(
-                        title="Intensity",
-                        showgrid=true
-                    )
-                )
-                # dims=size(spectraMz)
-                # scansMax=dims[2] # we get the total of scansMax
-                # traceSpectra=PlotlyBase.scatter(x=spectraMz[1, 1], y=spectraMz[2, 1], mode="lines")
-                traceSpectra=PlotlyBase.scatter(x=mean(spectraMz[1,:]), y=mean(spectraMz[2,:]), mode="lines")
-                plotdata=[traceSpectra] # We add the data from spectra to the plot
-                plotlayout=layoutSpectra
-                spectraMz=nothing # Important for memory cleaning
-                GC.gc() # Trigger garbage collection
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
-                end
-                selectedTab="tab2"
-                fTime=time()
-                eTime=round(fTime-sTime,digits=3)
-                msg="Plot loaded in $(eTime) seconds"
-                full_routeMz2=full_routeMz # To avoid creating the plot if its the same file read as before
-            else
-                msg="the mzML file was not found or you're trying to load the same mzML"
-                warning_msg=true
+        if isfile(full_routeMz) # Check if the file exists
+            progressSpectraPlot=true
+            btnPlotDisable=true
+            btnStartDisable=true
+            msg="Loading plot..."
+            spectraMz=LoadMzml(full_routeMz)
+            layoutSpectra=PlotlyBase.Layout(
+                title="SUM Spectrum plot",
+                xaxis=PlotlyBase.attr(
+                    title="<i>m/z</i>",
+                    showgrid=true
+                ),
+                yaxis=PlotlyBase.attr(
+                    title="Intensity",
+                    showgrid=true
+                ),
+                autosize=false
+            )
+            # dims=size(spectraMz)
+            # scansMax=dims[2] # we get the total of scansMax
+            xSpectraMz=mean(spectraMz[1,:])
+            ySpectraMz=mean(spectraMz[2,:])
+            traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
+            plotdata=[traceSpectra] # We add the data from spectra to the plot
+            plotlayout=layoutSpectra
+            GC.gc() # Trigger garbage collection
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
             end
+            selectedTab="tab2"
+            fTime=time()
+            eTime=round(fTime-sTime,digits=3)
+            msg="Plot loaded in $(eTime) seconds"
         else
-            msg="is not an imzML file"
+            msg="there was an error with the mzML, please try again"
             warning_msg=true
         end
-        progressPlot=false
+        progressSpectraPlot=false
         btnPlotDisable=false
         btnStartDisable=false
+        if isfile(full_routeMz)
+            # We enable coord search and spectra plot creation
+            btnSpectraDisable=false
+            SpectraEnabled=true
+        end
+    end
+
+    @onbutton createXYPlot begin
+        msg="Sum spectrum plot selected"
+        sTime=time()
+        #full_route=joinpath( file_route, file_name )
+        if isfile(full_routeMz) # Check if the file exists
+            progressSpectraPlot=true
+            btnStartDisable=true
+            btnPlotDisable=true
+            btnSpectraDisable=true
+            msg="Loading plot..."
+            spectraMz=LoadMzml(full_routeMz)
+            layoutSpectra=PlotlyBase.Layout(
+                title="($xCoord, $yCoord) Specific spectrum plot",
+                xaxis=PlotlyBase.attr(
+                    title="<i>m/z</i>",
+                    showgrid=true
+                ),
+                yaxis=PlotlyBase.attr(
+                    title="Intensity",
+                    showgrid=true
+                ),
+                autosize=false
+            )
+            xSpectraMz=spectraMz[1,abs(xCoord)]
+            ySpectraMz=spectraMz[2,abs(yCoord)]
+            traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
+            plotdata=[traceSpectra] # We add the data from spectra to the plot
+            plotlayout=layoutSpectra
+            GC.gc() # Trigger garbage collection
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+            end
+            selectedTab="tab2"
+            fTime=time()
+            eTime=round(fTime-sTime,digits=3)
+            msg="Plot loaded in $(eTime) seconds"
+        else
+            msg="there was an error with the mzML or the coordenates, please try again"
+            warning_msg=true
+        end
+        progressSpectraPlot=false
+        btnPlotDisable=false
+        btnStartDisable=false
+        if isfile(full_routeMz)
+            # We enable coord search and spectra plot creation
+            btnSpectraDisable=false
+            SpectraEnabled=true
+        end
     end
 
     # Image loaders based on the position of the current image (increment and decrement for both normal and filter)
@@ -389,8 +460,8 @@ end
         # Append a query string to force the image to refresh 
         timestamp=string(time_ns()) 
         # Update the array of images listed in the public folder
-            msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-            col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
+        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
         
         new_msi=decrement_image(current_msi, msi_bmp)
         new_col_msi=decrement_image(current_col_msi, col_msi_png)
@@ -408,8 +479,8 @@ end
         # Append a query string to force the image to refresh 
         timestamp=string(time_ns())
         # Update the array of images listed in the public folder
-            msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-            col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
+        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
         
         new_msi=increment_image(current_msi, msi_bmp)
         new_col_msi=increment_image(current_col_msi, col_msi_png)
@@ -454,8 +525,8 @@ end
         
         current_triq=new_msi
         current_col_triq=new_col_msi
-        imgIntT="/$(current_triq)"
-        colorbarT="/$(current_col_triq)"
+        imgIntT="/$(current_triq)?t=$(timestamp)"
+        colorbarT="/$(current_col_triq)?t=$(timestamp)"
 
         text_nmass=replace(current_triq, "TrIQ_" => "")
         text_nmass=replace(text_nmass, ".bmp" => "")
@@ -474,6 +545,7 @@ end
             progressPlot=true
             btnPlotDisable=true
             btnStartDisable=true
+            btnSpectraDisable=true
             try
                 img=load(var)
                 #println("Image type:", typeof(img))
@@ -528,7 +600,6 @@ end
                 ), colorscale="Viridis")
                 plotdata3d=[trace3D] # We add the data from the image to the plot
                 plotlayout3d=layout3D # we update the style of the plot to fit the image.
-                spectraMz=nothing # Important for memory cleaning
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -549,6 +620,11 @@ end
         progressPlot=false
         btnPlotDisable=false
         btnStartDisable=false
+        if isfile(full_routeMz)
+            # We enable coord search and spectra plot creation
+            btnSpectraDisable=false
+            SpectraEnabled=true
+        end
     end
     # 3d plot for TrIQ
     @onbutton triq3dPlot begin
@@ -562,6 +638,7 @@ end
             progressPlot=true
             btnPlotDisable=true
             btnStartDisable=true
+            btnSpectraDisable=true
             try
                 img=load(var)
                 img_gray=Gray.(img) # Convert to grayscale
@@ -610,7 +687,6 @@ end
                 ), colorscale="Viridis")
                 plotdata3d=[trace3D] # We add the data from the image to the plot
                 plotlayout3d=layout3D # we update the style of the plot to fit the image.
-                spectraMz=nothing # Important for memory cleaning
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -631,6 +707,11 @@ end
         progressPlot=false
         btnPlotDisable=false
         btnStartDisable=false
+        if isfile(full_routeMz)
+            # We enable coord search and spectra plot creation
+            btnSpectraDisable=false
+            SpectraEnabled=true
+        end
     end
 
     # Contour 2d plot
@@ -645,6 +726,7 @@ end
             progressPlot=true
             btnPlotDisable=true
             btnStartDisable=true
+            btnSpectraDisable=true
             try
                 img=load(var)
                 # Convert to grayscale
@@ -665,8 +747,13 @@ end
                 
                 layoutContour=PlotlyBase.Layout(
                     title="2D Topographic Map",
-                    xaxis_title="X",
-                    yaxis_title="Y"
+                    xaxis=PlotlyBase.attr(
+                        title="X",
+                        scaleanchor="y"
+                    ),
+                    yaxis=PlotlyBase.attr(
+                        title="Y"
+                    ),
                 )
                 traceContour=PlotlyBase.contour(
                     z=elevation_smoothed,
@@ -677,8 +764,6 @@ end
                 )
                 plotdataC=[traceContour]
                 plotlayoutC=layoutContour
-    
-                spectraMz=nothing  # Important for memory cleaning
                 GC.gc()  # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
@@ -699,6 +784,11 @@ end
         progressPlot=false
         btnPlotDisable=false
         btnStartDisable=false
+        if isfile(full_routeMz)
+            # We enable coord search and spectra plot creation
+            btnSpectraDisable=false
+            SpectraEnabled=true
+        end
     end
     # Contour 2d plot for TrIQ
     @onbutton triqCPlot begin
@@ -712,6 +802,7 @@ end
             progressPlot=true
             btnPlotDisable=true
             btnStartDisable=true
+            btnSpectraDisable=true
             try
                 img=load(var)
                 # Convert to grayscale
@@ -732,8 +823,13 @@ end
                 
                 layoutContour=PlotlyBase.Layout(
                     title="2D Topographic Map",
-                    xaxis_title="X",
-                    yaxis_title="Y"
+                    xaxis=PlotlyBase.attr(
+                        title="X",
+                        scaleanchor="y"
+                    ),
+                    yaxis=PlotlyBase.attr(
+                        title="Y"
+                    ),
                 )
                 traceContour=PlotlyBase.contour(
                     z=elevation_smoothed,
@@ -744,8 +840,6 @@ end
                 )
                 plotdataC=[traceContour]
                 plotlayoutC=layoutContour
-    
-                spectraMz=nothing  # Important for memory cleaning
                 GC.gc()  # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
@@ -766,19 +860,67 @@ end
         progressPlot=false
         btnPlotDisable=false
         btnStartDisable=false
+        if isfile(full_routeMz)
+            # We enable coord search and spectra plot creation
+            btnSpectraDisable=false
+            SpectraEnabled=true
+        end
     end
 
     @onbutton compareBtn begin
         CompareDialog=true
+        # We remove the red lines
+        traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines",name="Spectra",showlegend=false)
+        plotdata=[traceSpectra]
     end
-
 
     # Event detection for clicking on the spectrum plot
     @onchange data_click begin
-        println("Clicked data on sum spectrum plot : ", data_click)
-        # Now it needs to compare if there is a value from the spectrum close (to make sure it does not select invalid m/z)
-        # and then, add it to the mass-to-charge ratio of interest input to the frontend to ease with inputs
-        # optional: red line signaling which m/z got selected in the spectrum plot
+        if !isempty(xSpectraMz)
+            #println("Clicked data on sum spectrum plot : ", data_click)
+            spectracoords=reshape(plotdata, 1, length(plotdata))
+            #println("Spectra: $(ndims(spectracoords))")
+            # Extract x and y values from data_click 
+            cursor_data=data_click["cursor"] 
+            x_value = cursor_data["x"]
+            y_value = cursor_data["y"]  # Get the x and y values from the click of the cursor
+            closest_distance = Inf
+            
+            for val in spectracoords
+                # Find the index where x is within a range
+                start_idx = findfirst(x -> x >= x_value - 10, val[:x])
+                end_idx = findlast(x -> x <= x_value + 10, val[:x])
+                
+                # Ensure the index are valid and within range
+                if start_idx !== nothing && end_idx !== nothing
+                    for i in start_idx:end_idx
+                        spectra_x = val[:x][i]
+                        spectra_y = val[:y][i]
+                        distance = sqrt((spectra_x - x_value)^2 + (spectra_y - y_value)^2)  # Calculate distance
+                        if distance < closest_distance
+                            closest_distance = distance
+                            Nmass = round(spectra_x, digits=2)
+                        end
+                    end
+                end
+            end
+            layoutSpectra=PlotlyBase.Layout(
+                        title="SUM Spectrum plot",
+                        xaxis=PlotlyBase.attr(
+                            title="<i>m/z</i>",
+                            showgrid=true
+                        ),
+                        yaxis=PlotlyBase.attr(
+                            title="Intensity",
+                            showgrid=true
+                        ),
+                        autosize=false
+                )
+            traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines",name="Spectra",showlegend=false)
+            trace2=PlotlyBase.scatter(x=[Nmass, Nmass],y=[0, maximum(ySpectraMz)],mode="lines",line=attr(color="red", width=0.5),name="<i>m/z</i> selected",showlegend=false)
+            plotdata=[traceSpectra,trace2] # We add the data from spectra and the red line to the plot
+            plotlayout=layoutSpectra
+        end
     end
 
     # WIP add an x and y input and a plot to select pixels in an image and then calculate a plot (not the sum of plots)
@@ -791,12 +933,12 @@ end
         ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
 end
-# == Pages ==
+# ==Pages ==
 # Register a new route and the page that will be loaded on access
 @page("/", "app.jl.html")
 end
 
-# == Advanced features ==
+# ==Advanced features ==
 #=
 - The @private macro defines a reactive variable that is not sent to the browser.
 This is useful for storing data that is unique to each user session but is not needed
