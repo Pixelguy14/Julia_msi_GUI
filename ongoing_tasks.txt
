@@ -1,9 +1,8 @@
 PENDING
     Rmsi & julia coherence with image creation and colorbar
-        colorbar revamp
+        colorbar revamp CURRENTLY ONGOING
     Create function that makes the imzML from mzML files ?
     Possibility to add multiple imzML to process at once ?
-    Per pixel of image plot creation for spectra
     Add comparison image (rotate, transform, translate, transparency) CURRENTLY ONGOING
 
 DONE
@@ -25,3 +24,4 @@ DONE
     Comparative for two views
     Even faster initial boot and subsectuential boot
     Multiple spectra plot types
+    Plot creation for spectra Per pixel of image

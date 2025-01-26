@@ -15,18 +15,18 @@ using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
 @genietools
 
-# ==Code import ==
+# == Code import ==
 # add your data analysis code here or in the lib folder. Code in lib/ will be
 # automatically loaded
 rgb_ViridisPalette=reinterpret(ColorTypes.RGB24, ViridisPalette)
 
-# ==Search functions ==
+# == Search functions ==
 function increment_image(current_image, image_list)
     if isempty(image_list)
         return nothing
     end
     current_index=findfirst(isequal(current_image), image_list)
-    if current_index ==nothing || current_index ==length(image_list) || current_image ===""
+    if current_index==nothing || current_index==length(image_list) || current_image ===""
         return image_list[length(image_list)]  # Return the current image if it's the last one or not found
     else
         return image_list[current_index + 1]  # Move to the next image
@@ -38,17 +38,215 @@ function decrement_image(current_image, image_list)
         return nothing
     end
     current_index=findfirst(isequal(current_image), image_list)
-    if current_index ==nothing || current_index ==1 || current_image ===""
+    if current_index==nothing || current_index==1 || current_image===""
         return image_list[1]  # Return the current image if it's the first one or not found
     else
         return image_list[current_index - 1]  # Move to the previous image
     end
 end
 
-# ==Reactive code ==
+## Plot Image functions
+# loadImgPlot recieves the local directory of the image as a string,
+# returns the layout and data for the heatmap plotly plot
+# this function loads the image into a plot
+function loadImgPlot(interfaceImg::String)
+    # Load the image
+    cleaned_img=replace(interfaceImg, r"\?.*" => "")
+    cleaned_img=lstrip(cleaned_img, '/')
+    var=joinpath("./public", cleaned_img)
+    img=load(var)
+    # Convert to grayscale
+    img_gray=Gray.(img)
+    img_array=Array(img_gray)
+    #println(typeof(img_array))
+    elevation=Float32.(Array(img_gray))
+    #println(typeof(elevation))
+    # Get the X, Y coordinates of the image
+    height, width = size(img_array)
+    #println("height: $(height), width: $(width)")
+    X = collect(1:width)
+    Y = collect(1:height)
+
+    # Create the layout
+    layout = PlotlyBase.Layout(
+        xaxis = PlotlyBase.attr(
+            visible = false,
+            scaleanchor = "y"
+        ),
+        yaxis = PlotlyBase.attr(
+            visible = false
+        )
+    )
+
+    # Create the trace for the image
+    trace = PlotlyBase.heatmap(
+        z = elevation,
+        x = X,
+        y = -Y,
+        name="",
+        showlegend=false,
+        colorscale = "Viridis",
+        showscale = true,
+        colorbar = attr(
+            title = attr(
+                text = "Intensity",
+                font = attr(
+                    size = 14,
+                    color = "black"
+                ),
+                side = "right"
+            ),
+            ticks = "outside",
+            ticklen = 2,
+            tickwidth = 0.5,
+            nticks = 5,
+            tickformat = ".2g"
+        )
+    )
+
+    plotdata = [trace]
+    plotlayout = layout
+    return plotdata, plotlayout, width, height
+end
+# loadContourPlot recieves the local directory of the image as a string,
+# returns the layout and data for the contour plotly plot
+# this function loads the image and applies a gaussian filter 
+# to smoothen it and loads it into a plot
+function loadContourPlot(interfaceImg::String)
+    # Load the image
+    cleaned_img=replace(interfaceImg, r"\?.*" => "")
+    cleaned_img=lstrip(cleaned_img, '/')
+    var=joinpath("./public", cleaned_img)
+    img=load(var)
+    img_gray=Gray.(img)
+    img_array=Array(img_gray)
+    elevation=Float32.(Array(img_gray)) ./ 255.0  # Normalize between 0 and 1
+    
+    # Smooth the image
+    sigma=3.0
+    kernel=Kernel.gaussian(sigma)
+    elevation_smoothed=imfilter(elevation, kernel)
+    
+    # Create the X, Y meshgrid coordinates
+    x=1:size(elevation_smoothed, 2)
+    y=1:size(elevation_smoothed, 1)
+    X=repeat(reshape(x, 1, length(x)), length(y), 1)
+    Y=repeat(reshape(y, length(y), 1), 1, length(x))
+                
+    layout=PlotlyBase.Layout(
+        title="2D Topographic Map",
+        xaxis=PlotlyBase.attr(
+            title="X",
+            scaleanchor="y"
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Y"
+        ),
+    )
+    trace=PlotlyBase.contour(
+        z=elevation_smoothed,
+        x=X[1, :],  # Use the first row
+        y=-Y[:, 1],  # Use the first column
+        contours_coloring="Viridis", 
+        colorscale="Viridis",
+        colorbar = attr(
+            tickformat = ".2g"
+        )
+    )
+    plotdata = [trace]
+    plotlayout = layout
+    return plotdata, plotlayout
+end
+# loadSurfacePlot recieves the local directory of the image as a string,
+# returns the layout and data for the surface plotly plot
+# this function loads the image and applies a gaussian filter 
+# to smoothen it and loads it into a 3D plot
+function loadSurfacePlot(interfaceImg::String)
+    # Load the image
+    cleaned_img=replace(interfaceImg, r"\?.*" => "")
+    cleaned_img=lstrip(cleaned_img, '/')
+    var=joinpath("./public", cleaned_img)
+    img=load(var)
+    #println("Image type:", typeof(img))
+    img_gray=Gray.(img) # Convert to grayscale
+    #println("Grayscale image type:", typeof(img_gray)) 
+    img_array=Array(img_gray)
+    elevation=Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
+    #println("Elevation size:", size(elevation)) 
+    # Smooth the image 
+    sigma=3.0
+    kernel=Kernel.gaussian(sigma)
+    #println(size(kernel))
+    elevation_smoothed=imfilter(elevation, kernel) 
+    #println("Smoothed elevation size:", size(elevation_smoothed))
+    # Transpose the elevation_smoothed array
+    # Create the X, Y meshgrid coordinates 
+    x=1:size(elevation_smoothed, 2) 
+    y=1:size(elevation_smoothed, 1)
+    X=repeat(reshape(x, 1, length(x)), length(y), 1)
+    #println("Size of X:", size(X))
+    Y=repeat(reshape(y, length(y), 1), 1, length(x))
+    #println("Size of Y:", size(Y))
+    # Calculate the number of ticks and aspect ratio for the 3d plot
+    x_nticks=min(20, length(x))
+    y_nticks=min(20, length(y))
+    z_nticks=5
+    aspect_ratio=attr(x=1, y=length(y) / length(x), z=0.5)
+    # Define the layout for the 3D plot
+    layout3D=PlotlyBase.Layout(
+        title="3D Surface Plot",
+        scene=attr(
+            xaxis_nticks=x_nticks,
+            yaxis_nticks=y_nticks,
+            zaxis_nticks=z_nticks, 
+            camera=attr(eye=attr(x=0, y=-1, z=0.5)), 
+            aspectratio=aspect_ratio
+        )
+    )
+    if size(elevation_smoothed, 1) < size(elevation_smoothed, 2)
+        # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
+        elevation_smoothed=transpose(elevation_smoothed)
+        Y=-Y
+    end
+
+    trace3D=PlotlyBase.surface(
+        x=X[1, :], 
+        y=Y[:, 1], 
+        z=elevation_smoothed,
+        contours_z=attr(
+            show=true,
+            usecolormap=true,
+            highlightcolor="limegreen",
+            project_z=true
+        ), 
+        colorscale="Viridis",
+        colorbar = attr(
+            tickformat = ".2g"
+        )
+    )
+    plotdata = [trace3D]
+    plotlayout = layout3D
+    return plotdata, plotlayout
+end
+
+function crossLinesPlot(x, y, maxwidth, maxheight)
+    # Define the coordinates for the two lines
+    l1_x = [0, maxwidth]
+    l1_y = [y, y]
+    l2_x = [x, x]
+    l2_y = [0, maxheight]
+
+    # Create the line traces
+    trace1 = PlotlyBase.scatter(x = l1_x, y = l1_y, mode = "lines",line=attr(color="red", width=0.5),name="Line X",showlegend=false)
+    trace2 = PlotlyBase.scatter(x = l2_x, y = l2_y, mode = "lines",line=attr(color="red", width=0.5),name="Line Y",showlegend=false)
+
+    return trace1, trace2
+end
+
+# == Reactive code ==
 # reactive code to make the UI interactive
 @app begin
-    # ==Reactive variables ==
+    # == Reactive variables ==
     # reactive variables exist in both the Julia backend and the browser with two-way synchronization
     # @out variables can only be modified by the backend
     # @in variables can be modified by both the backend and the browser
@@ -107,8 +305,8 @@ end
     @out imgIntT="/.bmp" # image Interface TrIQ
     @out colorbar="/.png"
     @out colorbarT="/.png"
-    @out img_width=0
-    @out img_height=0
+    @out imgWidth=0
+    @out imgHeight=0
 
     # Messages to interface variables
     @out msg=""
@@ -141,6 +339,22 @@ end
     @out eTime=time()
 
     ## Plots
+    # Local image to plot
+    layoutImg = PlotlyBase.Layout(
+        xaxis = PlotlyBase.attr(
+            visible = false,
+            scaleanchor = "y"
+        ),
+        yaxis = PlotlyBase.attr(
+            visible = false
+        )
+    )
+    traceImg=PlotlyBase.heatmap(x=[], y=[])
+    @out plotdataImg = [traceImg]
+    @out plotlayoutImg = layoutImg
+    # For triq image 
+    @out plotdataImgT = [traceImg]
+    @out plotlayoutImgT = layoutImg
     # Interface Plot Spectrum
     layoutSpectra=PlotlyBase.Layout(
         title="SUM Spectrum plot",
@@ -216,7 +430,7 @@ end
     @out plotdata3d=[trace3D]
     @out plotlayout3d=layout3D
 
-    # ==Reactive handlers ==
+    # == Reactive handlers ==
     # Reactive handlers watch a variable and execute a block of code when its value changes
     # The onbutton handler will set the variable to false after the block is executed
 
@@ -238,6 +452,8 @@ end
                 btnSpectraDisable=false
                 SpectraEnabled=true
             end
+            xCoord=0
+            yCoord=0
         end
     end
     
@@ -271,11 +487,12 @@ end
                             img=reverse(permutedims(img, (2, 1)), dims=1)
                         end
                         flipped_img=reverse(img, dims=1)
-                        img_width=size(flipped_img, 2)
-                        img_height=size(flipped_img, 1)
+                        imgWidth=size(flipped_img, 2)
+                        imgHeight=size(flipped_img, 1)
                         save(image_path, flipped_img)
                         # Use timestamp to refresh image interface container
                         imgIntT="/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
+                        plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
                         # Get current image 
                         current_triq="TrIQ_$(text_nmass).bmp"
                         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
@@ -305,11 +522,12 @@ end
                         img=reverse(permutedims(img, (2, 1)), dims=1) 
                     end
                     flipped_img=reverse(img, dims=1)
-                    img_width=size(flipped_img, 2)
-                    img_height=size(flipped_img, 1)
+                    imgWidth=size(flipped_img, 2)
+                    imgHeight=size(flipped_img, 1)
                     save(image_path, flipped_img)
                     # Use timestamp to refresh image interface container
                     imgInt="/MSI_$(text_nmass).bmp?t=$(timestamp)"
+                    plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
                     # Get current image 
                     current_msi="MSI_$(text_nmass).bmp"
                     msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
@@ -466,15 +684,22 @@ end
         
         new_msi=decrement_image(current_msi, msi_bmp)
         new_col_msi=decrement_image(current_col_msi, col_msi_png)
-        
-        current_msi=new_msi
-        current_col_msi=new_col_msi
-        imgInt="/$(current_msi)?t=$(timestamp)"
-        colorbar="/$(current_col_msi)?t=$(timestamp)"
+        if new_msi!=nothing || new_col_msi!=nothing
+            current_msi=new_msi
+            current_col_msi=new_col_msi
+            imgInt="/$(current_msi)?t=$(timestamp)"
+            colorbar="/$(current_col_msi)?t=$(timestamp)"
 
-        text_nmass=replace(current_msi, "MSI_" => "")
-        text_nmass=replace(text_nmass, ".bmp" => "")
-        msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            text_nmass=replace(current_msi, "MSI_" => "")
+            text_nmass=replace(text_nmass, ".bmp" => "")
+            msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            # Process the image in the function
+            plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+        else
+            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            plotdataImg = [traceImg]
+            msgimg = ""
+        end
     end
     @onbutton imgPlus begin
         # Append a query string to force the image to refresh 
@@ -485,53 +710,75 @@ end
         
         new_msi=increment_image(current_msi, msi_bmp)
         new_col_msi=increment_image(current_col_msi, col_msi_png)
+        if new_msi!=nothing || new_col_msi!=nothing
+            current_msi=new_msi
+            current_col_msi=new_col_msi
+            imgInt="/$(current_msi)?t=$(timestamp)"
+            colorbar="/$(current_col_msi)?t=$(timestamp)"
 
-        current_msi=new_msi
-        current_col_msi=new_col_msi
-        imgInt="/$(current_msi)?t=$(timestamp)"
-        colorbar="/$(current_col_msi)?t=$(timestamp)"
-
-        text_nmass=replace(current_msi, "MSI_" => "")
-        text_nmass=replace(text_nmass, ".bmp" => "")
-        msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            text_nmass=replace(current_msi, "MSI_" => "")
+            text_nmass=replace(text_nmass, ".bmp" => "")
+            msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            # Process the image in the function
+            plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+        else
+            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            plotdataImg = [traceImg]
+            msgimg = ""
+        end
     end
 
     @onbutton imgMinusT begin
         # Append a query string to force the image to refresh 
         timestamp=string(time_ns()) 
-        new_msi=decrement_image(current_triq, triq_bmp)
-        new_col_msi=decrement_image(current_col_triq, col_triq_png)
         # Update the array of images with TrIQ filter listed in the public folder
         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
         col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
 
-        current_triq=new_msi
-        current_col_triq=new_col_msi
-        imgIntT="/$(current_triq)?t=$(timestamp)"
-        colorbarT="/$(current_col_triq)?t=$(timestamp)"
+        new_msi=decrement_image(current_triq, triq_bmp)
+        new_col_msi=decrement_image(current_col_triq, col_triq_png)
+        if new_msi!=nothing || new_col_msi!=nothing
+            current_triq=new_msi
+            current_col_triq=new_col_msi
+            imgIntT="/$(current_triq)?t=$(timestamp)"
+            colorbarT="/$(current_col_triq)?t=$(timestamp)"
 
-        text_nmass=replace(current_triq, "TrIQ_" => "")
-        text_nmass=replace(text_nmass, ".bmp" => "")
-        msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
-        
+            text_nmass=replace(current_triq, "TrIQ_" => "")
+            text_nmass=replace(text_nmass, ".bmp" => "")
+            msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            # Process the image in the function
+            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
+        else
+            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            plotdataImgT = [traceImg]
+            msgtriq = ""
+        end
     end
     @onbutton imgPlusT begin
         # Append a query string to force the image to refresh 
         timestamp=string(time_ns()) 
-        new_msi=increment_image(current_triq, triq_bmp)
-        new_col_msi=increment_image(current_col_triq, col_triq_png)
         # Update the array of images with TrIQ filter listed in the public folder
         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
         col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-        
-        current_triq=new_msi
-        current_col_triq=new_col_msi
-        imgIntT="/$(current_triq)?t=$(timestamp)"
-        colorbarT="/$(current_col_triq)?t=$(timestamp)"
 
-        text_nmass=replace(current_triq, "TrIQ_" => "")
-        text_nmass=replace(text_nmass, ".bmp" => "")
-        msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
+        new_msi=increment_image(current_triq, triq_bmp)
+        new_col_msi=increment_image(current_col_triq, col_triq_png)
+        if new_msi!=nothing || new_col_msi!=nothing
+            current_triq=new_msi
+            current_col_triq=new_col_msi
+            imgIntT="/$(current_triq)?t=$(timestamp)"
+            colorbarT="/$(current_col_triq)?t=$(timestamp)"
+
+            text_nmass=replace(current_triq, "TrIQ_" => "")
+            text_nmass=replace(text_nmass, ".bmp" => "")
+            msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            # Process the image in the function
+            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
+        else
+            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            plotdataImgT = [traceImg]
+            msgtriq = ""
+        end
     end
 
     # 3d plot
@@ -548,59 +795,7 @@ end
             btnStartDisable=true
             btnSpectraDisable=true
             try
-                img=load(var)
-                #println("Image type:", typeof(img))
-                img_gray=Gray.(img) # Convert to grayscale
-                #println("Grayscale image type:", typeof(img_gray)) 
-                img_array=Array(img_gray)
-                elevation=Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
-                #println("Elevation size:", size(elevation)) 
-                # Smooth the image 
-                sigma=3.0
-                kernel=Kernel.gaussian(sigma)
-                #println(size(kernel))
-                elevation_smoothed=imfilter(elevation, kernel) 
-                #println("Smoothed elevation size:", size(elevation_smoothed))
-                # Transpose the elevation_smoothed array
-                # Create the X, Y meshgrid coordinates 
-                x=1:size(elevation_smoothed, 2) 
-                y=1:size(elevation_smoothed, 1)
-                X=repeat(reshape(x, 1, length(x)), length(y), 1)
-                #println("Size of X:", size(X))
-                Y=repeat(reshape(y, length(y), 1), 1, length(x))
-                #println("Size of Y:", size(Y))
-                # Calculate the number of ticks and aspect ratio for the 3d plot
-                x_nticks=min(20, length(x))
-                y_nticks=min(20, length(y))
-                z_nticks=5
-                aspect_ratio=attr(x=1, y=length(y) / length(x), z=0.5)
-
-                # Define the layout for the 3D plot
-                layout3D=PlotlyBase.Layout(
-                    title="3D Surface Plot",
-                    scene=attr(
-                        xaxis_nticks=x_nticks,
-                        yaxis_nticks=y_nticks,
-                        zaxis_nticks=z_nticks, 
-                        camera=attr(eye=attr(x=0, y=-1, z=0.5)), 
-                        aspectratio=aspect_ratio
-                    )
-                )
-                if size(elevation_smoothed, 1) < size(elevation_smoothed, 2)
-                    # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
-                    elevation_smoothed=transpose(elevation_smoothed)
-                    Y=-Y
-                end
-
-                trace3D=PlotlyBase.surface(x=X[1, :], y=Y[:, 1], z=elevation_smoothed,
-                contours_z=attr(
-                    show=true,
-                    usecolormap=true,
-                    highlightcolor="limegreen",
-                    project_z=true
-                ), colorscale="Viridis")
-                plotdata3d=[trace3D] # We add the data from the image to the plot
-                plotlayout3d=layout3D # we update the style of the plot to fit the image.
+                plotdata3d, plotlayout3d = loadSurfacePlot(imgInt)
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -641,53 +836,7 @@ end
             btnStartDisable=true
             btnSpectraDisable=true
             try
-                img=load(var)
-                img_gray=Gray.(img) # Convert to grayscale
-                img_array=Array(img_gray)
-                elevation=Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
-                # Smooth the image 
-                sigma=3.0
-                kernel=Kernel.gaussian(sigma)
-                elevation_smoothed=imfilter(elevation, kernel) 
-                
-                # Create the X, Y meshgrid coordinates 
-                x=1:size(elevation_smoothed, 2) 
-                y=1:size(elevation_smoothed, 1)
-                X=repeat(reshape(x, 1, length(x)), length(y), 1)
-                Y=repeat(reshape(y, length(y), 1), 1, length(x))
-                
-                # Calculate the number of ticks and aspect ratio for the 3d plot
-                x_nticks=min(20, length(x))
-                y_nticks=min(20, length(y))
-                z_nticks=5
-                aspect_ratio=attr(x=1, y=length(y) / length(x), z=0.5)
-
-                # Define the layout for the 3D plot
-                layout3D=PlotlyBase.Layout(
-                    title="3D Surface Plot",
-                    scene=attr(
-                        xaxis_nticks=x_nticks,
-                        yaxis_nticks=y_nticks,
-                        zaxis_nticks=z_nticks, 
-                        camera=attr(eye=attr(x=0, y=-1, z=0.5)), 
-                        aspectratio=aspect_ratio
-                    )
-                )
-                if size(elevation_smoothed, 1) < size(elevation_smoothed, 2)
-                    # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
-                    elevation_smoothed=transpose(elevation_smoothed)
-                    Y=-Y
-                end
-
-                trace3D=PlotlyBase.surface(x=X[1, :], y=Y[:, 1], z=elevation_smoothed,
-                contours_z=attr(
-                    show=true,
-                    usecolormap=true,
-                    highlightcolor="limegreen",
-                    project_z=true
-                ), colorscale="Viridis")
-                plotdata3d=[trace3D] # We add the data from the image to the plot
-                plotlayout3d=layout3D # we update the style of the plot to fit the image.
+                plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT)
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -730,41 +879,7 @@ end
             btnSpectraDisable=true
             try
                 img=load(var)
-                # Convert to grayscale
-                img_gray=Gray.(img)
-                img_array=Array(img_gray)
-                elevation=Float32.(Array(img_gray)) ./ 255.0  # Normalize between 0 and 1
-    
-                # Smooth the image
-                sigma=3.0
-                kernel=Kernel.gaussian(sigma)
-                elevation_smoothed=imfilter(elevation, kernel)
-    
-                # Create the X, Y meshgrid coordinates
-                x=1:size(elevation_smoothed, 2)
-                y=1:size(elevation_smoothed, 1)
-                X=repeat(reshape(x, 1, length(x)), length(y), 1)
-                Y=repeat(reshape(y, length(y), 1), 1, length(x))
-                
-                layoutContour=PlotlyBase.Layout(
-                    title="2D Topographic Map",
-                    xaxis=PlotlyBase.attr(
-                        title="X",
-                        scaleanchor="y"
-                    ),
-                    yaxis=PlotlyBase.attr(
-                        title="Y"
-                    ),
-                )
-                traceContour=PlotlyBase.contour(
-                    z=elevation_smoothed,
-                    x=X[1, :],  # Use the first row
-                    y=-Y[:, 1],  # Use the first column
-                    contours_coloring="Viridis",
-                    colorscale="Viridis"
-                )
-                plotdataC=[traceContour]
-                plotlayoutC=layoutContour
+                plotdataC,plotlayoutC=loadContourPlot(imgInt)
                 GC.gc()  # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
@@ -806,41 +921,7 @@ end
             btnSpectraDisable=true
             try
                 img=load(var)
-                # Convert to grayscale
-                img_gray=Gray.(img)
-                img_array=Array(img_gray)
-                elevation=Float32.(Array(img_gray)) ./ 255.0  # Normalize between 0 and 1
-    
-                # Smooth the image
-                sigma=3.0
-                kernel=Kernel.gaussian(sigma)
-                elevation_smoothed=imfilter(elevation, kernel)
-    
-                # Create the X, Y meshgrid coordinates
-                x=1:size(elevation_smoothed, 2)
-                y=1:size(elevation_smoothed, 1)
-                X=repeat(reshape(x, 1, length(x)), length(y), 1)
-                Y=repeat(reshape(y, length(y), 1), 1, length(x))
-                
-                layoutContour=PlotlyBase.Layout(
-                    title="2D Topographic Map",
-                    xaxis=PlotlyBase.attr(
-                        title="X",
-                        scaleanchor="y"
-                    ),
-                    yaxis=PlotlyBase.attr(
-                        title="Y"
-                    ),
-                )
-                traceContour=PlotlyBase.contour(
-                    z=elevation_smoothed,
-                    x=X[1, :],  # Use the first row
-                    y=-Y[:, 1],  # Use the first column
-                    contours_coloring="Viridis",
-                    colorscale="Viridis"
-                )
-                plotdataC=[traceContour]
-                plotlayoutC=layoutContour
+                plotdataC,plotlayoutC=loadContourPlot(imgIntT)
                 GC.gc()  # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
@@ -877,50 +958,90 @@ end
 
     # Event detection for clicking on the spectrum plot
     @onchange data_click begin
-        if !isempty(xSpectraMz)
-            #println("Clicked data on sum spectrum plot : ", data_click)
-            spectracoords=reshape(plotdata, 1, length(plotdata))
-            #println("Spectra: $(ndims(spectracoords))")
-            # Extract x and y values from data_click 
-            cursor_data=data_click["cursor"] 
-            x_value = cursor_data["x"]
-            y_value = cursor_data["y"]  # Get the x and y values from the click of the cursor
-            closest_distance = Inf
-            
-            for val in spectracoords
-                # Find the index where x is within a range
-                start_idx = findfirst(x -> x >= x_value - 10, val[:x])
-                end_idx = findlast(x -> x <= x_value + 10, val[:x])
+        if selectedTab == "tab2"
+            if !isempty(xSpectraMz)
+                #println("Clicked data on sum spectrum plot : ", data_click)
+                spectracoords=reshape(plotdata, 1, length(plotdata))
+                #println("Spectra: $(ndims(spectracoords))")
+                # Extract x and y values from data_click 
+                cursor_data=data_click["cursor"] 
+                x_value = cursor_data["x"]
+                y_value = cursor_data["y"]  # Get the x and y values from the click of the cursor
+                closest_distance = Inf
                 
-                # Ensure the index are valid and within range
-                if start_idx !== nothing && end_idx !== nothing
-                    for i in start_idx:end_idx
-                        spectra_x = val[:x][i]
-                        spectra_y = val[:y][i]
-                        distance = sqrt((spectra_x - x_value)^2 + (spectra_y - y_value)^2)  # Calculate distance
-                        if distance < closest_distance
-                            closest_distance = distance
-                            Nmass = round(spectra_x, digits=2)
+                for val in spectracoords
+                    # Find the index where x is within a range
+                    start_idx = findfirst(x -> x >= x_value - 10, val[:x])
+                    end_idx = findlast(x -> x <= x_value + 10, val[:x])
+                    
+                    # Ensure the index are valid and within range
+                    if start_idx !== nothing && end_idx !== nothing
+                        for i in start_idx:end_idx
+                            spectra_x = val[:x][i]
+                            spectra_y = val[:y][i]
+                            distance = sqrt((spectra_x - x_value)^2 + (spectra_y - y_value)^2)  # Calculate distance
+                            if distance < closest_distance
+                                closest_distance = distance
+                                Nmass = round(spectra_x, digits=2)
+                            end
                         end
                     end
                 end
+                layoutSpectra=PlotlyBase.Layout(
+                            title="SUM Spectrum plot",
+                            xaxis=PlotlyBase.attr(
+                                title="<i>m/z</i>",
+                                showgrid=true
+                            ),
+                            yaxis=PlotlyBase.attr(
+                                title="Intensity",
+                                showgrid=true
+                            ),
+                            autosize=false
+                    )
+                traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines",name="Spectra",showlegend=false)
+                trace2=PlotlyBase.scatter(x=[Nmass, Nmass],y=[0, maximum(ySpectraMz)],mode="lines",line=attr(color="red", width=0.5),name="<i>m/z</i> selected",showlegend=false)
+                plotdata=[traceSpectra,trace2] # We add the data from spectra and the red line to the plot
+                plotlayout=layoutSpectra
             end
-            layoutSpectra=PlotlyBase.Layout(
-                        title="SUM Spectrum plot",
-                        xaxis=PlotlyBase.attr(
-                            title="<i>m/z</i>",
-                            showgrid=true
-                        ),
-                        yaxis=PlotlyBase.attr(
-                            title="Intensity",
-                            showgrid=true
-                        ),
-                        autosize=false
-                )
-            traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines",name="Spectra",showlegend=false)
-            trace2=PlotlyBase.scatter(x=[Nmass, Nmass],y=[0, maximum(ySpectraMz)],mode="lines",line=attr(color="red", width=0.5),name="<i>m/z</i> selected",showlegend=false)
-            plotdata=[traceSpectra,trace2] # We add the data from spectra and the red line to the plot
-            plotlayout=layoutSpectra
+        elseif selectedTab == "tab1"
+            #println("you have clicked the triq image")
+            cursor_data=data_click["cursor"] 
+            xCoord = Int32(round(cursor_data["x"]))
+            if xCoord < 0
+                xCoord = 0
+            elseif xCoord > imgWidth
+                xCoord = imgWidth
+            end
+            yCoord = Int32(round(cursor_data["y"]))
+            if yCoord > 0
+                yCoord = 0
+            elseif yCoord < -imgHeight
+                yCoord = -imgHeight
+            end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
+            #plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
+            plotdataImgT = filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImgT)
+            trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
+            plotdataImgT=append!(plotdataImgT, [trace1, trace2])
+        elseif selectedTab == "tab0"
+            #println("you have clicked the normal image")
+            cursor_data=data_click["cursor"] 
+            xCoord = Int32(round(cursor_data["x"]))
+            if xCoord < 0
+                xCoord = 0
+            elseif xCoord > imgWidth
+                xCoord = imgWidth
+            end
+            yCoord = Int32(round(cursor_data["y"]))  
+            if yCoord > 0
+                yCoord = 0
+            elseif yCoord < -imgHeight
+                yCoord = -imgHeight
+            end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
+            #plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+            plotdataImg = filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImg)
+            trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
+            plotdataImg=append!(plotdataImg, [trace1, trace2])
         end
     end
 
@@ -934,12 +1055,12 @@ end
         ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
     end
 end
-# ==Pages ==
+# == Pages ==
 # Register a new route and the page that will be loaded on access
 @page("/", "app.jl.html")
 end
 
-# ==Advanced features ==
+# == Advanced features ==
 #=
 - The @private macro defines a reactive variable that is not sent to the browser.
 This is useful for storing data that is unique to each user session but is not needed

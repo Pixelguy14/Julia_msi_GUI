@@ -9,12 +9,12 @@ A Graphical User Interface for MSI in Julia: https://github.com/CINVESTAV-LABI/j
    unzip the file in your desired location<br>
 
 ## Load User Interface
-1. Set working directory to Julia_msi_GUI (this repository) in your terminal using:
-   linux:
+1. Set working directory to Julia_msi_GUI (this repository) in your terminal using:<br>
+   Linux:
    ```
    cd PathToRepository/Julia_msi_GUI-main
    ```
-   windows/mac:
+   Windows/Mac:
    ```
    cd PathToRepository\Julia_msi_GUI-main
    ```
@@ -24,7 +24,7 @@ A Graphical User Interface for MSI in Julia: https://github.com/CINVESTAV-LABI/j
    ```
 3. After the script has finished loading, it should open a page (http://127.0.0.1:1481/) in your browser with the web app running.
 
-Additional notes:
-After the first boot initializes the packages in your computer, subsequent uses of the app should not take longer to load.
-Recomended system requirements: 4 core processor, 8 GB ram
-Minimum system requirements: 2 core processor, 8 GB ram (long loading times)
+Additional notes:<br>
+After the first boot initializes the packages in your computer, subsequent uses of the app should not take longer to load.<br>
+Recomended system requirements: 4 core processor, 8 GB ram<br>
+Minimum system requirements: 2 core processor, 8 GB ram (long loading times)<br>

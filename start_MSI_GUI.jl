@@ -37,6 +37,8 @@ Genie.loadapp()
         @async run(`xdg-open $url`) # For Linux
     elseif Sys.iswindows()
         @async run(`start $url`) # For Windows
+        @async run(`explorer $url`)
+        @async run(`Start-Process $url`) # For Windows
     end
 end
 

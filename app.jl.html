@@ -160,7 +160,8 @@
             <!-- Image manager -->
             <div id="image-container" class="row st-col col-12">
               <div class="col-10">
-                <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" width="80%"></q-img>
+                <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
+                <!--<q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" width="80%"></q-img>-->
               </div>
               <div class="col-2">
                 <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
@@ -180,7 +181,8 @@
             <!-- Triq Image manager -->
             <div id="image-container" class="row st-col col-12">
               <div class="col-10">
-                <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" width="80%"></q-img>
+                <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
+                <!--<q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" width="80%"></q-img>-->
               </div>
               <div class="col-2">
                 <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
@@ -192,8 +194,7 @@
           <q-tab-panel name="tab2">
             <!-- Content for Tab 2 -->
             <!--<plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>-->
-            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" @click="data_click"
-              class="q-pa-none q-ma-none sync_data"></plotly>
+            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
           </q-tab-panel>
           
           <q-tab-panel name="tab3">
@@ -246,7 +247,7 @@
                 <!-- Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="st-col col-10">
-                    <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" width="80%"></q-img>
+                    <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none"></plotly>
                   </div>
                   <div class="st-col col-2">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
@@ -265,7 +266,7 @@
                 <!-- Triq Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10">
-                    <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" width="80%"></q-img>
+                    <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none"></plotly>
                   </div>
                   <div class="col-2">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
@@ -301,7 +302,7 @@
                 <!-- Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="st-col col-10">
-                    <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" width="80%"></q-img>
+                    <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none"></plotly>
                   </div>
                   <div class="st-col col-2">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
@@ -320,7 +321,7 @@
                 <!-- Triq Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10">
-                    <q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" width="80%"></q-img>
+                    <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none"></plotly>
                   </div>
                   <div class="col-2">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
