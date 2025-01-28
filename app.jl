@@ -18,7 +18,6 @@ using StipplePlotly
 # == Code import ==
 # add your data analysis code here or in the lib folder. Code in lib/ will be
 # automatically loaded
-rgb_ViridisPalette=reinterpret(ColorTypes.RGB24, ViridisPalette)
 
 # == Search functions ==
 function increment_image(current_image, image_list)
@@ -62,50 +61,50 @@ function loadImgPlot(interfaceImg::String)
     elevation=Float32.(Array(img_gray))
     #println(typeof(elevation))
     # Get the X, Y coordinates of the image
-    height, width = size(img_array)
+    height, width=size(img_array)
     #println("height: $(height), width: $(width)")
-    X = collect(1:width)
-    Y = collect(1:height)
+    X=collect(1:width)
+    Y=collect(1:height)
 
     # Create the layout
-    layout = PlotlyBase.Layout(
-        xaxis = PlotlyBase.attr(
-            visible = false,
-            scaleanchor = "y"
+    layout=PlotlyBase.Layout(
+        xaxis=PlotlyBase.attr(
+            visible=false,
+            scaleanchor="y"
         ),
-        yaxis = PlotlyBase.attr(
-            visible = false
+        yaxis=PlotlyBase.attr(
+            visible=false
         )
     )
 
     # Create the trace for the image
-    trace = PlotlyBase.heatmap(
-        z = elevation,
-        x = X,
-        y = -Y,
+    trace=PlotlyBase.heatmap(
+        z=elevation,
+        x=X,
+        y=-Y,
         name="",
         showlegend=false,
-        colorscale = "Viridis",
-        showscale = true,
-        colorbar = attr(
-            title = attr(
-                text = "Intensity",
-                font = attr(
-                    size = 14,
-                    color = "black"
+        colorscale="Viridis",
+        showscale=false,
+        colorbar=attr(
+            title=attr(
+                text="Intensity",
+                font=attr(
+                    size=14,
+                    color="black"
                 ),
-                side = "right"
+                side="right"
             ),
-            ticks = "outside",
-            ticklen = 2,
-            tickwidth = 0.5,
-            nticks = 5,
-            tickformat = ".2g"
+            ticks="outside",
+            ticklen=2,
+            tickwidth=0.5,
+            nticks=5,
+            tickformat=".2g"
         )
     )
 
-    plotdata = [trace]
-    plotlayout = layout
+    plotdata=[trace]
+    plotlayout=layout
     return plotdata, plotlayout, width, height
 end
 # loadContourPlot recieves the local directory of the image as a string,
@@ -149,12 +148,12 @@ function loadContourPlot(interfaceImg::String)
         y=-Y[:, 1],  # Use the first column
         contours_coloring="Viridis", 
         colorscale="Viridis",
-        colorbar = attr(
-            tickformat = ".2g"
+        colorbar=attr(
+            tickformat=".2g"
         )
     )
-    plotdata = [trace]
-    plotlayout = layout
+    plotdata=[trace]
+    plotlayout=layout
     return plotdata, plotlayout
 end
 # loadSurfacePlot recieves the local directory of the image as a string,
@@ -220,25 +219,25 @@ function loadSurfacePlot(interfaceImg::String)
             project_z=true
         ), 
         colorscale="Viridis",
-        colorbar = attr(
-            tickformat = ".2g"
+        colorbar=attr(
+            tickformat=".2g"
         )
     )
-    plotdata = [trace3D]
-    plotlayout = layout3D
+    plotdata=[trace3D]
+    plotlayout=layout3D
     return plotdata, plotlayout
 end
 
 function crossLinesPlot(x, y, maxwidth, maxheight)
     # Define the coordinates for the two lines
-    l1_x = [0, maxwidth]
-    l1_y = [y, y]
-    l2_x = [x, x]
-    l2_y = [0, maxheight]
+    l1_x=[0, maxwidth]
+    l1_y=[y, y]
+    l2_x=[x, x]
+    l2_y=[0, maxheight]
 
     # Create the line traces
-    trace1 = PlotlyBase.scatter(x = l1_x, y = l1_y, mode = "lines",line=attr(color="red", width=0.5),name="Line X",showlegend=false)
-    trace2 = PlotlyBase.scatter(x = l2_x, y = l2_y, mode = "lines",line=attr(color="red", width=0.5),name="Line Y",showlegend=false)
+    trace1=PlotlyBase.scatter(x=l1_x, y=l1_y, mode="lines",line=attr(color="red", width=0.5),name="Line X",showlegend=false)
+    trace2=PlotlyBase.scatter(x=l2_x, y=l2_y, mode="lines",line=attr(color="red", width=0.5),name="Line Y",showlegend=false)
 
     return trace1, trace2
 end
@@ -272,9 +271,9 @@ end
     @in file_route=""
     @in file_name=""
     @in Nmass=0.0
-    @in Tol=0.0
+    @in Tol=0.1
     @in triqProb=0.98
-    @in triqColor=256
+    @in colorLevel=20
 
     ## Interface Buttons
     @in btnSearch=false # To search for files in your device
@@ -340,21 +339,21 @@ end
 
     ## Plots
     # Local image to plot
-    layoutImg = PlotlyBase.Layout(
-        xaxis = PlotlyBase.attr(
-            visible = false,
-            scaleanchor = "y"
+    layoutImg=PlotlyBase.Layout(
+        xaxis=PlotlyBase.attr(
+            visible=false,
+            scaleanchor="y"
         ),
-        yaxis = PlotlyBase.attr(
-            visible = false
+        yaxis=PlotlyBase.attr(
+            visible=false
         )
     )
     traceImg=PlotlyBase.heatmap(x=[], y=[])
-    @out plotdataImg = [traceImg]
-    @out plotlayoutImg = layoutImg
+    @out plotdataImg=[traceImg]
+    @out plotlayoutImg=layoutImg
     # For triq image 
-    @out plotdataImgT = [traceImg]
-    @out plotlayoutImgT = layoutImg
+    @out plotdataImgT=[traceImg]
+    @out plotlayoutImgT=layoutImg
     # Interface Plot Spectrum
     layoutSpectra=PlotlyBase.Layout(
         title="SUM Spectrum plot",
@@ -475,12 +474,12 @@ end
                 # Append a query string to force the image to refresh 
                 timestamp=string(time_ns()) 
                 if triqEnabled # If we have TrIQ
-                    if triqColor < 1 || triqColor > 256 ||triqProb < 0 || triqProb > 1
+                    if colorLevel < 2 || colorLevel > 256 ||triqProb < 0.8 || triqProb > 1
                         msg="Incorrect TrIQ values, please adjust accordingly and try again."
                         warning_msg=true
                     else
                         image_path=joinpath("./public", "TrIQ_$(text_nmass).bmp")
-                        SaveBitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"),TrIQ(slice, Int(triqColor), triqProb),ViridisPalette)
+                        SaveBitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"),TrIQ(slice, Int(colorLevel), triqProb),ViridisPalette)
                         # Flip te image vertically then save it again
                         img=load(image_path)
                         if size(img, 1) > size(img, 2) # fix to taller images 
@@ -492,13 +491,17 @@ end
                         save(image_path, flipped_img)
                         # Use timestamp to refresh image interface container
                         imgIntT="/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
-                        plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
+                        plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
                         # Get current image 
                         current_triq="TrIQ_$(text_nmass).bmp"
                         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
                         # Create colorbar 
-                        ticks=round.(range(0, stop=maximum(TrIQ(slice, Int(triqColor), triqProb)), length=10), sigdigits=3)
-                        Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(TrIQ(slice, Int(triqColor), triqProb))),ticks=ticks, label="Intensity")
+                        #ticks=round.(range(0, stop=maximum(TrIQ(slice, Int(colorLevel), triqProb)), length=10), sigdigits=3)
+                        #println("ticks: $(round.(range(0, stop=maximum(TrIQ(slice, Int(colorLevel), triqProb)), length=10), sigdigits=3))")
+                        ticks=round.(range(0, (stop=maximum(slice)*triqProb), length=15), sigdigits=3)
+                        #println("ticks 2: $(round.(range(0, (stop=maximum(slice)*triqProb), length=15), sigdigits=3))")
+                        #Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(TrIQ(slice, Int(colorLevel), triqProb))),ticks=ticks, label="Intensity")
+                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks, label="Intensity")
                         save("public/colorbar_TrIQ_$(text_nmass).png", fig)
                         colorbarT="/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
                         # Get current colorbar 
@@ -527,13 +530,15 @@ end
                     save(image_path, flipped_img)
                     # Use timestamp to refresh image interface container
                     imgInt="/MSI_$(text_nmass).bmp?t=$(timestamp)"
-                    plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+                    plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
                     # Get current image 
                     current_msi="MSI_$(text_nmass).bmp"
                     msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
                     # Create colorbar 
-                    ticks=round.(range(0, stop=maximum(slice), length=10), sigdigits=3)
-                    Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(slice)),ticks=ticks, label="Intensity")
+                    #ticks=round.(range(0, stop=maximum(slice), length=10), sigdigits=3)
+                    ticks=round.(range(0, stop=maximum(slice), length=15), sigdigits=3)
+                    #Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(slice)),ticks=ticks, label="Intensity")
+                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, 256, categorical=true), limits=(0, maximum(slice)),ticks=ticks, label="Intensity")
                     save("public/colorbar_MSI_$(text_nmass).png", fig)
                     colorbar="/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
                     # Get current colorbar 
@@ -694,11 +699,11 @@ end
             text_nmass=replace(text_nmass, ".bmp" => "")
             msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
-            plotdataImg = [traceImg]
-            msgimg = ""
+            plotdataImg=[traceImg]
+            msgimg=""
         end
     end
     @onbutton imgPlus begin
@@ -720,11 +725,11 @@ end
             text_nmass=replace(text_nmass, ".bmp" => "")
             msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
-            plotdataImg = [traceImg]
-            msgimg = ""
+            plotdataImg=[traceImg]
+            msgimg=""
         end
     end
 
@@ -747,11 +752,11 @@ end
             text_nmass=replace(text_nmass, ".bmp" => "")
             msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
+            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
-            plotdataImgT = [traceImg]
-            msgtriq = ""
+            plotdataImgT=[traceImg]
+            msgtriq=""
         end
     end
     @onbutton imgPlusT begin
@@ -773,11 +778,11 @@ end
             text_nmass=replace(text_nmass, ".bmp" => "")
             msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
+            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
-            plotdataImgT = [traceImg]
-            msgtriq = ""
+            plotdataImgT=[traceImg]
+            msgtriq=""
         end
     end
 
@@ -795,7 +800,7 @@ end
             btnStartDisable=true
             btnSpectraDisable=true
             try
-                plotdata3d, plotlayout3d = loadSurfacePlot(imgInt)
+                plotdata3d, plotlayout3d=loadSurfacePlot(imgInt)
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -836,7 +841,7 @@ end
             btnStartDisable=true
             btnSpectraDisable=true
             try
-                plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT)
+                plotdata3d, plotlayout3d=loadSurfacePlot(imgIntT)
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -965,24 +970,24 @@ end
                 #println("Spectra: $(ndims(spectracoords))")
                 # Extract x and y values from data_click 
                 cursor_data=data_click["cursor"] 
-                x_value = cursor_data["x"]
-                y_value = cursor_data["y"]  # Get the x and y values from the click of the cursor
-                closest_distance = Inf
+                x_value=cursor_data["x"]
+                y_value=cursor_data["y"]  # Get the x and y values from the click of the cursor
+                closest_distance=Inf
                 
                 for val in spectracoords
                     # Find the index where x is within a range
-                    start_idx = findfirst(x -> x >= x_value - 10, val[:x])
-                    end_idx = findlast(x -> x <= x_value + 10, val[:x])
+                    start_idx=findfirst(x -> x >= x_value - 10, val[:x])
+                    end_idx=findlast(x -> x <= x_value + 10, val[:x])
                     
                     # Ensure the index are valid and within range
                     if start_idx !== nothing && end_idx !== nothing
                         for i in start_idx:end_idx
-                            spectra_x = val[:x][i]
-                            spectra_y = val[:y][i]
-                            distance = sqrt((spectra_x - x_value)^2 + (spectra_y - y_value)^2)  # Calculate distance
+                            spectra_x=val[:x][i]
+                            spectra_y=val[:y][i]
+                            distance=sqrt((spectra_x - x_value)^2 + (spectra_y - y_value)^2)  # Calculate distance
                             if distance < closest_distance
-                                closest_distance = distance
-                                Nmass = round(spectra_x, digits=2)
+                                closest_distance=distance
+                                Nmass=round(spectra_x, digits=2)
                             end
                         end
                     end
@@ -1007,40 +1012,40 @@ end
         elseif selectedTab == "tab1"
             #println("you have clicked the triq image")
             cursor_data=data_click["cursor"] 
-            xCoord = Int32(round(cursor_data["x"]))
+            xCoord=Int32(round(cursor_data["x"]))
             if xCoord < 0
-                xCoord = 0
+                xCoord=0
             elseif xCoord > imgWidth
-                xCoord = imgWidth
+                xCoord=imgWidth
             end
-            yCoord = Int32(round(cursor_data["y"]))
+            yCoord=Int32(round(cursor_data["y"]))
             if yCoord > 0
-                yCoord = 0
+                yCoord=0
             elseif yCoord < -imgHeight
-                yCoord = -imgHeight
+                yCoord=-imgHeight
             end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
-            #plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
-            plotdataImgT = filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImgT)
-            trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
+            #plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
+            plotdataImgT=filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImgT)
+            trace1, trace2=crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
             plotdataImgT=append!(plotdataImgT, [trace1, trace2])
         elseif selectedTab == "tab0"
             #println("you have clicked the normal image")
             cursor_data=data_click["cursor"] 
-            xCoord = Int32(round(cursor_data["x"]))
+            xCoord=Int32(round(cursor_data["x"]))
             if xCoord < 0
-                xCoord = 0
+                xCoord=0
             elseif xCoord > imgWidth
-                xCoord = imgWidth
+                xCoord=imgWidth
             end
-            yCoord = Int32(round(cursor_data["y"]))  
+            yCoord=Int32(round(cursor_data["y"]))  
             if yCoord > 0
-                yCoord = 0
+                yCoord=0
             elseif yCoord < -imgHeight
-                yCoord = -imgHeight
+                yCoord=-imgHeight
             end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
-            #plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
-            plotdataImg = filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImg)
-            trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
+            #plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
+            plotdataImg=filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImg)
+            trace1, trace2=crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
             plotdataImg=append!(plotdataImg, [trace1, trace2])
         end
     end

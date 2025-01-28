@@ -60,10 +60,10 @@
           <div class="st-col col-12 col-sm q-ma-sm">
             <q-input standout="custom-standout" id="textNmass" step="0.01" v-model="Nmass"
               label="Mass-to-charge ratio of interest" type="number"
-              :rules="[ val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 2000.0 || 'Need positive mass values',]"></q-input>
+              :rules="[ val => !!val || '* Required', val => val >= 0.0 || 'Need positive mass values',]"></q-input>
           </div>
           <div class="st-col col-12 col-sm q-ma-sm">
-            <q-input standout="custom-standout" id="textTol" step="0.01" v-model="Tol"
+            <q-input standout="custom-standout" id="textTol" step="0.05" v-model="Tol"
               label="Mass-to-charge ratio tolerance" type="number"
               :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1',]"></q-input>
           </div>
@@ -73,19 +73,19 @@
           <div class="col-6">
             <div class="st-col col-6 col-sm q-ma-sm">
               <q-toggle id="btnEnableTriq" v-on:click="triqEnabled" v-model="triqEnabled" color="blue"
-                label="Add Threshold Intensity Quantization (TrIQ)!"></q-toggle>
+                label="Add Threshold Intensity Quantization (TrIQ)"></q-toggle>
             </div>
             <div class="row">
               <div class="st-col col-4 col-sm-4 q-ma-sm">
                 <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb"
                   label="TrIQ probability" type="number" :rules="[
-                        val => triqEnabled ? ( '* Required', val >= 0 &amp;&amp; val <= 1 || 'Needs to be in range between 0 and 1') : true
+                        val => triqEnabled ? ( '* Required', val >= 0.8 &amp;&amp; val <= 1 || 'Needs to be in range between 0.8 and 1') : true
                         ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
               </div>
               <div class="st-col col-4 col-sm-4 q-ma-sm">
-                <q-input standout="custom-standout" id="textTriqColor" step="1" v-model="triqColor"
+                <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel"
                   label="TrIQ color levels" type="number" :rules="[
-                        val => triqEnabled ? ( '* Required', val >= 0 &amp;&amp; val <= 256  || 'Needs to be in range between 1 and 256') : true
+                        val => triqEnabled ? ( '* Required', val >= 2 &amp;&amp; val <= 256  || 'Needs to be in range between 2 and 256') : true
                         ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
               </div>
             </div>
