@@ -54,12 +54,13 @@ function loadImgPlot(interfaceImg::String)
     cleaned_img=lstrip(cleaned_img, '/')
     var=joinpath("./public", cleaned_img)
     img=load(var)
+    println("type of img: $(typeof(img))")
     # Convert to grayscale
     img_gray=Gray.(img)
     img_array=Array(img_gray)
     #println(typeof(img_array))
-    elevation=Float32.(Array(img_gray))
-    #println(typeof(elevation))
+    elevation=Float32.(Array(img_array)) ./ 255.0
+    println("type of elevation: $(typeof(elevation))")
     # Get the X, Y coordinates of the image
     height, width=size(img_array)
     #println("height: $(height), width: $(width)")
@@ -434,22 +435,40 @@ end
     # The onbutton handler will set the variable to false after the block is executed
 
     @onbutton btnSearch begin
-        full_route=pick_file(; filterlist="imzML")
+        full_route=pick_file(; filterlist="imzML,mzML")
         if isnothing(full_route)
             #println("No file selected")
             msg="No file selected"
             warning_msg=true
             btnStartDisable=true
         else
-            #println("Selected file path: ", full_route)
-            btnStartDisable=false
-            btnPlotDisable=false
-            # Splitting the route with regex from imzml to mzml so the plotting can work
-            full_routeMz=replace(full_route, r"\.[^.]*$" => ".mzML") 
-            if isfile(full_routeMz)
-                # We enable coord search and spectra plot creation
+            if endswith(full_route, "imzML") # Case if the file loaded is imzML
+                #println("Selected file path: ", full_route)
+                btnStartDisable=false
+                btnPlotDisable=false
+                # Splitting the route with regex from imzml to mzml so the plotting can work
+                full_routeMz=replace(full_route, r"\.[^.]*$" => ".mzML") 
+                if isfile(full_routeMz)
+                    # We enable coord search and spectra plot creation
+                    btnSpectraDisable=false
+                    SpectraEnabled=true
+                else
+                    # If there's no MzML file, we deny access again
+                    btnSpectraDisable=true
+                    SpectraEnabled=false
+                end
+            else # Case if the file loaded is mzML
+                full_routeMz=full_route
                 btnSpectraDisable=false
                 SpectraEnabled=true
+                # Splitting the route the same way
+                full_route=replace(full_route, r"\.[^.]*$" => ".imzML") 
+                if isfile(full_route)
+                    btnStartDisable=false
+                else
+                    btnStartDisable=true
+                    full_route=full_routeMz
+                end
             end
             xCoord=0
             yCoord=0
@@ -470,11 +489,11 @@ end
                 spectra=LoadImzml(full_route)
                 msg="File loaded. Creating Spectra with the specific mass and tolerance, please be patient."
                 slice=GetSlice(spectra, Nmass, Tol)
-                fig=CairoMakie.Figure(size=(120, 220)) # Container
+                fig=CairoMakie.Figure(size=(140, 440)) # Container
                 # Append a query string to force the image to refresh 
                 timestamp=string(time_ns()) 
                 if triqEnabled # If we have TrIQ
-                    if colorLevel < 2 || colorLevel > 256 ||triqProb < 0.8 || triqProb > 1
+                    if colorLevel < 4 || colorLevel > 256 || triqProb < 0.8 || triqProb > 1
                         msg="Incorrect TrIQ values, please adjust accordingly and try again."
                         warning_msg=true
                     else
@@ -501,7 +520,7 @@ end
                         ticks=round.(range(0, (stop=maximum(slice)*triqProb), length=15), sigdigits=3)
                         #println("ticks 2: $(round.(range(0, (stop=maximum(slice)*triqProb), length=15), sigdigits=3))")
                         #Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(TrIQ(slice, Int(colorLevel), triqProb))),ticks=ticks, label="Intensity")
-                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks, label="Intensity")
+                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks, label="Intensity", size = 25)
                         save("public/colorbar_TrIQ_$(text_nmass).png", fig)
                         colorbarT="/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
                         # Get current colorbar 
@@ -538,7 +557,7 @@ end
                     #ticks=round.(range(0, stop=maximum(slice), length=10), sigdigits=3)
                     ticks=round.(range(0, stop=maximum(slice), length=15), sigdigits=3)
                     #Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(slice)),ticks=ticks, label="Intensity")
-                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, 256, categorical=true), limits=(0, maximum(slice)),ticks=ticks, label="Intensity")
+                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, 256, categorical=true), limits=(0, maximum(slice)),ticks=ticks, label="Intensity", size = 25)
                     save("public/colorbar_MSI_$(text_nmass).png", fig)
                     colorbar="/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
                     # Get current colorbar 
@@ -620,7 +639,9 @@ end
         end
         progressSpectraPlot=false
         btnPlotDisable=false
-        btnStartDisable=false
+        if endswith(full_route, "imzML")
+            btnStartDisable=false
+        end
         if isfile(full_routeMz)
             # We enable coord search and spectra plot creation
             btnSpectraDisable=false
@@ -670,7 +691,9 @@ end
         end
         progressSpectraPlot=false
         btnPlotDisable=false
-        btnStartDisable=false
+        if endswith(full_route, "imzML")
+            btnStartDisable=false
+        end
         if isfile(full_routeMz)
             # We enable coord search and spectra plot creation
             btnSpectraDisable=false

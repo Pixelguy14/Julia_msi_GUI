@@ -14,9 +14,9 @@
       <!-- Left DIV -->
       <div id="intDivStyle" class="st-col col-12 st-module">
         <!--<q-input id="textRoute" standout="custom-standout" v-model="file_route" label="Insert the route to your imzML file"></q-input>-->
-        <h6>Search for your imzML file in your device</h6>
+        <h6>Search for the imzML or mzML file in your system</h6>
         <q-btn id="btnStyle" icon="search" class="q-ma-sm" v-on:click="btnSearch=true"
-          label="Search in your device for the imzML file"></q-btn>
+          label="Select your imzML or mzML file"></q-btn>
         <!--<p>{{full_route}}</p>-->
         <div class="row st-col col-12">
           <!--<q-input id="textName" class="col-9" standout="custom-standout" v-model="file_name" label="Insert the name of your imzML file"></q-input>-->
@@ -85,7 +85,7 @@
               <div class="st-col col-4 col-sm-4 q-ma-sm">
                 <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel"
                   label="TrIQ color levels" type="number" :rules="[
-                        val => triqEnabled ? ( '* Required', val >= 2 &amp;&amp; val <= 256  || 'Needs to be in range between 2 and 256') : true
+                        val => triqEnabled ? ( '* Required', val >= 4 &amp;&amp; val <= 256  || 'Needs to be in range between 2 and 256') : true
                         ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
               </div>
             </div>
@@ -159,11 +159,11 @@
             </div>
             <!-- Image manager -->
             <div id="image-container" class="row st-col col-12">
-              <div class="col-10">
+              <div class="col-10 q-pa-none q-ma-none ">
                 <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
                 <!--<q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" width="80%"></q-img>-->
               </div>
-              <div class="col-2">
+              <div class="col-2 q-pa-none q-ma-none ">
                 <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
               </div>
             </div>
@@ -180,11 +180,11 @@
             </div>
             <!-- Triq Image manager -->
             <div id="image-container" class="row st-col col-12">
-              <div class="col-10">
+              <div class="col-10 q-pa-none q-ma-none ">
                 <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
                 <!--<q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" width="80%"></q-img>-->
               </div>
-              <div class="col-2">
+              <div class="col-2 q-pa-none q-ma-none ">
                 <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
               </div>
             </div>
@@ -246,10 +246,10 @@
                 </div>
                 <!-- Image manager -->
                 <div id="image-container" class="row st-col col-12">
-                  <div class="st-col col-10">
+                  <div class="col-10 q-pa-none q-ma-none ">
                     <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none"></plotly>
                   </div>
-                  <div class="st-col col-2">
+                  <div class="col-2">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
                   </div>
                 </div>
@@ -265,7 +265,7 @@
                 </div>
                 <!-- Triq Image manager -->
                 <div id="image-container" class="row st-col col-12">
-                  <div class="col-10">
+                  <div class="col-10 q-pa-none q-ma-none ">
                     <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none"></plotly>
                   </div>
                   <div class="col-2">
@@ -301,10 +301,10 @@
                 </div>
                 <!-- Image manager -->
                 <div id="image-container" class="row st-col col-12">
-                  <div class="st-col col-10">
+                  <div class="col-10 q-pa-none q-ma-none ">
                     <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none"></plotly>
                   </div>
-                  <div class="st-col col-2">
+                  <div class="col-2 q-pa-none q-ma-none ">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
                   </div>
                 </div>
@@ -320,10 +320,10 @@
                 </div>
                 <!-- Triq Image manager -->
                 <div id="image-container" class="row st-col col-12">
-                  <div class="col-10">
+                  <div class="col-10 q-pa-none q-ma-none ">
                     <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none"></plotly>
                   </div>
-                  <div class="col-2">
+                  <div class="col-2 q-pa-none q-ma-none ">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
                   </div>
                 </div>
