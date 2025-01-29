@@ -13,6 +13,7 @@ using Images
 using LinearAlgebra
 using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
+include("./julia_imzML_visual.jl")
 @genietools
 
 # == Code import ==
@@ -54,13 +55,13 @@ function loadImgPlot(interfaceImg::String)
     cleaned_img=lstrip(cleaned_img, '/')
     var=joinpath("./public", cleaned_img)
     img=load(var)
-    println("type of img: $(typeof(img))")
+    #println("type of img: $(typeof(img))")
     # Convert to grayscale
     img_gray=Gray.(img)
     img_array=Array(img_gray)
     #println(typeof(img_array))
     elevation=Float32.(Array(img_array)) ./ 255.0
-    println("type of elevation: $(typeof(elevation))")
+    #println("type of elevation: $(typeof(elevation))")
     # Get the X, Y coordinates of the image
     height, width=size(img_array)
     #println("height: $(height), width: $(width)")
@@ -203,10 +204,12 @@ function loadSurfacePlot(interfaceImg::String)
             aspectratio=aspect_ratio
         )
     )
+    # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
+    elevation_smoothed=transpose(elevation_smoothed)
     if size(elevation_smoothed, 1) < size(elevation_smoothed, 2)
-        # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
-        elevation_smoothed=transpose(elevation_smoothed)
         Y=-Y
+    else
+        X=-X
     end
 
     trace3D=PlotlyBase.surface(
@@ -244,7 +247,7 @@ function crossLinesPlot(x, y, maxwidth, maxheight)
 end
 
 # == Reactive code ==
-# reactive code to make the UI interactive
+# Reactive code to make the UI interactive
 @app begin
     # == Reactive variables ==
     # reactive variables exist in both the Julia backend and the browser with two-way synchronization
@@ -476,6 +479,7 @@ end
     end
     
     @onbutton mainProcess begin
+    #@onchange Nmass begin
         progress=true # Start progress button animation
         btnStartDisable=true # We disable the button to avoid multiple requests
         btnPlotDisable=true
@@ -489,25 +493,21 @@ end
                 spectra=LoadImzml(full_route)
                 msg="File loaded. Creating Spectra with the specific mass and tolerance, please be patient."
                 slice=GetSlice(spectra, Nmass, Tol)
-                fig=CairoMakie.Figure(size=(140, 440)) # Container
+                fig=CairoMakie.Figure(size=(128, 256)) # Container
                 # Append a query string to force the image to refresh 
                 timestamp=string(time_ns()) 
                 if triqEnabled # If we have TrIQ
-                    if colorLevel < 4 || colorLevel > 256 || triqProb < 0.8 || triqProb > 1
+                    if colorLevel < 2 || colorLevel > 256 || triqProb < 0.8 || triqProb > 1
                         msg="Incorrect TrIQ values, please adjust accordingly and try again."
                         warning_msg=true
                     else
                         image_path=joinpath("./public", "TrIQ_$(text_nmass).bmp")
-                        SaveBitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"),TrIQ(slice, Int(colorLevel), triqProb),ViridisPalette)
-                        # Flip te image vertically then save it again
-                        img=load(image_path)
-                        if size(img, 1) > size(img, 2) # fix to taller images 
-                            img=reverse(permutedims(img, (2, 1)), dims=1)
-                        end
-                        flipped_img=reverse(img, dims=1)
-                        imgWidth=size(flipped_img, 2)
-                        imgHeight=size(flipped_img, 1)
-                        save(image_path, flipped_img)
+                        sliceTriq=TrIQ(slice, Int(colorLevel), triqProb)
+                        #println("slice raw: $(typeof(slice))")
+                        #println("TriQ matrix: $(typeof(sliceTriq))")
+                        sliceTriq=reverse(sliceTriq, dims=2)
+                        ##SaveBitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"),sliceTriq,ViridisPalette)
+                        SaveBitmapCl(joinpath("public", "TrIQ_$(text_nmass).bmp"),sliceTriq,ViridisPalette)
                         # Use timestamp to refresh image interface container
                         imgIntT="/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
                         plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
@@ -515,12 +515,8 @@ end
                         current_triq="TrIQ_$(text_nmass).bmp"
                         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
                         # Create colorbar 
-                        #ticks=round.(range(0, stop=maximum(TrIQ(slice, Int(colorLevel), triqProb)), length=10), sigdigits=3)
-                        #println("ticks: $(round.(range(0, stop=maximum(TrIQ(slice, Int(colorLevel), triqProb)), length=10), sigdigits=3))")
-                        ticks=round.(range(0, (stop=maximum(slice)*triqProb), length=15), sigdigits=3)
-                        #println("ticks 2: $(round.(range(0, (stop=maximum(slice)*triqProb), length=15), sigdigits=3))")
-                        #Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(TrIQ(slice, Int(colorLevel), triqProb))),ticks=ticks, label="Intensity")
-                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks, label="Intensity", size = 25)
+                        ticks=round.(range(0, (stop=maximum(sliceTriq)*triqProb), length=15), sigdigits=3)
+                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(sliceTriq)*triqProb),ticks=ticks, label="Intensity", size = 25)
                         save("public/colorbar_TrIQ_$(text_nmass).png", fig)
                         colorbarT="/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
                         # Get current colorbar 
@@ -537,16 +533,13 @@ end
                     end
                 else # If we don't use TrIQ
                     image_path=joinpath("./public", "MSI_$(text_nmass).bmp")
-                    SaveBitmap(joinpath("public", "MSI_$(text_nmass).bmp"),IntQuant(slice),ViridisPalette)
-                    # Flip te image vertically then save it again
-                    img=load(image_path)
-                    if size(img, 1) > size(img, 2) # fix to taller images 
-                        img=reverse(permutedims(img, (2, 1)), dims=1) 
-                    end
-                    flipped_img=reverse(img, dims=1)
-                    imgWidth=size(flipped_img, 2)
-                    imgHeight=size(flipped_img, 1)
-                    save(image_path, flipped_img)
+                    ##sliceQuant=IntQuant(slice)
+                    sliceQuant=IntQuantCl(slice,colorLevel)
+                    #println("slice raw: $(typeof(slice))")
+                    #println("slice in intQuant: $(typeof(sliceQuant))")
+                    sliceQuant=reverse(sliceQuant, dims=2)
+                    ##SaveBitmap(joinpath("public", "MSI_$(text_nmass).bmp"),sliceQuant,ViridisPalette)
+                    SaveBitmapCl(joinpath("public", "MSI_$(text_nmass).bmp"),sliceQuant,ViridisPalette)
                     # Use timestamp to refresh image interface container
                     imgInt="/MSI_$(text_nmass).bmp?t=$(timestamp)"
                     plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
@@ -555,9 +548,8 @@ end
                     msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
                     # Create colorbar 
                     #ticks=round.(range(0, stop=maximum(slice), length=10), sigdigits=3)
-                    ticks=round.(range(0, stop=maximum(slice), length=15), sigdigits=3)
-                    #Colorbar(fig[1, 1], colormap=rgb_ViridisPalette, limits=(0, maximum(slice)),ticks=ticks, label="Intensity")
-                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, 256, categorical=true), limits=(0, maximum(slice)),ticks=ticks, label="Intensity", size = 25)
+                    ticks=round.(range(0, stop=maximum(sliceQuant), length=15), sigdigits=3)
+                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(sliceQuant)),ticks=ticks, label="Intensity", size = 25)
                     save("public/colorbar_MSI_$(text_nmass).png", fig)
                     colorbar="/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
                     # Get current colorbar 

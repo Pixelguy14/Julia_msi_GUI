@@ -3,6 +3,7 @@ Pkg.activate(".")
 Pkg.instantiate()
 Pkg.gc()
 
+"""
 packages = [
     "GenieFramework", "Libz", "PlotlyBase", "CairoMakie", "Colors", 
     "Statistics", "NaturalSort",  "Genie", 
@@ -20,6 +21,7 @@ end
 if !("julia_mzML_imzML" in keys(Pkg.dependencies()))
     Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML")
 end
+"""
 
 using Genie
 
