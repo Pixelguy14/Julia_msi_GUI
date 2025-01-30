@@ -13,6 +13,7 @@ using Images
 using LinearAlgebra
 using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
+using Printf
 include("./julia_imzML_visual.jl")
 @genietools
 
@@ -121,7 +122,8 @@ function loadContourPlot(interfaceImg::String)
     img=load(var)
     img_gray=Gray.(img)
     img_array=Array(img_gray)
-    elevation=Float32.(Array(img_gray)) ./ 255.0  # Normalize between 0 and 1
+    # parse matrix to int32 to closely resemble similarity to original bitmap
+    elevation=int32.(Array(img_gray))  
     
     # Smooth the image
     sigma=3.0
@@ -487,7 +489,7 @@ end
         text_nmass=replace(string(Nmass), "." => "_")
         sTime=time()
         #full_route=joinpath(file_route, file_name)
-        if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <=1
+        if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <=1 && colorLevel > 1 && colorLevel < 257
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
             try
                 spectra=LoadImzml(full_route)
@@ -497,12 +499,12 @@ end
                 # Append a query string to force the image to refresh 
                 timestamp=string(time_ns()) 
                 if triqEnabled # If we have TrIQ
-                    if colorLevel < 2 || colorLevel > 256 || triqProb < 0.8 || triqProb > 1
+                    if triqProb < 0.8 || triqProb > 1
                         msg="Incorrect TrIQ values, please adjust accordingly and try again."
                         warning_msg=true
                     else
                         image_path=joinpath("./public", "TrIQ_$(text_nmass).bmp")
-                        sliceTriq=TrIQ(slice, Int(colorLevel), triqProb)
+                        sliceTriq=TrIQ(slice, colorLevel, triqProb)
                         #println("slice raw: $(typeof(slice))")
                         #println("TriQ matrix: $(typeof(sliceTriq))")
                         sliceTriq=reverse(sliceTriq, dims=2)
@@ -514,9 +516,20 @@ end
                         # Get current image 
                         current_triq="TrIQ_$(text_nmass).bmp"
                         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
-                        # Create colorbar 
-                        ticks=round.(range(0, (stop=maximum(sliceTriq)*triqProb), length=15), sigdigits=3)
-                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(sliceTriq)*triqProb),ticks=ticks, label="Intensity", size = 25)
+                        # Create colorbar
+                        #ticks=round.(range(0, (stop=maximum(slice)*triqProb), length=10), sigdigits=3)
+                        ticks=range(0, (stop=maximum(slice)*triqProb), length=5)
+
+                        """
+                        function log_tick_formatter(values)
+                            return map(v -> "10" * Makie.UnicodeFun.to_superscript(round(Int64, v)), values)
+                        end
+                        """
+
+                        println("ticks: $(typeof(ticks))")
+                        #Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks,tickformat=log_tick_formatter, label="Intensity", size = 25)
+                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks, label="Intensity", size = 25)
+                        println("Colorbar: $(typeof(fig))")
                         save("public/colorbar_TrIQ_$(text_nmass).png", fig)
                         colorbarT="/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
                         # Get current colorbar 
@@ -534,7 +547,7 @@ end
                 else # If we don't use TrIQ
                     image_path=joinpath("./public", "MSI_$(text_nmass).bmp")
                     ##sliceQuant=IntQuant(slice)
-                    sliceQuant=IntQuantCl(slice,colorLevel)
+                    sliceQuant=IntQuantCl(slice,Int(colorLevel-1))
                     #println("slice raw: $(typeof(slice))")
                     #println("slice in intQuant: $(typeof(sliceQuant))")
                     sliceQuant=reverse(sliceQuant, dims=2)
@@ -548,8 +561,8 @@ end
                     msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
                     # Create colorbar 
                     #ticks=round.(range(0, stop=maximum(slice), length=10), sigdigits=3)
-                    ticks=round.(range(0, stop=maximum(sliceQuant), length=15), sigdigits=3)
-                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(sliceQuant)),ticks=ticks, label="Intensity", size = 25)
+                    ticks=range(0, stop=maximum(slice), length=5)
+                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)),ticks=ticks, label="Intensity", size = 25)
                     save("public/colorbar_MSI_$(text_nmass).png", fig)
                     colorbar="/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
                     # Get current colorbar 

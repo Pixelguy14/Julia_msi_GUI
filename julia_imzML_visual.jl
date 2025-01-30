@@ -15,14 +15,16 @@ end
 # SaveBitmap is also originally a function of the mzML imzML library in julia,
 # This function dinamically adjust the color palete adjusting to the ammount of colors
 # available in pixmap
-function SaveBitmapCl( name,
-    pixMap::Array{UInt8,2},
-    colorTable::Array{UInt32,1} )
+function SaveBitmapCl( name, pixMap::Array{UInt8,2}, colorTable::Array{UInt32,1} )
     # Get image dimensions
     dim = size( pixMap )
     if length( dim ) != 2
       return 0
     end
+    # Normalize pixel values to get a more accurate reading of the image
+    min_val = minimum(pixMap)
+    max_val = maximum(pixMap)
+    pixMap = round.(UInt8, 255 * (pixMap .- min_val) ./ (max_val - min_val))
     # Compute row padding
     padding = ( 4 - dim[1] & 0x3 ) & 0x3
     # Compute file dimensions. Header = 14 + 40 + ( 256 * 4 ) = 1078
@@ -36,17 +38,12 @@ function SaveBitmapCl( name,
     # Save info header
     write( stream, UInt32[ 40, dim[1], dim[2], 0x80001, 0 ] )
     write( stream, UInt32[ imgBytes, 0, 0, 256, 0 ] )
-    # Get unique colors displayed in pixMap
-    unique_colors = unique(vec(pixMap))
-    n_colors = length(unique_colors)
-    # Color levels can't surpass 256
-    levels = min(n_colors, 256)
-    extendedColorTable = zeros(UInt32, 256)
-    for i in 1:256
-      idx = ceil(Int, i * levels / 256)
-      extendedColorTable[i] = colorTable[idx]
+    # Save color table
+    write( stream, colorTable )
+    if length( colorTable ) < 256
+        fixTable = zeros( UInt32, 256 - length( colorTable ) )
+        write( stream, fixTable )
     end
-    write(stream, extendedColorTable)
     # Save image pixels
     if padding == 0
         for i = 1:dim[2]

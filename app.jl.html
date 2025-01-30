@@ -60,18 +60,16 @@
           <div class="st-col col-4 col-sm q-ma-sm">
             <q-input standout="custom-standout" id="textNmass" step="0.01" v-model="Nmass"
               label="Mass-to-charge ratio of interest" type="number"
-              :rules="[ val => !!val || '* Required', val => val >= 0.0 || 'Need positive mass values',]"></q-input>
+              :rules="[ val => !!val || '* Required', val => val >= 0.0 || 'Need positive mass values']"></q-input>
           </div>
           <div class="st-col col-4 col-sm q-ma-sm">
-            <q-input standout="custom-standout" id="textTol" step="0.05" v-model="Tol"
+            <q-input standout="custom-standout" id="textTol" step="0.005" v-model="Tol"
               label="Mass-to-charge ratio tolerance" type="number"
-              :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1',]"></q-input>
+              :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
           </div>
           <div class="st-col col-4 col-sm q-ma-sm">
             <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel"
-            label="Color level" type="number" :rules="[
-                  val => triqEnabled ? ( '* Required', val >= 4 &amp;&amp; val <= 256  || 'Needs to be in range between 2 and 256') : true
-                  ]"></q-input>
+            label="Color level" type="number" :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
           </div>
         </div>
         <div class="row">
