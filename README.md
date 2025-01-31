@@ -22,7 +22,7 @@ A Graphical User Interface for MSI in Julia: https://github.com/CINVESTAV-LABI/j
    ```
    julia --project=. start_MSI_GUI.jl
    ```
-3. After the script has finished loading, it should open a page (http://127.0.0.1:1481/) in your browser with the web app running.
+3. After the script has finished loading, You can open a page (http://127.0.0.1:1481/) in your browser with the web app running.
 
 Additional notes:<br>
 After the first boot initializes the packages in your computer, subsequent uses of the app should not take longer to load.<br>

@@ -1,8 +1,10 @@
 using Pkg
+sTime=time()
 Pkg.activate(".")
 Pkg.instantiate()
 Pkg.gc()
 
+"""
 packages = [
     "GenieFramework", "Libz", "PlotlyBase", "CairoMakie", "Colors", 
     "Statistics", "NaturalSort",  "Genie", 
@@ -20,6 +22,7 @@ end
 if !("julia_mzML_imzML" in keys(Pkg.dependencies()))
     Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML")
 end
+"""
 
 using Genie
 
@@ -29,6 +32,8 @@ Genie.loadapp()
 # Start the Genie server
 @async begin
     up(host="127.0.0.1", port=1481)
+    eTime=round(time()-sTime,digits=3)
+    println("Julia MSI GUI took $(eTime) seconds booting")
     url = "http://127.0.0.1:1481"
     # Open the URL in the default web browser based on the OS
     if Sys.isapple()
@@ -41,5 +46,4 @@ Genie.loadapp()
         @async run(`Start-Process $url`) # For Windows
     end
 end
-
 wait()
