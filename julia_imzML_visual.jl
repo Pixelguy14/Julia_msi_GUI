@@ -12,7 +12,7 @@ function IntQuantCl( slice , colorLevel)
     return image
 end
 
-# SaveBitmap is also originally a function of the mzML imzML library in julia,
+# SaveBitmap originally a function of the mzML imzML library in julia,
 # This function dinamically adjust the color palete adjusting to the ammount of colors
 # available in pixmap
 function SaveBitmapCl( name, pixMap::Array{UInt8,2}, colorTable::Array{UInt32,1} )
@@ -22,9 +22,9 @@ function SaveBitmapCl( name, pixMap::Array{UInt8,2}, colorTable::Array{UInt32,1}
       return 0
     end
     # Normalize pixel values to get a more accurate reading of the image
-    min_val = minimum(pixMap)
-    max_val = maximum(pixMap)
-    pixMap = round.(UInt8, 255 * (pixMap .- min_val) ./ (max_val - min_val))
+    minVal = minimum(pixMap)
+    maxVal = maximum(pixMap)
+    pixMap = round.(UInt8, 255 * (pixMap .- minVal) ./ (maxVal - minVal))
     # Compute row padding
     padding = ( 4 - dim[1] & 0x3 ) & 0x3
     # Compute file dimensions. Header = 14 + 40 + ( 256 * 4 ) = 1078
@@ -58,4 +58,23 @@ function SaveBitmapCl( name, pixMap::Array{UInt8,2}, colorTable::Array{UInt32,1}
     end
     # Close file
     close( stream )
+end
+
+# SaveBitmap originally a function of the mzML imzML library in julia,
+# now has an adjustment for NaN values in case they exist to mantain data integrity
+function GetMzSliceJl(imzML, mass, tolerance)
+    # Alloc space for slice
+    width = maximum(imzML[1, :])
+    height = maximum(imzML[2, :])
+    image = fill(0.0, width, height)
+
+    for i in 1:size(imzML)[2]
+        index = julia_mzML_imzML.FindMass(imzML[3, i], mass, tolerance)
+        if index != 0
+            image[imzML[1, i], imzML[2, i]] = imzML[4, i][index]
+        end
+    end
+    # Adjustment for NaN values with 0
+    replace!(image, NaN => 0.0)
+    return image
 end

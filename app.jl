@@ -13,7 +13,6 @@ using Images
 using LinearAlgebra
 using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
-using Printf
 include("./julia_imzML_visual.jl")
 @genietools
 
@@ -123,7 +122,7 @@ function loadContourPlot(interfaceImg::String)
     img_gray=Gray.(img)
     img_array=Array(img_gray)
     # parse matrix to int32 to closely resemble similarity to original bitmap
-    elevation=int32.(Array(img_gray))  
+    elevation=Float32.(Array(img_array))./ 255.0 # Normalize between 0 and 1
     
     # Smooth the image
     sigma=3.0
@@ -174,7 +173,7 @@ function loadSurfacePlot(interfaceImg::String)
     img_gray=Gray.(img) # Convert to grayscale
     #println("Grayscale image type:", typeof(img_gray)) 
     img_array=Array(img_gray)
-    elevation=Float32.(Array(img_gray)) ./ 255.0 # Normalize between 0 and 1
+    elevation=Float32.(Array(img_array)) ./ 255.0 # Normalize between 0 and 1
     #println("Elevation size:", size(elevation)) 
     # Smooth the image 
     sigma=3.0
@@ -246,6 +245,40 @@ function crossLinesPlot(x, y, maxwidth, maxheight)
     trace2=PlotlyBase.scatter(x=l2_x, y=l2_y, mode="lines",line=attr(color="red", width=0.5),name="Line Y",showlegend=false)
 
     return trace1, trace2
+end
+
+function log_tick_formatter(values::Vector{Float64})
+    #println("values: $(values) + type: $(typeof(values))")
+    # Initialize exponents dictionary
+    exponents=zeros(Int, length(values))
+    formValues=zeros(Float64, length(values))
+    for i in 1:length(values)
+        value = values[i]
+        #println("value: $(value)")
+        if value >= 1000  # positive formatting for notation
+            while value >= 1000
+                value /= 10
+                exponents[i] += 1
+            end
+            #println("value: $(value) x10^$(exponents[i])")
+        elseif value > 0 && value < 1  # negative formatting for notation
+            while value < 1
+                value *= 10
+                exponents[i] -= 1
+            end
+            #values[i] = round(values[i], digits=2)
+            #println("value: $(value) x10^$(exponents[i])")
+        end
+        #formatted_values[i] = values[i] != 0 ? "$(round(values[i], digits=2))x10" * Makie.UnicodeFun.to_superscript(exponents[i]) : "0"
+        formValues[i]=value
+    end
+    #return formatted_values
+    #return map(v -> values * "x10" * Makie.UnicodeFun.to_superscript(round(Int64, v)), exponents)
+    #println("formated values: $(formValues) + type: $(typeof(formValues))")
+    #println("exponents: $(exponents) + type: $(typeof(exponents))")
+    #return map((v, e) -> "$(round(v, digits=2))x10" * Makie.UnicodeFun.to_superscript(e), formValues, exponents)
+    return map((v, e) -> e == 0 ? "$(round(v, sigdigits=2))" : "$(round(v, sigdigits=2))x10" * Makie.UnicodeFun.to_superscript(e), formValues, exponents)
+
 end
 
 # == Reactive code ==
@@ -494,8 +527,9 @@ end
             try
                 spectra=LoadImzml(full_route)
                 msg="File loaded. Creating Spectra with the specific mass and tolerance, please be patient."
-                slice=GetSlice(spectra, Nmass, Tol)
-                fig=CairoMakie.Figure(size=(128, 256)) # Container
+                #slice=GetSlice(spectra, Nmass, Tol)
+                slice=GetMzSliceJl(spectra,Nmass,Tol)
+                fig=CairoMakie.Figure(size=(150, 250)) # Container
                 # Append a query string to force the image to refresh 
                 timestamp=string(time_ns()) 
                 if triqEnabled # If we have TrIQ
@@ -517,19 +551,17 @@ end
                         current_triq="TrIQ_$(text_nmass).bmp"
                         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
                         # Create colorbar
+                        bound  = julia_mzML_imzML.GetOutlierThres(slice, triqProb)
+                        levels = range(bound[1],stop=bound[2], length=8)
+                        #println("range of the levels 1: $(levels)")
+                        levels = vcat(levels, 2*levels[end]-levels[end-1])
+                        #println("range of the levels 2: $(levels) + $(length(levels))")
                         #ticks=round.(range(0, (stop=maximum(slice)*triqProb), length=10), sigdigits=3)
-                        ticks=range(0, (stop=maximum(slice)*triqProb), length=5)
-
-                        """
-                        function log_tick_formatter(values)
-                            return map(v -> "10" * Makie.UnicodeFun.to_superscript(round(Int64, v)), values)
-                        end
-                        """
-
-                        println("ticks: $(typeof(ticks))")
-                        #Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks,tickformat=log_tick_formatter, label="Intensity", size = 25)
-                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks, label="Intensity", size = 25)
-                        println("Colorbar: $(typeof(fig))")
+                        #ticks=range(0, (stop=maximum(slice)*triqProb), length=5)
+                        #println("ticks: $(typeof(ticks))")
+                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, bound[2]),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size = 25)
+                        #Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)*triqProb),ticks=ticks, label="Intensity", size = 25)
+                        #println("Colorbar: $(typeof(fig))")
                         save("public/colorbar_TrIQ_$(text_nmass).png", fig)
                         colorbarT="/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
                         # Get current colorbar 
@@ -560,9 +592,11 @@ end
                     current_msi="MSI_$(text_nmass).bmp"
                     msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
                     # Create colorbar 
+                    levels=range(0,maximum(slice),length=8)
                     #ticks=round.(range(0, stop=maximum(slice), length=10), sigdigits=3)
-                    ticks=range(0, stop=maximum(slice), length=5)
-                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)),ticks=ticks, label="Intensity", size = 25)
+                    #ticks=range(0, stop=maximum(slice), length=5)
+                    #Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)),ticks=ticks, label="Intensity", size = 25)
+                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size = 25)
                     save("public/colorbar_MSI_$(text_nmass).png", fig)
                     colorbar="/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
                     # Get current colorbar 
