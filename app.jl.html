@@ -53,6 +53,12 @@
               </q-item>
             </q-list>
           </q-btn-dropdown>
+          <q-btn id="btnStyle" icon="search" class="q-ma-sm" :disable="btnOpticalDisable"
+            v-on:click="btnOptical=true" label="Load your optical Image"></q-btn>
+          <div class="q-mx-sm">
+            <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable"/>
+            <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
+          </div>
         </div>
         <p id="lblFullRoute">full route: {{full_route}}</p>
         <!-- Variable Manipulation -->
@@ -68,12 +74,13 @@
               :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
           </div>
           <div class="st-col col-4 col-sm q-ma-sm">
-            <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel"
-            label="Color level" type="number" :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
+            <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color level"
+              type="number"
+              :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
           </div>
         </div>
         <div class="row">
-        <!-- Triq Variable Manipulation and filters-->
+          <!-- Triq Variable Manipulation and filters-->
           <div class="col-6">
             <div class="st-col col-6 col-sm q-ma-sm">
               <q-toggle id="btnEnableMFilter" v-on:click="MFilterEnabled" v-model="MFilterEnabled" color="green"
@@ -118,14 +125,12 @@
             </div>
             <div class="row col-6">
               <div class="st-col col-4 col-sm-4 q-ma-sm">
-                <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord"
-                  type="number" :rules="[
+                <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord" type="number" :rules="[
                         val => SpectraEnabled ? ( '* Required', val >= 0|| 'Needs to be bigger than 0') : true
                         ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
               </div>
               <div class="st-col col-4 col-sm-4 q-ma-sm">
-                <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord"
-                  type="number" :rules="[
+                <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord" type="number" :rules="[
                         val => SpectraEnabled ? ( '* Required', val <= 0|| 'Needs to be lower than 0') : true
                         ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
               </div>
@@ -161,11 +166,12 @@
             </div>
             <!-- Image manager -->
             <div id="image-container" class="row st-col col-12">
-              <div class="col-10 q-pa-none q-ma-none ">
-                <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
+              <div class="col-10 q-pa-none q-ma-none">
+                <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data"
+                  @click="data_click"></plotly>
                 <!--<q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" width="80%"></q-img>-->
               </div>
-              <div class="col-2 q-pa-none q-ma-none ">
+              <div class="col-2 q-pa-none q-ma-none">
                 <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
               </div>
             </div>
@@ -183,7 +189,8 @@
             <!-- Triq Image manager -->
             <div id="image-container" class="row st-col col-12">
               <div class="col-10 q-pa-none q-ma-none ">
-                <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
+                <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT"
+                  class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
                 <!--<q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" width="80%"></q-img>-->
               </div>
               <div class="col-2 q-pa-none q-ma-none ">
@@ -196,9 +203,10 @@
           <q-tab-panel name="tab2">
             <!-- Content for Tab 2 -->
             <!--<plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>-->
-            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
+            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none sync_data"
+              @click="data_click"></plotly>
           </q-tab-panel>
-          
+
           <q-tab-panel name="tab3">
             <!-- Content for Tab 3 -->
             <plotly id="plotStyle" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
@@ -230,8 +238,12 @@
 
   <q-dialog v-model="CompareDialog" full-width>
     <q-card>
-      <q-card-section>
-        <div class="text-h6">Compare two diferent images or plots in a larger screen</div>
+      <q-card-section class="row">
+        <div class="text-h6 q-ma-sm">Compare two diferent images or plots in a larger screen</div>
+        <div class="q-mx-sm">
+          <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable"/>
+          <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
+        </div>
       </q-card-section>
 
       <q-card-section class="q-pt-none col-12">
@@ -249,7 +261,8 @@
                 <!-- Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none"></plotly>
+                    <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none">
+                    </plotly>
                   </div>
                   <div class="col-2">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
@@ -268,7 +281,8 @@
                 <!-- Triq Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none"></plotly>
+                    <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none">
+                    </plotly>
                   </div>
                   <div class="col-2">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
@@ -304,7 +318,8 @@
                 <!-- Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none"></plotly>
+                    <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none">
+                    </plotly>
                   </div>
                   <div class="col-2 q-pa-none q-ma-none ">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
@@ -323,7 +338,8 @@
                 <!-- Triq Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none"></plotly>
+                    <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none">
+                    </plotly>
                   </div>
                   <div class="col-2 q-pa-none q-ma-none ">
                     <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>

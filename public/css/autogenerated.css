@@ -1,1 +1,42 @@
-#btnStyle{background:#009f90;color:rgb(229, 236, 246);}#imgInt{float:left;}#header{display:flex;align-items:center;}#imgLogo{width:100px;height:80px;margin-right:10px;margin-left:10px;}#extDivStyle{background-color:#c9cdb1;border-radius: 10px;}#intDivStyle{padding-top:10px;padding-right:10px;padding-bottom:10px;padding-left:10px;background-color: #eff2f5;}#colorbar{float:left;}.custom-standout{background-color:#7f8389!important;color:rgb(0, 0, 0)!important;}#tabHeader{color:#009f90;}
+#btnStyle {
+    background: #009f90;
+    color: rgb(229, 236, 246);
+}
+
+#imgInt {
+    float: left;
+}
+
+#header {
+    display: flex;
+    align-items: center;
+}
+
+#imgLogo {
+    width: 100px;
+    height: 80px;
+    margin-right: 10px;
+    margin-left: 10px;
+}
+
+#extDivStyle {
+    background-color: #c9cdb1;
+    border-radius: 10px;
+}
+
+#intDivStyle {
+    padding-top: 10px;
+    padding-right: 10px;
+    padding-bottom: 10px;
+    padding-left: 10px;
+    background-color: #eff2f5;
+}
+
+.custom-standout {
+    background-color: #7f8389 !important;
+    color: rgb(0, 0, 0) !important;
+}
+
+#tabHeader {
+    color: #009f90;
+}

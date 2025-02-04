@@ -13,6 +13,7 @@ using Images
 using LinearAlgebra
 using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
+using Base64
 include("./julia_imzML_visual.jl")
 @genietools
 
@@ -76,7 +77,8 @@ function loadImgPlot(interfaceImg::String)
         ),
         yaxis=PlotlyBase.attr(
             visible=false
-        )
+        ),
+        margin=attr(l=0,r=0,t=0,b=0,pad=0)
     )
 
     # Create the trace for the image
@@ -109,6 +111,69 @@ function loadImgPlot(interfaceImg::String)
     plotlayout=layout
     return plotdata, plotlayout, width, height
 end
+
+function loadImgPlot(interfaceImg::String, overlayImg::String, imgTrans::Float64)
+    timestamp=string(time_ns())
+    # Load the main image
+    cleaned_img = replace(interfaceImg, r"\?.*" => "")
+    cleaned_img = lstrip(cleaned_img, '/')
+    var = joinpath("./public", cleaned_img)
+    img = load(var)
+    # Convert to grayscale
+    img_gray = Gray.(img)
+    img_array = Array(img_gray)
+    elevation = Float32.(Array(img_array)) ./ 255.0
+    # Get the X, Y coordinates of the image
+    height, width = size(img_array)
+    #println("height: $(-height), width: $(width)")
+    X = collect(1:width)
+    Y = collect(1:height)
+    #println("height: $(X), width: $(-Y)")
+
+    # Create the layout with overlay image
+    layoutImg = PlotlyBase.Layout(
+        images = [attr(
+            #source = "data:image/png;base64,$overlayImg",    
+            #source = "https://images.plot.ly/language-icons/api-home/python-logo.png",
+            source = "$(overlayImg)?t=$(timestamp)",
+            xref = "x",
+            yref = "y",
+            x = 0,
+            y = 0,
+            sizex = width,
+            sizey = -height,
+            sizing = "stretch",
+            opacity = imgTrans,
+            layer = "above"  # Place the overlay image in the foreground
+        )],
+        xaxis = PlotlyBase.attr(
+            visible = false,
+            scaleanchor = "y",
+            range = [1, width]
+        ),
+        yaxis = PlotlyBase.attr(
+            visible = false,
+            range = [-height,-1]
+        ),
+        margin = attr(l = 0, r = 0, t = 0, b = 0, pad = 0)
+    )
+
+    # Create the trace for the main image
+    trace = PlotlyBase.heatmap(
+        z = elevation,
+        x = X,
+        y = -Y,
+        name = "",
+        showlegend = false,
+        colorscale = "Viridis",
+        showscale = false
+    )
+
+    plotdata = [trace]
+    plotlayout = layoutImg
+    return plotdata, plotlayout, width, height
+end
+
 # loadContourPlot recieves the local directory of the image as a string,
 # returns the layout and data for the contour plotly plot
 # this function loads the image and applies a gaussian filter 
@@ -144,6 +209,7 @@ function loadContourPlot(interfaceImg::String)
         yaxis=PlotlyBase.attr(
             title="Y"
         ),
+        margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
     trace=PlotlyBase.contour(
         z=elevation_smoothed,
@@ -203,7 +269,8 @@ function loadSurfacePlot(interfaceImg::String)
             zaxis_nticks=z_nticks, 
             camera=attr(eye=attr(x=0, y=-1, z=0.5)), 
             aspectratio=aspect_ratio
-        )
+        ),
+        margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
     # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
     elevation_smoothed=transpose(elevation_smoothed)
@@ -346,6 +413,13 @@ end
     @out imgWidth=0
     @out imgHeight=0
 
+    # Optical Image Overlay & Transparency
+    @in imgTrans = 1.0
+    @in progressOptical = false
+    @out btnOpticalDisable = true
+    @in btnOptical = false
+    @out opticalImg = ""
+
     # Messages to interface variables
     @out msg=""
     @out msgimg=""
@@ -385,7 +459,8 @@ end
         ),
         yaxis=PlotlyBase.attr(
             visible=false
-        )
+        ),
+        margin=attr(l=0,r=0,t=0,b=0,pad=0)
     )
     traceImg=PlotlyBase.heatmap(x=[], y=[])
     @out plotdataImg=[traceImg]
@@ -403,7 +478,8 @@ end
         yaxis=PlotlyBase.attr(
             title="Intensity",
             showgrid=true
-        )
+        ),
+        margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
     # Dummy 2D scatter plot
     traceSpectra=PlotlyBase.scatter(x=[], y=[], mode="lines")
@@ -426,11 +502,12 @@ end
         xaxis=PlotlyBase.attr(
             title="X",
             scaleanchor="y"
-            ),
-            yaxis=PlotlyBase.attr(
-                title="Y"
-                ),
-        )
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Y"
+        ),
+        margin=attr(l=0,r=0,t=120,b=0,pad=0)
+    )
     # Dummy 2D surface plot
     traceContour=PlotlyBase.scatter(x=[], y=[], mode="lines")
     # Create conection to frontend
@@ -450,7 +527,8 @@ end
             zaxis_nticks=4, 
             camera=attr(eye=attr(x=0, y=-1, z=0.5)), 
             aspectratio=attr(x=1, y=1, z=0.2)
-        )
+        ),
+        margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
 
     # Dummy 3D surface plot
@@ -655,7 +733,8 @@ end
                     title="Intensity",
                     showgrid=true
                 ),
-                autosize=false
+                autosize=false,
+                margin=attr(l=0,r=0,t=120,b=0,pad=0)
             )
             # dims=size(spectraMz)
             # scansMax=dims[2] # we get the total of scansMax
@@ -709,7 +788,8 @@ end
                     title="Intensity",
                     showgrid=true
                 ),
-                autosize=false
+                autosize=false,
+                margin=attr(l=0,r=0,t=120,b=0,pad=0)
             )
             xSpectraMz=spectraMz[1,abs(xCoord)]
             ySpectraMz=spectraMz[2,abs(yCoord)]
@@ -762,6 +842,7 @@ end
             msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
+            btnOpticalDisable = false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImg=[traceImg]
@@ -788,6 +869,7 @@ end
             msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
+            btnOpticalDisable = false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImg=[traceImg]
@@ -815,6 +897,7 @@ end
             msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
+            btnOpticalDisable = false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImgT=[traceImg]
@@ -841,6 +924,7 @@ end
             msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
+            btnOpticalDisable = false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImgT=[traceImg]
@@ -1055,17 +1139,18 @@ end
                     end
                 end
                 layoutSpectra=PlotlyBase.Layout(
-                            title="SUM Spectrum plot",
-                            xaxis=PlotlyBase.attr(
-                                title="<i>m/z</i>",
-                                showgrid=true
-                            ),
-                            yaxis=PlotlyBase.attr(
-                                title="Intensity",
-                                showgrid=true
-                            ),
-                            autosize=false
-                    )
+                    title="SUM Spectrum plot",
+                    xaxis=PlotlyBase.attr(
+                        title="<i>m/z</i>",
+                        showgrid=true
+                    ),
+                    yaxis=PlotlyBase.attr(
+                        title="Intensity",
+                        showgrid=true
+                    ),
+                    autosize=false,
+                    margin=attr(l=0,r=0,t=120,b=0,pad=0)
+                )
                 traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines",name="Spectra",showlegend=false)
                 trace2=PlotlyBase.scatter(x=[Nmass, Nmass],y=[0, maximum(ySpectraMz)],mode="lines",line=attr(color="red", width=0.5),name="<i>m/z</i> selected",showlegend=false)
                 plotdata=[traceSpectra,trace2] # We add the data from spectra and the red line to the plot
@@ -1106,14 +1191,27 @@ end
                 yCoord=-imgHeight
             end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
             #plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-            plotdataImg=filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImg)
+            plotdataImg=filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y","Optical"]), plotdataImg)
             trace1, trace2=crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
             plotdataImg=append!(plotdataImg, [trace1, trace2])
         end
     end
 
-    # WIP add an x and y input and a plot to select pixels in an image and then calculate a plot (not the sum of plots)
-    # optional: red lines to signal which pixel is selected in the image plot
+    @onbutton btnOptical begin
+        timestamp=string(time_ns())
+        imgRoute=pick_file(; filterlist="png,bmp,jpg,jpeg")
+        if isnothing(imgRoute)
+            println("No file selected")
+        else
+            img=load(imgRoute)
+            save("./public/css/imgOver.png",img)
+            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
+        end
+    end
+
+    @onchange imgTrans begin
+        plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
+    end
 
     @mounted watchplots()
 
@@ -1126,13 +1224,3 @@ end
 # Register a new route and the page that will be loaded on access
 @page("/", "app.jl.html")
 end
-
-# == Advanced features ==
-#=
-- The @private macro defines a reactive variable that is not sent to the browser.
-This is useful for storing data that is unique to each user session but is not needed
-in the UI.
-    @private table=DataFrame(a=1:10, b=10:19, c=20:29)
-
-=#
-
