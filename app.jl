@@ -201,7 +201,7 @@ function loadContourPlot(interfaceImg::String)
     Y=repeat(reshape(y, length(y), 1), 1, length(x))
                 
     layout=PlotlyBase.Layout(
-        title="2D Topographic Map",
+        title="2D Topographic Map of $cleaned_img",
         xaxis=PlotlyBase.attr(
             title="X",
             scaleanchor="y"
@@ -262,12 +262,12 @@ function loadSurfacePlot(interfaceImg::String)
     aspect_ratio=attr(x=1, y=length(y) / length(x), z=0.5)
     # Define the layout for the 3D plot
     layout3D=PlotlyBase.Layout(
-        title="3D Surface Plot",
+        title="3D Surface Plot of $cleaned_img",
         scene=attr(
             xaxis_nticks=x_nticks,
             yaxis_nticks=y_nticks,
             zaxis_nticks=z_nticks, 
-            camera=attr(eye=attr(x=0, y=-1, z=0.5)), 
+            camera=attr(eye=attr(x=0, y=1, z=0.5)), 
             aspectratio=aspect_ratio
         ),
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
@@ -592,7 +592,7 @@ end
     end
     
     @onbutton mainProcess begin
-    #@onchange Nmass begin
+        #@onchange Nmass begin
         progress=true # Start progress button animation
         btnStartDisable=true # We disable the button to avoid multiple requests
         btnPlotDisable=true
@@ -705,6 +705,7 @@ end
         end
         btnStartDisable=false
         btnPlotDisable=false
+        btnOpticalDisable = false
         if isfile(full_routeMz)
             # We enable coord search and spectra plot creation
             btnSpectraDisable=false
@@ -738,8 +739,20 @@ end
             )
             # dims=size(spectraMz)
             # scansMax=dims[2] # we get the total of scansMax
-            xSpectraMz=mean(spectraMz[1,:])
-            ySpectraMz=mean(spectraMz[2,:])
+            #spectraMz = convert(Array{Float64,2}, spectraMz)
+            #min_length = min(length(spectraMz[1,:]), length(spectraMz[2,:]))
+            try
+                xSpectraMz=mean(spectraMz[1,:])
+                ySpectraMz=mean(spectraMz[2,:])
+                #println("length of xSpectraMz: $(length(xSpectraMz))")
+                #println("length of ySpectraMz: $(length(ySpectraMz))")
+            catch e 
+                #println("an error was found: $e")
+                msg="there was an error with the mzML, please try again: $e"
+                warning_msg=true
+                xSpectraMz=spectraMz[1,1]
+                ySpectraMz=spectraMz[2,1]
+            end
             traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
             plotdata=[traceSpectra] # We add the data from spectra to the plot
             plotlayout=layoutSpectra
@@ -791,6 +804,16 @@ end
                 autosize=false,
                 margin=attr(l=0,r=0,t=120,b=0,pad=0)
             )
+            if xCoord < 1
+                xCoord=1
+            elseif xCoord > imgWidth
+                xCoord=imgWidth
+            end
+            if yCoord > -1
+                yCoord=-1
+            elseif yCoord < -imgHeight
+                yCoord=-imgHeight
+            end
             xSpectraMz=spectraMz[1,abs(xCoord)]
             ySpectraMz=spectraMz[2,abs(yCoord)]
             traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
@@ -1160,14 +1183,13 @@ end
             #println("you have clicked the triq image")
             cursor_data=data_click["cursor"] 
             xCoord=Int32(round(cursor_data["x"]))
-            if xCoord < 0
-                xCoord=0
+            if xCoord < 1
+                xCoord=1
             elseif xCoord > imgWidth
                 xCoord=imgWidth
             end
-            yCoord=Int32(round(cursor_data["y"]))
-            if yCoord > 0
-                yCoord=0
+            if yCoord > -1
+                yCoord=-1
             elseif yCoord < -imgHeight
                 yCoord=-imgHeight
             end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
@@ -1179,14 +1201,13 @@ end
             #println("you have clicked the normal image")
             cursor_data=data_click["cursor"] 
             xCoord=Int32(round(cursor_data["x"]))
-            if xCoord < 0
-                xCoord=0
+            if xCoord < 1
+                xCoord=1
             elseif xCoord > imgWidth
                 xCoord=imgWidth
             end
-            yCoord=Int32(round(cursor_data["y"]))  
-            if yCoord > 0
-                yCoord=0
+            if yCoord > -1
+                yCoord=-1
             elseif yCoord < -imgHeight
                 yCoord=-imgHeight
             end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
