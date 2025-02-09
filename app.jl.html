@@ -143,8 +143,19 @@
               </q-item>
             </q-list>
           </q-btn-dropdown>
-          <q-btn id="btnStyle" icon="search" class="q-ma-sm" :disable="btnOpticalDisable" v-on:click="btnOptical=true"
-            label="Load your optical Image"></q-btn>
+          <q-btn-dropdown id="btnStyle" icon="search" class="q-ma-sm" :disable="btnOpticalDisable"
+            label="Load your optical image">
+            <q-item clickable v-close-popup v-on:click="btnOptical=true">
+              <q-item-section>
+                <q-item-label>Over normal image</q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-item clickable v-close-popup v-on:click="btnOpticalT=true">
+              <q-item-section>
+                <q-item-label>Over TrIQ image</q-item-label>
+              </q-item-section>
+            </q-item>
+          </q-btn-dropdown>
           <div class="q-mx-sm">
             <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
             <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
@@ -245,6 +256,8 @@
           <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
           <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
         </div>
+        <q-toggle id="btnOpticalOver" v-on:click="opticalOverTriq" v-model="opticalOverTriq" color="black"
+                label="Optical over TrIQ"></q-toggle>
       </q-card-section>
 
       <q-card-section class="q-pt-none col-12">
@@ -313,17 +326,17 @@
                 <!-- Content for Tab 0 -->
                 <!-- Btn image changer -->
                 <div>
-                  <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinus=true"></q-btn>
-                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlus=true"></q-btn>
+                  <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusComp=true"></q-btn>
+                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlusComp=true"></q-btn>
                 </div>
                 <!-- Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none">
+                    <plotly id="plotStyle" :data="plotdataImgComp" :layout="plotlayoutImgComp" class="q-pa-none q-ma-none">
                     </plotly>
                   </div>
                   <div class="col-2 q-pa-none q-ma-none ">
-                    <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
+                    <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarComp"></q-img>
                   </div>
                 </div>
                 <p>{{msgimg}}</p>
@@ -333,17 +346,17 @@
                 <!-- Content for Tab 1 -->
                 <!-- Triq Btn image changer -->
                 <div>
-                  <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusT=true"></q-btn>
-                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlusT=true"></q-btn>
+                  <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusTComp=true"></q-btn>
+                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlusTComp=true"></q-btn>
                 </div>
                 <!-- Triq Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none">
+                    <plotly id="plotStyle" :data="plotdataImgTComp" :layout="plotlayoutImgTComp" class="q-pa-none q-ma-none">
                     </plotly>
                   </div>
                   <div class="col-2 q-pa-none q-ma-none ">
-                    <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
+                    <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarTComp"></q-img>
                   </div>
                 </div>
                 <p>{{msgtriq}}</p>
