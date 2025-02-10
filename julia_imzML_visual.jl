@@ -384,3 +384,28 @@ function log_tick_formatter(values::Vector{Float64})
     return map((v, e) -> e == 0 ? "$(round(v, sigdigits=2))" : "$(round(v, sigdigits=2))x10" * Makie.UnicodeFun.to_superscript(e), formValues, exponents)
 
 end
+
+# Median filter: an adaptation of the R medianfilter, which averages the matrix
+# with the close pixels just from the sides to reduce noise.
+# This one in particular is a midpoint fiter from a 3x3 neighbour area
+function medianFilterjl(pixMap)
+    width, height = size(pixMap)
+    target = zeros(eltype(pixMap), height, width)
+    println("Matrix Dimensions: ", size(pixMap))
+
+    for j in 2:(width-1)
+        for i in 2:(height-1)
+            println("Current Indices: i = $i, j = $j")
+            neighbors = []
+            for dj in max(1, j-1):min(width, j+1)
+                for di in max(1, i-1):min(height, i+1)
+                    push!(neighbors, pixMap[di, dj])
+                end
+            end
+            target[i, j] = median(neighbors)
+        end
+    end
+
+	return target
+
+end

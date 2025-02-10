@@ -36,6 +36,7 @@ include("./julia_imzML_visual.jl")
     # Text field validations
     @in triqEnabled=false
     @in SpectraEnabled=false
+    @in MFilterEnabled=false
     # Dialogs
     @in warning_msg=false
     @in CompareDialog=false
@@ -91,17 +92,21 @@ include("./julia_imzML_visual.jl")
     @out imgHeight=0
 
     # Optical Image Overlay & Transparency
-    @in imgTrans = 1.0
-    @in progressOptical = false
-    @out btnOpticalDisable = true
-    @in btnOptical = false
-    @in btnOpticalT = false
-    @in opticalOverTriq = false
+    @in imgTrans=1.0
+    @in progressOptical=false
+    @out btnOpticalDisable=true
+    @in btnOptical=false
+    @in btnOpticalT=false
+    @in opticalOverTriq=false
+    @out imgRoute=""
 
     # Messages to interface variables
     @out msg=""
     @out msgimg=""
     @out msgtriq=""
+    # Reiteration of the messages under the image to know which spectra is being visualized
+    @out msgimgComp=""
+    @out msgtriqComp=""
 
     # Saves the route where imzML and mzML files are located
     @out full_route=""
@@ -292,12 +297,10 @@ include("./julia_imzML_visual.jl")
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
             try
                 spectra=LoadImzml(full_route)
-                msg="File loaded. Creating Spectra with the specific mass and tolerance, please be patient."
-                try
-                    slice=GetMzSliceJl(spectra,Nmass,Tol)
-                catch e
-                    println("the error is in the slice: $e")
-                end
+                println(typeof(spectra))
+                msg="File loaded. Creating spectra with the specific mass and tolerance, please be patient."
+                slice=GetMzSliceJl(spectra,Nmass,Tol)
+                println(typeof(slice))
                 fig=CairoMakie.Figure(size=(150, 250)) # Container
                 # Append a query string to force the image to refresh 
                 timestamp=string(time_ns()) 
@@ -307,14 +310,18 @@ include("./julia_imzML_visual.jl")
                         warning_msg=true
                     else
                         image_path=joinpath("./public", "TrIQ_$(text_nmass).bmp")
-                        valid_slice = false
+                        valid_slice=false
                         while Tol <= 1.0 && !valid_slice
                             try
-                                slice = GetMzSliceJl(spectra, Nmass, Tol)
-                                sliceTriq = TrIQ(slice, colorLevel, triqProb)
-                                valid_slice = true
+                                slice=GetMzSliceJl(spectra, Nmass, Tol)
+                                sliceTriq=TrIQ(slice, colorLevel, triqProb)
+                                println(typeof(sliceTriq))
+                                if MFilterEnabled # If the Median filter is ON
+                                    sliceTriq=medianFilterjl(sliceTriq)
+                                end
+                                valid_slice=true
                             catch e
-                                msg="Warning: insufficient tolerance, inputs modified to allow the creation of an image regardless = $Tol: $e"
+                                msg="Warning: insufficient tolerance, inputs modified to allow the creation of an image regardless=$Tol: $e"
                                 Tol += 0.1
                             end
                         end
@@ -327,10 +334,10 @@ include("./julia_imzML_visual.jl")
                         current_triq="TrIQ_$(text_nmass).bmp"
                         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
                         # Create colorbar
-                        bound  = julia_mzML_imzML.GetOutlierThres(slice, triqProb)
-                        levels = range(bound[1],stop=bound[2], length=8)
-                        levels = vcat(levels, 2*levels[end]-levels[end-1])
-                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, bound[2]),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size = 25)
+                        bound =julia_mzML_imzML.GetOutlierThres(slice, triqProb)
+                        levels=range(bound[1],stop=bound[2], length=8)
+                        levels=vcat(levels, 2*levels[end]-levels[end-1])
+                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, bound[2]),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size=25)
                         save("public/colorbar_TrIQ_$(text_nmass).png", fig)
                         colorbarT="/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
                         # Get current colorbar 
@@ -345,11 +352,14 @@ include("./julia_imzML_visual.jl")
                     end
                 else # If we don't use TrIQ
                     image_path=joinpath("./public", "MSI_$(text_nmass).bmp")
-                    ##sliceQuant=IntQuant(slice)
                     try
                         sliceQuant=IntQuantCl(slice,Int(colorLevel-1))
+                        println(typeof(sliceQuant))
+                        if MFilterEnabled # If the Median filter is ON
+                            sliceQuant=medianFilterjl(sliceQuant)
+                        end
                     catch e
-                        println("the error is in the non triq slice: $e")
+                        println("The error is in the non triq slice: $e")
                     end
                     sliceQuant=reverse(sliceQuant, dims=2)
                     SaveBitmapCl(joinpath("public", "MSI_$(text_nmass).bmp"),sliceQuant,ViridisPalette)
@@ -361,7 +371,7 @@ include("./julia_imzML_visual.jl")
                     msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
                     # Create colorbar 
                     levels=range(0,maximum(slice),length=8)
-                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size = 25)
+                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size=25)
                     save("public/colorbar_MSI_$(text_nmass).png", fig)
                     colorbar="/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
                     # Get current colorbar 
@@ -390,7 +400,7 @@ include("./julia_imzML_visual.jl")
         end
         btnStartDisable=false
         btnPlotDisable=false
-        btnOpticalDisable = false
+        btnOpticalDisable=false
         if isfile(full_routeMz)
             # We enable coord search and spectra plot creation
             btnSpectraDisable=false
@@ -540,7 +550,7 @@ include("./julia_imzML_visual.jl")
             msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-            btnOpticalDisable = false
+            btnOpticalDisable=false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImg=[traceImg]
@@ -567,7 +577,7 @@ include("./julia_imzML_visual.jl")
             msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-            btnOpticalDisable = false
+            btnOpticalDisable=false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImg=[traceImg]
@@ -595,7 +605,7 @@ include("./julia_imzML_visual.jl")
             msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
-            btnOpticalDisable = false
+            btnOpticalDisable=false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImgT=[traceImg]
@@ -622,7 +632,7 @@ include("./julia_imzML_visual.jl")
             msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
-            btnOpticalDisable = false
+            btnOpticalDisable=false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImgT=[traceImg]
@@ -648,14 +658,14 @@ include("./julia_imzML_visual.jl")
     
             text_nmass=replace(current_msiComp, "MSI_" => "")
             text_nmass=replace(text_nmass, ".bmp" => "")
-            msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            msgimgComp="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImgComp, plotlayoutImgComp, _, _=loadImgPlot(imgIntComp)
-            btnOpticalDisable = false
+            btnOpticalDisable=false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImgComp=[traceImg]
-            msgimg=""
+            msgimgComp=""
         end
     end
     
@@ -676,14 +686,14 @@ include("./julia_imzML_visual.jl")
     
             text_nmass=replace(current_msiComp, "MSI_" => "")
             text_nmass=replace(text_nmass, ".bmp" => "")
-            msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            msgimgComp="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImgComp, plotlayoutImgComp, _, _=loadImgPlot(imgIntComp)
-            btnOpticalDisable = false
+            btnOpticalDisable=false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImgComp=[traceImg]
-            msgimg=""
+            msgimgComp=""
         end
     end
     
@@ -704,14 +714,14 @@ include("./julia_imzML_visual.jl")
     
             text_nmass=replace(current_triqComp, "TrIQ_" => "")
             text_nmass=replace(text_nmass, ".bmp" => "")
-            msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            msgtriqComp="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImgTComp, plotlayoutImgTComp, _, _=loadImgPlot(imgIntTComp)
-            btnOpticalDisable = false
+            btnOpticalDisable=false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImgTComp=[traceImg]
-            msgtriq=""
+            msgtriqComp=""
         end
     end
     
@@ -732,14 +742,14 @@ include("./julia_imzML_visual.jl")
     
             text_nmass=replace(current_triqComp, "TrIQ_" => "")
             text_nmass=replace(text_nmass, ".bmp" => "")
-            msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
+            msgtriqComp="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
             # Process the image in the function
             plotdataImgTComp, plotlayoutImgTComp, _, _=loadImgPlot(imgIntTComp)
-            btnOpticalDisable = false
+            btnOpticalDisable=false
         else
             traceImg=PlotlyBase.heatmap(x=[], y=[])
             plotdataImgTComp=[traceImg]
-            msgtriq=""
+            msgtriqComp=""
         end
     end
     
@@ -922,28 +932,28 @@ include("./julia_imzML_visual.jl")
                 spectracoords=reshape(plotdata, 1, length(plotdata))
                 # Extract x and y values from data_click 
                 cursor_data=data_click["cursor"] 
-                x_value = cursor_data["x"]
-                y_value = cursor_data["y"]
+                x_value=cursor_data["x"]
+                y_value=cursor_data["y"]
 
                 # Find the minimum x-value in spectracoords
-                min_x_value = minimum([minimum(val[:x]) for val in spectracoords if !isempty(val[:x])])
+                min_x_value=minimum([minimum(val[:x]) for val in spectracoords if !isempty(val[:x])])
                 # Adjust x_value and spectracoords x-values to start from 0
-                adjusted_x_value = x_value - min_x_value
+                adjusted_x_value=x_value - min_x_value
 
-                closest_distance = Inf
+                closest_distance=Inf
                 for val in spectracoords
-                    adjusted_x = val[:x] .- min_x_value
-                    start_idx = findfirst(x -> x >= adjusted_x_value - 20, adjusted_x)
-                    end_idx = findlast(x -> x <= adjusted_x_value + 20, adjusted_x)
+                    adjusted_x=val[:x] .- min_x_value
+                    start_idx=findfirst(x -> x >= adjusted_x_value - 20, adjusted_x)
+                    end_idx=findlast(x -> x <= adjusted_x_value + 20, adjusted_x)
                     
                     if start_idx !== nothing && end_idx !== nothing
                         for i in start_idx:end_idx
-                            spectra_x = adjusted_x[i]
-                            spectra_y = val[:y][i]
-                            distance = sqrt((spectra_x - adjusted_x_value)^2 + (spectra_y - y_value)^2)
+                            spectra_x=adjusted_x[i]
+                            spectra_y=val[:y][i]
+                            distance=sqrt((spectra_x - adjusted_x_value)^2 + (spectra_y - y_value)^2)
                             if distance < closest_distance
-                                closest_distance = distance
-                                Nmass = round(spectra_x + min_x_value, digits=2)
+                                closest_distance=distance
+                                Nmass=round(spectra_x + min_x_value, digits=2)
                             end
                         end
                     end
