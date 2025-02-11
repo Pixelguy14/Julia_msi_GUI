@@ -248,13 +248,11 @@ include("./julia_imzML_visual.jl")
     @onbutton btnSearch begin
         full_route=pick_file(; filterlist="imzML,mzML")
         if isnothing(full_route)
-            #println("No file selected")
             msg="No file selected"
             warning_msg=true
             btnStartDisable=true
         else
             if endswith(full_route, "imzML") # Case if the file loaded is imzML
-                #println("Selected file path: ", full_route)
                 btnStartDisable=false
                 btnPlotDisable=false
                 # Splitting the route with regex from imzml to mzml so the plotting can work
@@ -297,10 +295,8 @@ include("./julia_imzML_visual.jl")
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
             try
                 spectra=LoadImzml(full_route)
-                println(typeof(spectra))
                 msg="File loaded. Creating spectra with the specific mass and tolerance, please be patient."
                 slice=GetMzSliceJl(spectra,Nmass,Tol)
-                println(typeof(slice))
                 fig=CairoMakie.Figure(size=(150, 250)) # Container
                 # Append a query string to force the image to refresh 
                 timestamp=string(time_ns()) 
@@ -315,7 +311,6 @@ include("./julia_imzML_visual.jl")
                             try
                                 slice=GetMzSliceJl(spectra, Nmass, Tol)
                                 sliceTriq=TrIQ(slice, colorLevel, triqProb)
-                                println(typeof(sliceTriq))
                                 if MFilterEnabled # If the Median filter is ON
                                     sliceTriq=medianFilterjl(sliceTriq)
                                 end
@@ -354,12 +349,11 @@ include("./julia_imzML_visual.jl")
                     image_path=joinpath("./public", "MSI_$(text_nmass).bmp")
                     try
                         sliceQuant=IntQuantCl(slice,Int(colorLevel-1))
-                        println(typeof(sliceQuant))
                         if MFilterEnabled # If the Median filter is ON
                             sliceQuant=medianFilterjl(sliceQuant)
                         end
                     catch e
-                        println("The error is in the non triq slice: $e")
+                        msg="Warning: $e"
                     end
                     sliceQuant=reverse(sliceQuant, dims=2)
                     SaveBitmapCl(joinpath("public", "MSI_$(text_nmass).bmp"),sliceQuant,ViridisPalette)
@@ -434,8 +428,7 @@ include("./julia_imzML_visual.jl")
             try
                 xSpectraMz=mean(spectraMz[1,:])
                 ySpectraMz=mean(spectraMz[2,:])
-            catch e 
-                #println("an error was found: $e")
+            catch e
                 xSpectraMz=spectraMz[1,1]
                 ySpectraMz=spectraMz[2,1]
             end
@@ -778,8 +771,7 @@ include("./julia_imzML_visual.jl")
                 msg="Plot loaded in $(eTime) seconds"
             catch e 
                 msg="Failed to load and process image: $e" 
-                warning_msg=true 
-                println(msg)
+                warning_msg=true
             end
         else
             msg="Image could not be 3d plotted"
@@ -819,8 +811,7 @@ include("./julia_imzML_visual.jl")
                 msg="Plot loaded in $(eTime) seconds"
             catch e 
                 msg="Failed to load and process image: $e" 
-                warning_msg=true 
-                println(msg)
+                warning_msg=true
             end
         else
             msg="Image could not be 3d plotted"
@@ -863,7 +854,6 @@ include("./julia_imzML_visual.jl")
             catch e
                 msg="Failed to load and process image: $e"
                 warning_msg=true
-                println(msg)
             end
         else
             msg="Image could not be 2D plotted"
@@ -905,7 +895,6 @@ include("./julia_imzML_visual.jl")
             catch e
                 msg="Failed to load and process image: $e"
                 warning_msg=true
-                println(msg)
             end
         else
             msg="Image could not be 2D plotted"
