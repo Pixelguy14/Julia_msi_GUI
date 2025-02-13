@@ -59,6 +59,7 @@ include("./julia_imzML_visual.jl")
     @in triq3dPlot=false # To generate 3d plot based on current triq image
     @in imageCPlot=false # To generate contour plots of current image
     @in triqCPlot=false # To generate contour plots of current triq image
+    @in btnCreateImz=false # To start process for creating imzML and Ibd with mzML and Syncro
     # Image change buttons
     @in imgPlus=false
     @in imgMinus=false
@@ -83,7 +84,7 @@ include("./julia_imzML_visual.jl")
     @out imgIntT="/.bmp" # image Interface TrIQ
     @out colorbar="/.png"
     @out colorbarT="/.png"
-    # interface controlling for the comparative view
+    # Interface controlling for the comparative view
     @out imgIntComp="/.bmp" # image Interface
     @out imgIntTComp="/.bmp" # image Interface TrIQ
     @out colorbarComp="/.png"
@@ -247,10 +248,12 @@ include("./julia_imzML_visual.jl")
 
     @onbutton btnSearch begin
         full_route=pick_file(; filterlist="imzML,mzML")
-        if isnothing(full_route)
+        if full_route==""
             msg="No file selected"
             warning_msg=true
             btnStartDisable=true
+            btnSpectraDisable=true
+            SpectraEnabled=false
         else
             if endswith(full_route, "imzML") # Case if the file loaded is imzML
                 btnStartDisable=false
@@ -914,44 +917,22 @@ include("./julia_imzML_visual.jl")
         CompareDialog=true
     end
 
-    # Event detection for clicking on the spectrum plot
+    @onbutton btnCreateImz begin
+        msg="Not yet implemented"
+    end
+
+    # To include a visualization in the spectrum plot indicating where is the selected mass
+    @onchange Nmass begin
+        if !isempty(xSpectraMz)
+            traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines",name="Spectra",showlegend=false)
+            trace2=PlotlyBase.scatter(x=[Nmass, Nmass],y=[0, maximum(ySpectraMz)],mode="lines",line=attr(color="red", width=0.5),name="<i>m/z</i> selected",showlegend=false)
+            plotdata=[traceSpectra,trace2] # We add the data from spectra and the red line to the plot
+        end
+    end
+
+    # Event detection for clicking on the images
     @onchange data_click begin
-        if selectedTab == "tab2"
-            if !isempty(xSpectraMz)
-                spectracoords=reshape(plotdata, 1, length(plotdata))
-                # Extract x and y values from data_click 
-                cursor_data=data_click["cursor"] 
-                x_value=cursor_data["x"]
-                y_value=cursor_data["y"]
-
-                # Find the minimum x-value in spectracoords
-                min_x_value=minimum([minimum(val[:x]) for val in spectracoords if !isempty(val[:x])])
-                # Adjust x_value and spectracoords x-values to start from 0
-                adjusted_x_value=x_value - min_x_value
-
-                closest_distance=Inf
-                for val in spectracoords
-                    adjusted_x=val[:x] .- min_x_value
-                    start_idx=findfirst(x -> x >= adjusted_x_value - 20, adjusted_x)
-                    end_idx=findlast(x -> x <= adjusted_x_value + 20, adjusted_x)
-                    
-                    if start_idx !== nothing && end_idx !== nothing
-                        for i in start_idx:end_idx
-                            spectra_x=adjusted_x[i]
-                            spectra_y=val[:y][i]
-                            distance=sqrt((spectra_x - adjusted_x_value)^2 + (spectra_y - y_value)^2)
-                            if distance < closest_distance
-                                closest_distance=distance
-                                Nmass=round(spectra_x + min_x_value, digits=2)
-                            end
-                        end
-                    end
-                end
-                traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines",name="Spectra",showlegend=false)
-                trace2=PlotlyBase.scatter(x=[Nmass, Nmass],y=[0, maximum(ySpectraMz)],mode="lines",line=attr(color="red", width=0.5),name="<i>m/z</i> selected",showlegend=false)
-                plotdata=[traceSpectra,trace2] # We add the data from spectra and the red line to the plot
-            end
-        elseif selectedTab == "tab1"
+        if selectedTab == "tab1"
             cursor_data=data_click["cursor"] 
             xCoord=Int32(round(cursor_data["x"]))
             yCoord=Int32(round(cursor_data["y"]))
@@ -990,11 +971,11 @@ include("./julia_imzML_visual.jl")
 
     @onbutton btnOptical begin
         imgRoute=pick_file(; filterlist="png,bmp,jpg,jpeg")
-        selectedTab="tab0"
-        plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
-        if isnothing(imgRoute)
+        if imgRoute==""
             msg="No optical image selected"
         else
+            selectedTab="tab0"
+            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
             img=load(imgRoute)
             save("./public/css/imgOver.png",img)
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
@@ -1004,11 +985,11 @@ include("./julia_imzML_visual.jl")
 
     @onbutton btnOpticalT begin
         imgRoute=pick_file(; filterlist="png,bmp,jpg,jpeg")
-        selectedTab="tab1"
-        plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-        if isnothing(imgRoute)
+        if imgRoute==""
             msg="No optical image selected"
         else
+            selectedTab="tab1"
+            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
             img=load(imgRoute)
             save("./public/css/imgOver.png",img)
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT,"/css/imgOver.png",imgTrans)
@@ -1017,19 +998,19 @@ include("./julia_imzML_visual.jl")
     end
 
     @onchange imgTrans begin
-        if !opticalOverTriq
+        if !opticalOverTriq && imgRoute!=""
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
-        else
+        elseif opticalOverTriq && imgRoute!=""
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT,"/css/imgOver.png",imgTrans)
         end
     end
 
     @onchange opticalOverTriq begin
-        if !opticalOverTriq
+        if !opticalOverTriq && imgRoute!=""
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
             selectedTab="tab0"
-        else
+        elseif opticalOverTriq && imgRoute!=""
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT,"/css/imgOver.png",imgTrans)
             selectedTab="tab1"

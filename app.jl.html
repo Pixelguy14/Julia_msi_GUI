@@ -7,22 +7,21 @@
         name.</h6>
       <h6>It may take a while to generate the image and the plot, please be patient.</h6>
       <h6>To generate the contour or surface plots, you have to select the desired image first using the interface.</h6>
+      <h6>Syncro file is required to create imzML and ibd files.</h6>
     </div>
   </header>
   <div id="extDivStyle" class="row col-12 q-pa-xl">
     <div class="row col-6">
       <!-- Left DIV -->
       <div id="intDivStyle" class="st-col col-12 st-module">
-        <!--<q-input id="textRoute" standout="custom-standout" v-model="file_route" label="Insert the route to your imzML file"></q-input>-->
         <h6>Search for the imzML or mzML file in your system</h6>
         <q-btn id="btnStyle" icon="search" class="q-ma-sm" v-on:click="btnSearch=true"
           label="Select your imzML or mzML file"></q-btn>
-        <!--<p>{{full_route}}</p>-->
         <p id="lblFullRoute">full route: {{full_route}}</p>
         <!-- Variable Manipulation -->
         <div class="row">
           <div class="st-col col-4 col-sm q-ma-sm">
-            <q-input standout="custom-standout" id="textNmass" step="0.01" v-model="Nmass"
+            <q-input standout="custom-standout" id="textNmass" step="0.001" v-model="Nmass"
               label="Mass-to-charge ratio of interest" type="number"
               :rules="[ val => !!val || '* Required', val => val >= 0.0 || 'Need positive mass values']"></q-input>
           </div>
@@ -53,8 +52,6 @@
                         val => triqEnabled ? ( '* Required', val >= 0.8 &amp;&amp; val <= 1 || 'Needs to be in range between 0.8 and 1') : true
                         ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
               </div>
-              <!--<div class="st-col col-4 col-sm-4 q-ma-sm">
-              </div>-->
             </div>
           </div>
           <!-- Spectra Plot Manipulation -->
@@ -93,6 +90,13 @@
                         ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
               </div>
             </div>
+            <q-btn id="btnStyle" icon="play_arrow" class="q-ma-sm" v-on:click="btnCreateImz=true"  :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+              label="Generate imzML">
+              <template v-slot:loading>
+                <q-spinner-hourglass class="on-left" />
+                Loading Plot
+              </template>
+            </q-btn>
           </div>
         </div>
         <div class="row">
@@ -109,7 +113,6 @@
         <p>{{msg}}</p>
 
         <div class="row st-col col-12">
-          <!--<q-input id="textName" class="col-9" standout="custom-standout" v-model="file_name" label="Insert the name of your imzML file"></q-input>-->
           <q-btn-dropdown id="btnStyle" class="q-ma-sm" :loading="progressPlot" :disable="btnPlotDisable"
             label="Generate Plots" icon="play_arrow">
             <template v-slot:loading>
@@ -181,7 +184,6 @@
               <div class="col-10 q-pa-none q-ma-none">
                 <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data"
                   @click="data_click"></plotly>
-                <!--<q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgInt" width="80%"></q-img>-->
               </div>
               <div class="col-2 q-pa-none q-ma-none">
                 <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
@@ -203,7 +205,6 @@
               <div class="col-10 q-pa-none q-ma-none ">
                 <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT"
                   class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
-                <!--<q-img id="imgInt" class="q-ma-none q-pa-none" :src="imgIntT" width="80%"></q-img>-->
               </div>
               <div class="col-2 q-pa-none q-ma-none ">
                 <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
@@ -214,9 +215,7 @@
 
           <q-tab-panel name="tab2">
             <!-- Content for Tab 2 -->
-            <!--<plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>-->
-            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none sync_data"
-              @click="data_click"></plotly>
+            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
           </q-tab-panel>
 
           <q-tab-panel name="tab3">
@@ -257,7 +256,7 @@
           <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
         </div>
         <q-toggle id="btnOpticalOver" v-on:click="opticalOverTriq" v-model="opticalOverTriq" color="black"
-                label="Optical over TrIQ"></q-toggle>
+          label="Optical over TrIQ"></q-toggle>
       </q-card-section>
 
       <q-card-section class="q-pt-none col-12">
@@ -327,12 +326,14 @@
                 <!-- Btn image changer -->
                 <div>
                   <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusComp=true"></q-btn>
-                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlusComp=true"></q-btn>
+                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right"
+                    v-on:click="imgPlusComp=true"></q-btn>
                 </div>
                 <!-- Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImgComp" :layout="plotlayoutImgComp" class="q-pa-none q-ma-none">
+                    <plotly id="plotStyle" :data="plotdataImgComp" :layout="plotlayoutImgComp"
+                      class="q-pa-none q-ma-none">
                     </plotly>
                   </div>
                   <div class="col-2 q-pa-none q-ma-none ">
@@ -347,12 +348,14 @@
                 <!-- Triq Btn image changer -->
                 <div>
                   <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusTComp=true"></q-btn>
-                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlusTComp=true"></q-btn>
+                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right"
+                    v-on:click="imgPlusTComp=true"></q-btn>
                 </div>
                 <!-- Triq Image manager -->
                 <div id="image-container" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImgTComp" :layout="plotlayoutImgTComp" class="q-pa-none q-ma-none">
+                    <plotly id="plotStyle" :data="plotdataImgTComp" :layout="plotlayoutImgTComp"
+                      class="q-pa-none q-ma-none">
                     </plotly>
                   </div>
                   <div class="col-2 q-pa-none q-ma-none ">
