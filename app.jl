@@ -286,6 +286,7 @@ include("./julia_imzML_visual.jl")
             msg="Loading SUM spectrum plot..."
             sTime=time()
             plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
+            selectedTab="tab2"
             progressSpectraPlot=false
             btnPlotDisable=false
             if endswith(full_route, "imzML")
@@ -350,7 +351,7 @@ include("./julia_imzML_visual.jl")
                         current_triq="TrIQ_$(text_nmass).bmp"
                         msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
                         # Create colorbar
-                        bound =julia_mzML_imzML.GetOutlierThres(slice, triqProb)
+                        bound=julia_mzML_imzML.GetOutlierThres(slice, triqProb)
                         levels=range(bound[1],stop=bound[2], length=8)
                         levels=vcat(levels, 2*levels[end]-levels[end-1])
                         Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, bound[2]),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size=25)
@@ -406,7 +407,7 @@ include("./julia_imzML_visual.jl")
         else
             msg="File does not exist or a parameter is incorrect, please try again."
             warning_msg=true
-        end|
+        end
         GC.gc() # Trigger garbage collection
         if Sys.islinux()
             ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -414,12 +415,12 @@ include("./julia_imzML_visual.jl")
         btnStartDisable=false
         btnPlotDisable=false
         btnOpticalDisable=false
+        progress=false
         if isfile(full_routeMz)
             # We enable coord search and spectra plot creation
             btnSpectraDisable=false
             SpectraEnabled=true
         end
-        progress=false
     end
 
     @onbutton createSumPlot begin
