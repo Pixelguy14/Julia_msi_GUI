@@ -59,7 +59,6 @@ include("./julia_imzML_visual.jl")
     @in triq3dPlot=false # To generate 3d plot based on current triq image
     @in imageCPlot=false # To generate contour plots of current image
     @in triqCPlot=false # To generate contour plots of current triq image
-    @in btnCreateImz=false # To start process for creating imzML and Ibd with mzML and Syncro
     # Image change buttons
     @in imgPlus=false
     @in imgMinus=false
@@ -274,13 +273,32 @@ include("./julia_imzML_visual.jl")
                 btnSpectraDisable=false
                 SpectraEnabled=true
                 # Splitting the route the same way
-                full_route=replace(full_route, r"\.[^.]*$" => ".imzML") 
+                full_route=replace(full_route, r"\.[^.]*$" => ".imzML")
                 if isfile(full_route)
                     btnStartDisable=false
                 else
                     btnStartDisable=true
                     full_route=full_routeMz
                 end
+            progressSpectraPlot=true
+            btnPlotDisable=true
+            btnStartDisable=true
+            msg="Loading SUM spectrum plot..."
+            sTime=time()
+            plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
+            progressSpectraPlot=false
+            btnPlotDisable=false
+            if endswith(full_route, "imzML")
+                btnStartDisable=false
+            end
+            if isfile(full_routeMz)
+                # We enable coord search and spectra plot creation
+                btnSpectraDisable=false
+                SpectraEnabled=true
+            end
+            fTime=time()
+            eTime=round(fTime-sTime,digits=3)
+            msg="Plot loaded in $(eTime) seconds"
             end
             xCoord=0
             yCoord=0
@@ -388,9 +406,7 @@ include("./julia_imzML_visual.jl")
         else
             msg="File does not exist or a parameter is incorrect, please try again."
             warning_msg=true
-        end
-        spectra=nothing # Important for memory cleaning
-        slice=nothing
+        end|
         GC.gc() # Trigger garbage collection
         if Sys.islinux()
             ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -414,30 +430,7 @@ include("./julia_imzML_visual.jl")
             btnPlotDisable=true
             btnStartDisable=true
             msg="Loading plot..."
-            spectraMz=LoadMzml(full_routeMz)
-            layoutSpectra=PlotlyBase.Layout(
-                title="SUM Spectrum plot",
-                xaxis=PlotlyBase.attr(
-                    title="<i>m/z</i>",
-                    showgrid=true
-                ),
-                yaxis=PlotlyBase.attr(
-                    title="Intensity",
-                    showgrid=true
-                ),
-                autosize=false,
-                margin=attr(l=0,r=0,t=120,b=0,pad=0)
-            )
-            try
-                xSpectraMz=mean(spectraMz[1,:])
-                ySpectraMz=mean(spectraMz[2,:])
-            catch e
-                xSpectraMz=spectraMz[1,1]
-                ySpectraMz=spectraMz[2,1]
-            end
-            traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
-            plotdata=[traceSpectra] # We add the data from spectra to the plot
-            plotlayout=layoutSpectra
+            plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -463,7 +456,7 @@ include("./julia_imzML_visual.jl")
     end
 
     @onbutton createXYPlot begin
-        msg="Sum spectrum plot selected"
+        msg="XY spectrum plot selected"
         sTime=time()
         if isfile(full_routeMz) # Check if the file exists
             progressSpectraPlot=true
@@ -915,10 +908,6 @@ include("./julia_imzML_visual.jl")
 
     @onbutton compareBtn begin
         CompareDialog=true
-    end
-
-    @onbutton btnCreateImz begin
-        msg="Not yet implemented"
     end
 
     # To include a visualization in the spectrum plot indicating where is the selected mass

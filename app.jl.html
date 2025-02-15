@@ -90,13 +90,6 @@
                         ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
               </div>
             </div>
-            <q-btn id="btnStyle" icon="play_arrow" class="q-ma-sm" v-on:click="btnCreateImz=true"  :loading="progressSpectraPlot" :disable="btnSpectraDisable"
-              label="Generate imzML">
-              <template v-slot:loading>
-                <q-spinner-hourglass class="on-left" />
-                Loading Plot
-              </template>
-            </q-btn>
           </div>
         </div>
         <div class="row">

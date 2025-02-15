@@ -405,3 +405,37 @@ function medianFilterjl(pixMap)
     return target
 end
 
+# sumSpectrumPlot recieves the local directory of the image as a string,
+# returns the layout and data for the surface plotly plot
+# this function loads the spectra data and makes a mean to display
+# its values in the spectrum plot
+function sumSpectrumPlot(mzmlRoute::String)
+    spectraMz=LoadMzml(mzmlRoute)
+    xSpectraMz=Float64[]
+    ySpectraMz=Float64[]
+
+    layout=PlotlyBase.Layout(
+        title="SUM spectrum plot",
+        xaxis=PlotlyBase.attr(
+            title="<i>m/z</i>",
+            showgrid=true
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Intensity",
+            showgrid=true
+        ),
+        autosize=false,
+        margin=attr(l=0,r=0,t=120,b=0,pad=0)
+    )
+    try
+        xSpectraMz=mean(spectraMz[1,:])
+        ySpectraMz=mean(spectraMz[2,:])
+    catch e
+        xSpectraMz=spectraMz[1,1]
+        ySpectraMz=spectraMz[2,1]
+    end
+    trace=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
+    plotdata=[trace] # We add the data from spectra to the plot
+    plotlayout=layout
+    return plotdata, plotlayout, xSpectraMz, ySpectraMz
+end

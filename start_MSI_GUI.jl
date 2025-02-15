@@ -4,26 +4,6 @@ Pkg.activate(".")
 Pkg.instantiate()
 Pkg.gc()
 
-"""
-packages = [
-    "GenieFramework", "Libz", "PlotlyBase", "CairoMakie", "Colors", 
-    "Statistics", "NaturalSort",  "Genie", 
-    "Images", "LinearAlgebra", "NativeFileDialog", "StipplePlotly"
-]
-
-# Check for missing packages
-for pkg in packages
-    if !(pkg in keys(Pkg.dependencies()))
-        Pkg.add(pkg)
-    end
-end
-
-# Add library for mzML imzML from GitHub if missing
-if !("julia_mzML_imzML" in keys(Pkg.dependencies()))
-    Pkg.add(url="https://github.com/CINVESTAV-LABI/julia_mzML_imzML")
-end
-"""
-
 using Genie
 
 # Load and configure Genie
