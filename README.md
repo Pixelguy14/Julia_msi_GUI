@@ -25,6 +25,5 @@ A Graphical User Interface for MSI in Julia: https://github.com/CINVESTAV-LABI/j
 3. After the script has finished loading, You can open a page (http://127.0.0.1:1481/) in your browser with the web app running.
 
 Additional notes:<br>
-After the first boot initializes the packages in your computer, subsequent uses of the app should not take longer to load.<br>
+After the first boot initializes the packages in your computer, subsequent uses of the app should take less time to load.<br>
 Recomended system requirements: 4 core processor, 8 GB ram<br>
-Minimum system requirements: 2 core processor, 8 GB ram (long loading times)<br>

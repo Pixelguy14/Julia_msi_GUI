@@ -72,10 +72,10 @@ include("./julia_imzML_visual.jl")
 
     ## Tabulation variables
     @out tabIDs=["tab0","tab1","tab2","tab3","tab4"]
-    @out tabLabels=["Image", "TrIQ", "Spectrum Plot", "Topology Plot","Surface Plot"]
+    @out tabLabels=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
     @in selectedTab="tab0"
     @out CompTabIDs=["tab0","tab1","tab2","tab3","tab4"]
-    @out CompTabLabels=["Image", "TrIQ", "Spectrum Plot", "Topology Plot","Surface Plot"]
+    @out CompTabLabels=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
     @in CompSelectedTab="tab0"
 
     # Interface Images
@@ -247,6 +247,7 @@ include("./julia_imzML_visual.jl")
 
     @onbutton btnSearch begin
         full_route=pick_file(; filterlist="imzML,mzML")
+        msg=""
         if full_route==""
             msg="No file selected"
             warning_msg=true
@@ -260,9 +261,25 @@ include("./julia_imzML_visual.jl")
                 # Splitting the route with regex from imzml to mzml so the plotting can work
                 full_routeMz=replace(full_route, r"\.[^.]*$" => ".mzML") 
                 if isfile(full_routeMz)
-                    # We enable coord search and spectra plot creation
+                    # Start the sum spectrum creation on loading
+                    progressSpectraPlot=true
+                    btnPlotDisable=true
+                    btnStartDisable=true
+                    msg="Loading SUM spectrum plot..."
+                    sTime=time()
+                    plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
+                    selectedTab="tab2"
+                    progressSpectraPlot=false
+                    btnPlotDisable=false
+
+                    # We enable coord search and spectra plot creation, also re-enable main process
                     btnSpectraDisable=false
                     SpectraEnabled=true
+                    btnStartDisable=false
+
+                    fTime=time()
+                    eTime=round(fTime-sTime,digits=3)
+                    msg="Plot loaded in $(eTime) seconds"
                 else
                     # If there's no MzML file, we deny access again
                     btnSpectraDisable=true
@@ -280,26 +297,29 @@ include("./julia_imzML_visual.jl")
                     btnStartDisable=true
                     full_route=full_routeMz
                 end
-            progressSpectraPlot=true
-            btnPlotDisable=true
-            btnStartDisable=true
-            msg="Loading SUM spectrum plot..."
-            sTime=time()
-            plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
-            selectedTab="tab2"
-            progressSpectraPlot=false
-            btnPlotDisable=false
-            if endswith(full_route, "imzML")
-                btnStartDisable=false
-            end
-            if isfile(full_routeMz)
-                # We enable coord search and spectra plot creation
-                btnSpectraDisable=false
-                SpectraEnabled=true
-            end
-            fTime=time()
-            eTime=round(fTime-sTime,digits=3)
-            msg="Plot loaded in $(eTime) seconds"
+                if endswith(full_route, "imzML")
+                    btnStartDisable=false
+                end
+                if isfile(full_routeMz)
+                    # Start the sum spectrum creation on loading
+                    progressSpectraPlot=true
+                    btnPlotDisable=true
+                    btnStartDisable=true
+                    msg="Loading SUM spectrum plot..."
+                    sTime=time()
+                    plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
+                    selectedTab="tab2"
+                    progressSpectraPlot=false
+                    btnPlotDisable=false
+
+                    # We enable coord search and spectra plot creation
+                    btnSpectraDisable=false
+                    SpectraEnabled=true
+
+                    fTime=time()
+                    eTime=round(fTime-sTime,digits=3)
+                    msg="Plot loaded in $(eTime) seconds"
+                end
             end
             xCoord=0
             yCoord=0
