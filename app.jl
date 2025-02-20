@@ -168,11 +168,13 @@ include("./julia_imzML_visual.jl")
         title="Spectrum plot",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
-            showgrid=true
+            showgrid=true,
+            tickformat = ".3g"
         ),
         yaxis=PlotlyBase.attr(
             title="Intensity",
-            showgrid=true
+            showgrid=true,
+            tickformat = ".3g"
         ),
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )

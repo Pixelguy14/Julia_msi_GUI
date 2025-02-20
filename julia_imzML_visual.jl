@@ -252,6 +252,12 @@ function loadContourPlot(interfaceImg::String)
     y=1:size(elevation_smoothed, 1)
     X=repeat(reshape(x, 1, length(x)), length(y), 1)
     Y=repeat(reshape(y, length(y), 1), 1, length(x))
+
+    # Define tick values and text for colorbars
+    min_val = minimum(elevation_smoothed)
+    max_val = maximum(elevation_smoothed)
+    tickV = range(min_val, stop=max_val, length=8)
+    tickT = log_tick_formatter(collect(tickV))
                 
     layout=PlotlyBase.Layout(
         title="2D topographic map of $cleaned_img",
@@ -270,8 +276,10 @@ function loadContourPlot(interfaceImg::String)
         y=-Y[:, 1],  # Use the first column
         contours_coloring="Viridis", 
         colorscale="Viridis",
-        colorbar=attr(
-            tickformat=".2g"
+        colorbar = attr(
+            tickvals = tickV,
+            ticktext = tickT,
+            tickmode = "array"
         )
     )
     plotdata=[trace]
@@ -291,15 +299,24 @@ function loadSurfacePlot(interfaceImg::String)
     img_gray=Gray.(img) # Convert to grayscale
     img_array=Array(img_gray)
     elevation=Float32.(Array(img_array)) ./ 255.0 # Normalize between 0 and 1
+    
     # Smooth the image 
     sigma=3.0
     kernel=Kernel.gaussian(sigma)
     elevation_smoothed=imfilter(elevation, kernel)
+    
     # Create the X, Y meshgrid coordinates 
     x=1:size(elevation_smoothed, 2) 
     y=1:size(elevation_smoothed, 1)
     X=repeat(reshape(x, 1, length(x)), length(y), 1)
     Y=repeat(reshape(y, length(y), 1), 1, length(x))
+
+    # Define tick values and text for colorbars
+    min_val = minimum(elevation_smoothed)
+    max_val = maximum(elevation_smoothed)
+    tickV = range(min_val, stop=max_val, length=8)
+    tickT = log_tick_formatter(collect(tickV))
+
     # Calculate the number of ticks and aspect ratio for the 3d plot
     x_nticks=min(20, length(x))
     y_nticks=min(20, length(y))
@@ -336,8 +353,10 @@ function loadSurfacePlot(interfaceImg::String)
             project_z=true
         ), 
         colorscale="Viridis",
-        colorbar=attr(
-            tickformat=".2g"
+        colorbar = attr(
+            tickvals = tickV,
+            ticktext = tickT,
+            nticks=8
         )
     )
     plotdata=[trace3D]
@@ -418,11 +437,13 @@ function sumSpectrumPlot(mzmlRoute::String)
         title="SUM spectrum plot",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
-            showgrid=true
+            showgrid=true,
+            tickformat = ".3g"
         ),
         yaxis=PlotlyBase.attr(
             title="Intensity",
-            showgrid=true
+            showgrid=true,
+            tickformat = ".3g"
         ),
         autosize=false,
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
