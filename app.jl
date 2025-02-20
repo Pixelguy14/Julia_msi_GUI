@@ -165,7 +165,7 @@ include("./julia_imzML_visual.jl")
     @out plotlayoutImgTComp=layoutImg
     # Interface Plot Spectrum
     layoutSpectra=PlotlyBase.Layout(
-        title="SUM Spectrum plot",
+        title="Spectrum plot",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
             showgrid=true
@@ -193,15 +193,15 @@ include("./julia_imzML_visual.jl")
 
     # Interface Plot Surface
     layoutContour=PlotlyBase.Layout(
-        title="2D Topographic Map",
+        title="2D Topographic map",
         xaxis=PlotlyBase.attr(
-            title="X",
+            visible=false,
             scaleanchor="y"
         ),
         yaxis=PlotlyBase.attr(
-            title="Y"
+            visible=false
         ),
-        margin=attr(l=0,r=0,t=120,b=0,pad=0)
+        margin=attr(l=0,r=0,t=100,b=0,pad=0)
     )
     # Dummy 2D surface plot
     traceContour=PlotlyBase.scatter(x=[], y=[], mode="lines")
@@ -212,7 +212,7 @@ include("./julia_imzML_visual.jl")
     # Interface Plot 3d
     # Define the layout for the 3D plot
     layout3D=PlotlyBase.Layout(
-        title="3D Surface Plot",
+        title="3D Surface plot",
         scene=attr(
             xaxis_title="X",
             yaxis_title="Y",

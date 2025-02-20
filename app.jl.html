@@ -1,6 +1,6 @@
 <template>
   <header id="header">
-    <img src="/css/LABI_logo.jpeg" alt="Labi Logo Icon" id="imgLogo">
+    <img src="/css/LABI_logo.png" alt="Labi Logo Icon" id="imgLogo">
     <div>
       <h4>Julia mzML imzML analysis GUI&nbsp;</h4>
       <h6>Please make sure the ibd, the mzML and the imzML files are located in the same directory and have the same
@@ -166,7 +166,7 @@
           <q-tab-panel name="tab0">
             <!-- Content for Tab 0 -->
             <!-- Btn image changer -->
-            <h6>Image Visualizer</h6>
+            <h6>Image visualizer</h6>
             <div>
               <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinus=true"></q-btn>
               <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlus=true"></q-btn>
@@ -187,7 +187,7 @@
           <q-tab-panel name="tab1">
             <!-- Content for Tab 1 -->
             <!-- Triq Btn image changer -->
-            <h6>TrIQ Visualizer</h6>
+            <h6>TrIQ visualizer</h6>
             <div>
               <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusT=true"></q-btn>
               <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlusT=true"></q-btn>
@@ -242,7 +242,7 @@
   <q-dialog v-model="CompareDialog" full-width>
     <q-card>
       <q-card-section class="row">
-        <div class="text-h6 q-ma-sm">Compare two diferent images or plots in a larger screen</div>
+        <div class="text-h6 q-ma-sm">Compare two diferent images or plots</div>
         <div class="q-mx-sm">
           <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
           <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>

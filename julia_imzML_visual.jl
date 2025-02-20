@@ -254,15 +254,15 @@ function loadContourPlot(interfaceImg::String)
     Y=repeat(reshape(y, length(y), 1), 1, length(x))
                 
     layout=PlotlyBase.Layout(
-        title="2D Topographic Map of $cleaned_img",
+        title="2D topographic map of $cleaned_img",
         xaxis=PlotlyBase.attr(
-            title="X",
+            visible=false,
             scaleanchor="y"
         ),
         yaxis=PlotlyBase.attr(
-            title="Y"
+            visible=false
         ),
-        margin=attr(l=0,r=0,t=120,b=0,pad=0)
+        margin=attr(l=0,r=0,t=100,b=0,pad=0)
     )
     trace=PlotlyBase.contour(
         z=elevation_smoothed,
@@ -307,7 +307,7 @@ function loadSurfacePlot(interfaceImg::String)
     aspect_ratio=attr(x=1, y=length(y) / length(x), z=0.5)
     # Define the layout for the 3D plot
     layout3D=PlotlyBase.Layout(
-        title="3D Surface Plot of $cleaned_img",
+        title="3D surface plot of $cleaned_img",
         scene=attr(
             xaxis_nticks=x_nticks,
             yaxis_nticks=y_nticks,

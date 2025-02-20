@@ -1,6 +1,11 @@
 #btnStyle {
     background: #009f90;
     color: rgb(229, 236, 246);
+    transition: background-color 0.3s ease;
+}
+
+#btnStyle:hover {
+    background-color: #007f72;
 }
 
 #imgInt {
@@ -29,7 +34,6 @@
     padding-right: 10px;
     padding-bottom: 10px;
     padding-left: 10px;
-    background-color: #eff2f5;
 }
 
 .custom-standout {
@@ -39,4 +43,8 @@
 
 #tabHeader {
     color: #009f90;
+}
+
+*{
+    font-family: 'Roboto', 'Lato', sans-serif;
 }
