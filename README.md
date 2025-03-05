@@ -27,3 +27,8 @@ A Graphical User Interface for MSI in Julia: https://github.com/CINVESTAV-LABI/j
 Additional notes:<br>
 After the first boot initializes the packages in your computer, subsequent uses of the app should take less time to load.<br>
 Recomended system requirements: 4 core processor, 8 GB ram<br>
+
+## Example data
+
+Robert Winkler. (2023). mzML mass spectrometry and imzML mass spectrometry imaging test data [Data set]. 
+Zenodo. <https://doi.org/10.5281/zenodo.10084132>

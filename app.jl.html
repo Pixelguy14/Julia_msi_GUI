@@ -30,7 +30,7 @@
               :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
           </div>
           <div class="st-col col-4 col-sm q-ma-sm">
-            <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color level"
+            <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color levels"
               type="number"
               :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
           </div>
