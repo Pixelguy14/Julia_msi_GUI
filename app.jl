@@ -13,6 +13,7 @@ using Images
 using LinearAlgebra
 using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
+using Base.Filesystem: mv # To rename files in the system
 include("./julia_imzML_visual.jl")
 @genietools
 
@@ -248,8 +249,34 @@ include("./julia_imzML_visual.jl")
     # The onbutton handler will set the variable to false after the block is executed
 
     @onbutton btnSearch begin
-        full_route=pick_file(; filterlist="imzML,mzML")
+        full_route=pick_file(; filterlist="imzML,imzml,mzML,mzml")
         msg=""
+        if full_route != ""
+            if endswith(full_route, "imzml")
+                alt_route=replace(full_route, r"\.[^.]*$" => ".imzML")
+                mv(full_route, alt_route)
+                full_route=alt_route
+                # to detect if there's an mzml named wrong
+                alt_routeMz=replace(full_route, r"\.[^.]*$" => ".mzml") 
+                if isfile(alt_routeMz)
+                    alt_routeMz2=replace(alt_routeMz, r"\.[^.]*$" => ".mzML") 
+                    mv(alt_routeMz, alt_routeMz2)
+                    alt_routeMz=alt_routeMz2
+                end
+            end
+            if endswith(full_route, "mzml")
+                alt_route=replace(full_route, r"\.[^.]*$" => ".mzML") 
+                mv(full_route, alt_route)
+                full_route = alt_route 
+                # to detect if there's an imzml named wrong
+                alt_routeMz=replace(full_route, r"\.[^.]*$" => ".imzml") 
+                if isfile(alt_routeMz)
+                    alt_routeMz2=replace(alt_routeMz, r"\.[^.]*$" => ".imzML") 
+                    mv(alt_routeMz, alt_routeMz2)
+                    alt_routeMz=alt_routeMz2
+                end
+            end
+        end
         if full_route==""
             msg="No file selected"
             warning_msg=true
@@ -283,7 +310,7 @@ include("./julia_imzML_visual.jl")
                     eTime=round(fTime-sTime,digits=3)
                     msg="Plot loaded in $(eTime) seconds"
                 else
-                    # If there's no MzML file, we deny access again
+                    # If there's no mzML file, we deny access again
                     btnSpectraDisable=true
                     SpectraEnabled=false
                 end
@@ -291,17 +318,6 @@ include("./julia_imzML_visual.jl")
                 full_routeMz=full_route
                 btnSpectraDisable=false
                 SpectraEnabled=true
-                # Splitting the route the same way
-                full_route=replace(full_route, r"\.[^.]*$" => ".imzML")
-                if isfile(full_route)
-                    btnStartDisable=false
-                else
-                    btnStartDisable=true
-                    full_route=full_routeMz
-                end
-                if endswith(full_route, "imzML")
-                    btnStartDisable=false
-                end
                 if isfile(full_routeMz)
                     # Start the sum spectrum creation on loading
                     progressSpectraPlot=true
@@ -321,6 +337,14 @@ include("./julia_imzML_visual.jl")
                     fTime=time()
                     eTime=round(fTime-sTime,digits=3)
                     msg="Plot loaded in $(eTime) seconds"
+                end
+                # Splitting the route the same way
+                full_route=replace(full_route, r"\.[^.]*$" => ".imzML")
+                if isfile(full_route)
+                    btnStartDisable=false
+                else
+                    btnStartDisable=true
+                    full_route=full_routeMz
                 end
             end
             xCoord=0

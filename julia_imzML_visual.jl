@@ -409,19 +409,37 @@ end
 # This one in particular is a midpoint fiter from a 3x3 neighbour area
 function medianFilterjl(pixMap)
     height, width = size(pixMap)
+    padded_pixMap = padarray(pixMap, 1)
     target = zeros(eltype(pixMap), height, width)
-    for j in 2:(width-1)
-        for i in 2:(height-1)
+    
+    for j in 1:width
+        for i in 1:height
             neighbors = []
-            for dj in max(1, j-1):min(j+1, width)
-                for di in max(1, i-1):min(i+1, height)
-                    push!(neighbors, pixMap[di, dj])
+            for dj in j:j+2
+                for di in i:i+2
+                    push!(neighbors, padded_pixMap[di, dj])
                 end
             end
             target[i, j] = median(neighbors)
         end
     end
+    
     return target
+end
+
+function padarray(A, padsize)
+    h, w = size(A)
+    padded = zeros(eltype(A), h + 2*padsize, w + 2*padsize)
+    padded[padsize+1:end-padsize, padsize+1:end-padsize] .= A
+    padded[1:padsize, padsize+1:end-padsize] .= A[1:padsize, :]
+    padded[end-padsize+1:end, padsize+1:end-padsize] .= A[end-padsize+1:end, :]
+    padded[padsize+1:end-padsize, 1:padsize] .= A[:, 1:padsize]
+    padded[padsize+1:end-padsize, end-padsize+1:end] .= A[:, end-padsize+1:end]
+    padded[1:padsize, 1:padsize] .= A[1, 1]
+    padded[1:padsize, end-padsize+1:end] .= A[1, end]
+    padded[end-padsize+1:end, 1:padsize] .= A[end, 1]
+    padded[end-padsize+1:end, end-padsize+1:end] .= A[end, end]
+    return padded
 end
 
 # sumSpectrumPlot recieves the local directory of the image as a string,
