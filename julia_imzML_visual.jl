@@ -442,17 +442,17 @@ function padarray(A, padsize)
     return padded
 end
 
-# sumSpectrumPlot recieves the local directory of the image as a string,
+# meanSpectrumPlot recieves the local directory of the image as a string,
 # returns the layout and data for the surface plotly plot
 # this function loads the spectra data and makes a mean to display
 # its values in the spectrum plot
-function sumSpectrumPlot(mzmlRoute::String)
+function meanSpectrumPlot(mzmlRoute::String)
     spectraMz=LoadMzml(mzmlRoute)
     xSpectraMz=Float64[]
     ySpectraMz=Float64[]
 
     layout=PlotlyBase.Layout(
-        title="SUM spectrum plot",
+        title="Mean spectrum plot",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
             showgrid=true,

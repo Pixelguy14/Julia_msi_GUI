@@ -54,7 +54,7 @@ include("./julia_imzML_visual.jl")
     @in btnSearch=false # To search for files in your device
     @in mainProcess=false # To generate images
     @in compareBtn=false # To open dialog
-    @in createSumPlot=false # To generate sum spectrum plot
+    @in createMeanPlot=false # To generate mean spectrum plot
     @in createXYPlot=false # To generate an spectrum plot according to the xy values inputed
     @in image3dPlot=false # To generate 3d plot based on current image
     @in triq3dPlot=false # To generate 3d plot based on current triq image
@@ -290,13 +290,13 @@ include("./julia_imzML_visual.jl")
                 # Splitting the route with regex from imzml to mzml so the plotting can work
                 full_routeMz=replace(full_route, r"\.[^.]*$" => ".mzML") 
                 if isfile(full_routeMz)
-                    # Start the sum spectrum creation on loading
+                    # Start the mean spectrum creation on loading
                     progressSpectraPlot=true
                     btnPlotDisable=true
                     btnStartDisable=true
-                    msg="Loading SUM spectrum plot..."
+                    msg="Loading mean spectrum plot..."
                     sTime=time()
-                    plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
+                    plotdata, plotlayout, xSpectraMz, ySpectraMz=meanSpectrumPlot(full_routeMz)
                     selectedTab="tab2"
                     progressSpectraPlot=false
                     btnPlotDisable=false
@@ -319,13 +319,13 @@ include("./julia_imzML_visual.jl")
                 btnSpectraDisable=false
                 SpectraEnabled=true
                 if isfile(full_routeMz)
-                    # Start the sum spectrum creation on loading
+                    # Start the mean spectrum creation on loading
                     progressSpectraPlot=true
                     btnPlotDisable=true
                     btnStartDisable=true
-                    msg="Loading SUM spectrum plot..."
+                    msg="Loading mean spectrum plot..."
                     sTime=time()
-                    plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
+                    plotdata, plotlayout, xSpectraMz, ySpectraMz=meanSpectrumPlot(full_routeMz)
                     selectedTab="tab2"
                     progressSpectraPlot=false
                     btnPlotDisable=false
@@ -469,15 +469,15 @@ include("./julia_imzML_visual.jl")
         end
     end
 
-    @onbutton createSumPlot begin
-        msg="Sum spectrum plot selected"
+    @onbutton createMeanPlot begin
+        msg="Mean spectrum plot selected"
         sTime=time()
         if isfile(full_routeMz) # Check if the file exists
             progressSpectraPlot=true
             btnPlotDisable=true
             btnStartDisable=true
             msg="Loading plot..."
-            plotdata, plotlayout, xSpectraMz, ySpectraMz=sumSpectrumPlot(full_routeMz)
+            plotdata, plotlayout, xSpectraMz, ySpectraMz=meanSpectrumPlot(full_routeMz)
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
