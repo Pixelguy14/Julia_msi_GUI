@@ -1,22 +1,19 @@
-# Julia_msi_GUI<br />
+# JuliaMSI<br />
 A Graphical User Interface for MSI in Julia: https://github.com/CINVESTAV-LABI/julia_mzML_imzML
 
 ## Local Installation
 1. Make sure you have Julia installed, if not, follow the next installation guide for [juliaup](https://github.com/JuliaLang/juliaup) (recommended) or [julia](https://julialang.org/downloads/platform/)
-2. Access the repository using this link:<br>
-   https://github.com/Pixelguy14/Julia_msi_GUI<br>
-   click "<b><> Code</b>" button then hit "<b>Download ZIP</b>"<br>
-   unzip the file in your desired location<br>
+2. Download this repository.
 
 ## Load User Interface
-1. Set working directory to Julia_msi_GUI (this repository) in your terminal using:<br>
+1. Set working directory to JuliaMSI (this repository) in your terminal using:<br>
    Linux:
    ```
-   cd PathToRepository/Julia_msi_GUI-main
+   cd PathToRepository/JuliaMSI
    ```
    Windows/Mac:
    ```
-   cd PathToRepository\Julia_msi_GUI-main
+   cd PathToRepository\JuliaMSI
    ```
 2. Launch the Julia project in your terminal using:
    ```
