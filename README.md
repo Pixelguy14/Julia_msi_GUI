@@ -25,6 +25,10 @@ Additional notes:<br>
 After the first boot initializes the packages in your computer, subsequent uses of the app should take less time to load.<br>
 Recomended system requirements: 4 core processor, 8 GB ram<br>
 
+## License
+
+JuliaMSI is published under the terms of the MIT License.
+
 ## Example data
 
 Robert Winkler. (2023). mzML mass spectrometry and imzML mass spectrometry imaging test data [Data set]. 
