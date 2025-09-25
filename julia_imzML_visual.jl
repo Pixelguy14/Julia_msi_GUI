@@ -473,7 +473,7 @@ function meanSpectrumPlot(mzmlRoute::String)
         xSpectraMz=spectraMz[1,1]
         ySpectraMz=spectraMz[2,1]
     end
-    trace=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
+    trace=PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz,marker=attr(size=1, color="blue", opacity=0.1))
     plotdata=[trace] # We add the data from spectra to the plot
     plotlayout=layout
     return plotdata, plotlayout, xSpectraMz, ySpectraMz

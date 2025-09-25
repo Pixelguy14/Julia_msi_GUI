@@ -6,7 +6,7 @@ using Libz
 using PlotlyBase
 using CairoMakie
 using Colors
-using julia_mzML_imzML
+# using julia_mzML_imzML
 using Statistics
 using NaturalSort
 using Images
@@ -15,6 +15,7 @@ using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
 using Base.Filesystem: mv # To rename files in the system
 include("./julia_imzML_visual.jl")
+include("./src/imzML.jl")
 @genietools
 
 # == Reactive code ==
@@ -151,7 +152,7 @@ include("./julia_imzML_visual.jl")
         ),
         margin=attr(l=0,r=0,t=0,b=0,pad=0)
     )
-    traceImg=PlotlyBase.heatmap(x=[], y=[])
+    traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
     @out plotdataImg=[traceImg]
     @out plotlayoutImg=layoutImg
     # For the image in the comparative view
@@ -180,14 +181,14 @@ include("./julia_imzML_visual.jl")
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
     # Dummy 2D scatter plot
-    traceSpectra=PlotlyBase.scatter(x=[], y=[], mode="lines")
+    traceSpectra=PlotlyBase.stem(x=Vector{Float64}(), y=Vector{Float64}(),marker=attr(size=1, color="blue", opacity=0.1))
     # Create conection to frontend
     @out plotdata=[traceSpectra]
     @out plotlayout=layoutSpectra
     @in xCoord=0
     @in yCoord=0
-    @out xSpectraMz=Float64[]
-    @out ySpectraMz=Float64[]
+    @out xSpectraMz = Vector{Float64}()
+    @out ySpectraMz = Vector{Float64}()
 
     # Interactive plot reactions
     @in data_click=Dict{String,Any}()
@@ -207,7 +208,7 @@ include("./julia_imzML_visual.jl")
         margin=attr(l=0,r=0,t=100,b=0,pad=0)
     )
     # Dummy 2D surface plot
-    traceContour=PlotlyBase.scatter(x=[], y=[], mode="lines")
+    traceContour=PlotlyBase.scatter(x=Vector{Float64}(), y=Vector{Float64}(), mode="lines")
     # Create conection to frontend
     @out plotdataC=[traceContour]
     @out plotlayoutC=layoutContour
@@ -233,7 +234,7 @@ include("./julia_imzML_visual.jl")
     x=1:10
     y=1:10
     z=[sin(i * j / 10) for i in x, j in y]
-    trace3D=PlotlyBase.surface(x=[], y=[], z=[],
+    trace3D=PlotlyBase.surface(x=Vector{Float64}(), y=Vector{Float64}(), z=Matrix{Float64}(undef, 0, 0),
                                 contours_z=attr(
                                     show=true,
                                     usecolormap=true,
@@ -362,7 +363,7 @@ include("./julia_imzML_visual.jl")
         if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <=1 && colorLevel > 1 && colorLevel < 257
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
             try
-                spectra=LoadImzml(full_route)
+                spectra=load_imzml(full_route)
                 msg="File loaded. Creating spectra with the specific mass and tolerance, please be patient."
                 slice=GetMzSliceJl(spectra,Nmass,Tol)
                 fig=CairoMakie.Figure(size=(150, 250)) # Container
@@ -588,7 +589,7 @@ include("./julia_imzML_visual.jl")
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
             btnOpticalDisable=false
         else
-            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImg=[traceImg]
             msgimg=""
         end
@@ -615,7 +616,7 @@ include("./julia_imzML_visual.jl")
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
             btnOpticalDisable=false
         else
-            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImg=[traceImg]
             msgimg=""
         end
@@ -643,7 +644,7 @@ include("./julia_imzML_visual.jl")
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
             btnOpticalDisable=false
         else
-            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgT=[traceImg]
             msgtriq=""
         end
@@ -670,7 +671,7 @@ include("./julia_imzML_visual.jl")
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
             btnOpticalDisable=false
         else
-            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgT=[traceImg]
             msgtriq=""
         end
@@ -699,7 +700,7 @@ include("./julia_imzML_visual.jl")
             plotdataImgComp, plotlayoutImgComp, _, _=loadImgPlot(imgIntComp)
             btnOpticalDisable=false
         else
-            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgComp=[traceImg]
             msgimgComp=""
         end
@@ -727,7 +728,7 @@ include("./julia_imzML_visual.jl")
             plotdataImgComp, plotlayoutImgComp, _, _=loadImgPlot(imgIntComp)
             btnOpticalDisable=false
         else
-            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgComp=[traceImg]
             msgimgComp=""
         end
@@ -755,7 +756,7 @@ include("./julia_imzML_visual.jl")
             plotdataImgTComp, plotlayoutImgTComp, _, _=loadImgPlot(imgIntTComp)
             btnOpticalDisable=false
         else
-            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgTComp=[traceImg]
             msgtriqComp=""
         end
@@ -783,7 +784,7 @@ include("./julia_imzML_visual.jl")
             plotdataImgTComp, plotlayoutImgTComp, _, _=loadImgPlot(imgIntTComp)
             btnOpticalDisable=false
         else
-            traceImg=PlotlyBase.heatmap(x=[], y=[])
+            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgTComp=[traceImg]
             msgtriqComp=""
         end

@@ -1,7 +1,11 @@
 using Pkg
 sTime=time()
 Pkg.activate(".")
-Pkg.instantiate()
+# Only instantiate in development mode
+if get(ENV, "GENIE_ENV", "dev") != "prod"
+    @info "Development environment detected. Instantiating packages..."
+    Pkg.instantiate()
+end
 Pkg.gc()
 
 using Genie
