@@ -51,7 +51,7 @@ Retrieves an attribute's value from an XML tag string.
 """
 function get_attribute(source::AbstractString, tag::String = "([^=]+)")
     # Construct the regex pattern string
-    pattern_str = "\s" * tag * "=\"([^"]*)\""
+    pattern_str = "\\s" * tag * "=\"([^\"]*)\""
     regStr = Regex(pattern_str)
     return match(regStr, source)
 end
@@ -107,16 +107,3 @@ mutable struct CVParams
     is_compressed::Bool
     axis_type::Symbol
 end
-
-function update_cv_params!(params::CVParams, acc::String)
-    if acc == "MS:1000514"; params.axis_type = :mz;
-    elseif acc == "MS:1000515"; params.axis_type = :intensity;
-    elseif acc == "MS:1000519"; params.format = Int32;
-    elseif acc == "MS:1000521"; params.format = Float32;
-    elseif acc == "MS:1000522"; params.format = Int64;
-    elseif acc == "MS:1000523"; params.format = Float64;
-    elseif acc == "MS:1000574"; params.is_compressed = true;
-    end
-end
-
-

@@ -6,7 +6,7 @@ using Libz
 using PlotlyBase
 using CairoMakie
 using Colors
-# using julia_mzML_imzML
+using julia_mzML_imzML
 using Statistics
 using NaturalSort
 using Images
@@ -15,7 +15,7 @@ using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
 using Base.Filesystem: mv # To rename files in the system
 include("./julia_imzML_visual.jl")
-include("./src/imzML.jl")
+
 @genietools
 
 # == Reactive code ==
@@ -363,7 +363,7 @@ include("./src/imzML.jl")
         if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <=1 && colorLevel > 1 && colorLevel < 257
             msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
             try
-                spectra=load_imzml(full_route)
+                spectra=LoadImzml(full_route)
                 msg="File loaded. Creating spectra with the specific mass and tolerance, please be patient."
                 slice=GetMzSliceJl(spectra,Nmass,Tol)
                 fig=CairoMakie.Figure(size=(150, 250)) # Container

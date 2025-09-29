@@ -1,40 +1,4 @@
-
-using Images, ImageFiltering, StatsBase, Statistics, CairoMakie, ColorSchemes, DataFrames, CSV, Printf, Dates
-include("ParserHelpers.jl")
-
-# --- Lazy Loading Data Structures ---
-
-# Struct to hold metadata for a single spectrum, for lazy loading.
-struct SpectrumMetadata
-    x::Int32
-    y::Int32
-    mz_offset::Int64
-    intensity_offset::Int64
-    mz_count::Int32
-    intensity_count::Int32
-end
-
-# Struct to hold the parsed imzML metadata and the handle to the .ibd file.
-mutable struct ImzMLData
-    ibd_handle::IO
-    mz_format::Type
-    intensity_format::Type
-    spectra_metadata::Vector{SpectrumMetadata}
-    width::Int
-    height::Int
-    mz_is_first::Bool # To know the order in the ibd file
-
-    function ImzMLData(ibd_handle::IO, mz_format::Type, intensity_format::Type, spectra_metadata::Vector{SpectrumMetadata}, width::Int, height::Int, mz_is_first::Bool)
-        obj = new(ibd_handle, mz_format, intensity_format, spectra_metadata, width, height, mz_is_first)
-        finalizer(obj) do o
-            if isopen(o.ibd_handle)
-                close(o.ibd_handle)
-            end
-        end
-        return obj
-    end
-end
-
+using Images, Statistics, CairoMakie, DataFrames, Printf, ColorSchemes
 
 # --- Extracted from imzML.jl ---
 
@@ -43,7 +7,7 @@ This file provides a library for parsing `.imzML` and `.ibd` files in pure Julia
 It is intended to be included by a parent script.
 
 Core Functions:
-- `load_imzml`: The main function that orchestrates the parsing.
+- `load_imzml_lazy`: The main function that orchestrates the parsing.
 - Helper functions for reading XML metadata and binary spectral data.
 """
 
@@ -174,95 +138,115 @@ end
 
 
 """
-    load_imzml(file_path::String)
-Main function to parse an `.imzML`/.ibd file pair and prepare for lazy loading.
-It parses the metadata from the `.imzML` file, including spectrum coordinates and
-byte offsets for data in the `.ibd` file, but does not load the spectral data itself.
+    load_imzml_lazy(file_path::String; cache_size=100)
 
-# Returns
-- An `ImzMLData` struct containing the open `.ibd` file handle and all necessary metadata
-  for on-demand data loading.
+Main function to parse an `.imzML`/.ibd file pair and prepare for lazy loading.
+It now returns a unified MSIData object.
 """
-function load_imzml(file_path::String)
+function load_imzml_lazy(file_path::String; cache_size=100)
+    println("DEBUG: Checking for .imzML file at $file_path")
     if !isfile(file_path)
         error("Provided path is not a file: $(file_path)")
     end
 
-    ibd_path = replace(file_path, ".imzML" => ".ibd")
+    ibd_path = replace(file_path, r"\.(imzML|mzML)"i => ".ibd")
+    println("DEBUG: Checking for .ibd file at $ibd_path")
     if !isfile(ibd_path)
         error("Corresponding .ibd file not found for: $(file_path)")
     end
 
-    stream = open(file_path)
-    hIbd = open(ibd_path)
+    println("DEBUG: Opening file streams for .imzML and .ibd")
+    stream = open(file_path, "r")
+    hIbd = open(ibd_path, "r")
 
-    # We don't use a try/finally block because we need to return the open hIbd handle.
-    # The finalizer on the ImzMLData struct will be responsible for closing it.
+    try
+        println("DEBUG: Configuring axes...")
+        axis = axes_config_img(stream)
+        println("DEBUG: Getting image dimensions...")
+        imgDim = get_img_dimensions(stream)
+        width, height, num_spectra = imgDim
+        println("DEBUG: Image dimensions: $(width)x$(height), $num_spectra spectra.")
 
-    axis = axes_config_img(stream)
-    imgDim = get_img_dimensions(stream)
-    width, height, num_spectra = imgDim
+        mz_config_idx = findfirst(a -> a.Axis == 1, axis)
+        int_config_idx = findfirst(a -> a.Axis == 2, axis)
+        mz_format = axis[mz_config_idx].Format
+        intensity_format = axis[int_config_idx].Format
+        println("DEBUG: m/z format: $mz_format, Intensity format: $intensity_format")
 
-    # Determine which format is for m/z and which for intensity from the referenceableParamGroups
-    mz_config_idx = findfirst(a -> a.Axis == 1, axis)
-    int_config_idx = findfirst(a -> a.Axis == 2, axis)
-    mz_format = axis[mz_config_idx].Format
-    intensity_format = axis[int_config_idx].Format
+        # --- NEW PARSING LOGIC based on the old, working code ---
+        println("DEBUG: Learning file structure from first spectrum...")
+        start_of_spectra_xml = position(stream)
+        attr = get_spectrum_attributes(stream, hIbd)
+        current_ibd_offset = position(hIbd)
+        seek(stream, start_of_spectra_xml)
+        println("DEBUG: Initial IBD offset: $current_ibd_offset")
 
-    # The original parsing logic is highly optimized and relies on fixed offsets within the XML structure.
-    # We reuse it to get the initial .ibd file offset and the structural attributes of the <spectrum> tags.
-    start_of_spectra_xml = position(stream)
-    attr = get_spectrum_attributes(stream, hIbd)
-    
-    # get_spectrum_attributes moves the hIbd pointer to the start of the first spectrum's binary data.
-    current_ibd_offset = position(hIbd)
+        spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
+        mz_is_first = attr[3] == 3
 
-    # We need to re-scan the spectra list from the beginning to get metadata for each spectrum.
-    seek(stream, start_of_spectra_xml)
+        println("DEBUG: Parsing metadata for $num_spectra spectra using skip-based method...")
+        for k in 1:num_spectra
+            # Use skip values learned from the first spectrum, assuming all are identical.
+            skip(stream, attr[5]) # Skip to X coordinate value
+            val_tag_x = find_tag(stream, r"value=\"(\d+)\"")
+            x = parse(Int32, val_tag_x.captures[1])
 
-    spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
-    
-    # attr[3] is 4 if the first binary data array is intensity, 3 if it's m/z.
-    mz_is_first = attr[3] == 3
+            skip(stream, attr[6]) # Skip to Y coordinate value
+            val_tag_y = find_tag(stream, r"value=\"(\d+)\"")
+            y = parse(Int32, val_tag_y.captures[1])
 
-    for k in 1:num_spectra
-        # These skips are based on the structure of the first spectrum tag, assuming all are identical.
-        skip(stream, attr[5]) # Skip to X coordinate value
-        val_tag = find_tag(stream, r"value=\"(\d+)\"")
-        x = parse(Int32, val_tag.captures[1])
+            skip(stream, attr[7]) # Skip to array length value
+            val_tag_len = find_tag(stream, r"value=\"(\d+)\"")
+            nPoints = parse(Int32, val_tag_len.captures[1])
 
-        skip(stream, attr[6]) # Skip to Y coordinate value
-        val_tag = find_tag(stream, r"value=\"(\d+)\"")
-        y = parse(Int32, val_tag.captures[1])
+            mz_len_bytes = nPoints * sizeof(mz_format)
+            int_len_bytes = nPoints * sizeof(intensity_format)
 
-        skip(stream, attr[7]) # Skip to array length value
-        val_tag = find_tag(stream, r"value=\"(\d+)\"")
-        nPoints = parse(Int32, val_tag.captures[1])
+            local mz_offset, int_offset
+            if mz_is_first
+                mz_offset = current_ibd_offset
+                int_offset = mz_offset + mz_len_bytes
+            else
+                int_offset = current_ibd_offset
+                mz_offset = int_offset + int_len_bytes
+            end
 
-        mz_len_bytes = nPoints * sizeof(mz_format)
-        int_len_bytes = nPoints * sizeof(intensity_format)
-
-        local mz_offset, int_offset
-        if mz_is_first
-            mz_offset = current_ibd_offset
-            int_offset = mz_offset + mz_len_bytes
-        else
-            int_offset = current_ibd_offset
-            mz_offset = int_offset + int_len_bytes
+            # Create modern SpectrumAsset objects
+            mz_asset = SpectrumAsset(mz_format, false, mz_offset, nPoints, :mz)
+            int_asset = SpectrumAsset(intensity_format, false, int_offset, nPoints, :intensity)
+            
+            spectra_metadata[k] = SpectrumMetadata(x, y, "", mz_asset, int_asset)
+            
+            # Advance the offset for the next spectrum's data.
+            current_ibd_offset += mz_len_bytes + int_len_bytes
+            
+            skip(stream, attr[8]) # Skip to the end of the spectrum tag
         end
+        # --- END OF NEW PARSING LOGIC ---
 
-        spectra_metadata[k] = SpectrumMetadata(x, y, mz_offset, int_offset, nPoints, nPoints)
+        println("DEBUG: Metadata parsing complete.")
         
-        # Advance the offset for the next spectrum's data.
-        current_ibd_offset += mz_len_bytes + int_len_bytes
-        
-        skip(stream, attr[8]) # Skip to the end of the spectrum tag
+        # Build coordinate map for imzML files
+        println("DEBUG: Building coordinate map...")
+        coordinate_map = zeros(Int, width, height)
+        for (idx, meta) in enumerate(spectra_metadata)
+            if 1 <= meta.x <= width && 1 <= meta.y <= height
+                coordinate_map[meta.x, meta.y] = idx
+            end
+        end
+        println("DEBUG: Coordinate map built.")
+
+        close(stream)
+
+        source = ImzMLSource(hIbd, mz_format, intensity_format)
+        println("DEBUG: Creating MSIData object.")
+        return MSIData(source, spectra_metadata, (width, height), coordinate_map, cache_size)
+
+    catch e
+        close(stream)
+        close(hIbd)
+        rethrow(e)
     end
-    
-    # Close the .imzML file stream, but leave the .ibd stream open for lazy reading.
-    close(stream)
-
-    return ImzMLData(hIbd, mz_format, intensity_format, spectra_metadata, width, height, mz_is_first)
 end
 
 # --- End of content from imzML.jl ---
@@ -310,9 +294,8 @@ end
     load_slices(folder, masses, tolerance)
 
 Loads image slices for multiple masses from all `.imzML` files in a directory.
-This function is optimized to read the binary data file (`.ibd`) only once per file.
-It iterates through each spectrum, reads its data, and finds all target masses
-before proceeding to the next spectrum, minimizing disk I/O.
+This function is now refactored to use the new MSIData architecture and its
+caching capabilities.
 """
 function load_slices(folder, masses, tolerance)
     files = filter(f -> endswith(f, ".imzML"), readdir(folder, join=true))
@@ -331,43 +314,27 @@ function load_slices(folder, masses, tolerance)
         push!(names, name)
         @info "Processing $(i)/$(n_files): $(name)"
         
-        imzML_data = @time load_imzml(file) # This is fast, it's fine.
+        # Load data using the new lazy loader, returning an MSIData object
+        msi_data = @time load_imzml_lazy(file)
 
         # Create empty images for all slices for the current file
-        current_file_slices = [zeros(Float64, imzML_data.width, imzML_data.height) for _ in 1:n_slices]
+        width, height = msi_data.image_dims
+        current_file_slices = [zeros(Float64, width, height) for _ in 1:n_slices]
 
-        hIbd = imzML_data.ibd_handle
-        mz_format = imzML_data.mz_format
-        int_format = imzML_data.intensity_format
-
-        # Pre-allocate arrays to be reused for each spectrum
-        mz_array = Array{mz_format}(undef, 0)
-        intensity_array = Array{int_format}(undef, 0)
-
-        # Iterate through each spectrum ONCE
-        for meta in imzML_data.spectra_metadata
-            # Resize arrays if the number of points in the spectrum has changed
-            if length(mz_array) != meta.mz_count
-                resize!(mz_array, meta.mz_count)
-                resize!(intensity_array, meta.intensity_count)
-            end
-
-            # Read spectrum data ONCE from the .ibd file
-            seek(hIbd, meta.mz_offset)
-            read!(hIbd, mz_array)
-            seek(hIbd, meta.intensity_offset)
-            read!(hIbd, intensity_array)
-
+        # Use the high-performance iterator to process all spectra
+        _iterate_spectra_fast(msi_data) do spec_idx, mz_array, intensity_array
+            meta = msi_data.spectra_metadata[spec_idx]
+            
             # Now, check for all masses of interest in this single spectrum
             for (j, mass) in enumerate(masses)
                 intensity = find_mass(mz_array, intensity_array, mass, tolerance)
                 if intensity > 0.0
-                    if 1 <= meta.x <= imzML_data.width && 1 <= meta.y <= imzML_data.height
-                        current_file_slices[j][meta.x, meta.y] = intensity
+                    if 1 <= meta.x <= width && 1 <= meta.y <= height
+                        current_file_slices[j][meta.y, meta.x] = intensity
                     end
                 end
             end
-        end # end of spectra loop
+        end # end of fast iterator
 
         # Assign the generated images to the main list
         for j in 1:n_slices
@@ -377,6 +344,70 @@ function load_slices(folder, masses, tolerance)
     end # end of files loop
     
     return (img_list, names)
+end
+
+
+"""
+    plot_slice(msi_data::MSIData, mass::Float64, tolerance::Float64, output_dir::String; stage_name="slice", bins=256)
+
+Generates and saves a plot of a single image slice for a given m/z value.
+This function closely imitates the logic of the original `GetSlice` but uses
+the modern `MSIData` access patterns and robust peak finding.
+"""
+function plot_slice(msi_data::MSIData, mass::Real, tolerance::Real, output_dir::String; stage_name="slice_mz_$(mass)", bins=256)
+    
+    # 1. Create an empty image for the slice, with dimensions matching plotting expectations
+    width, height = msi_data.image_dims
+    slice_matrix = zeros(Float64, height, width)
+
+    # 2. Iterate through each spectrum to build the slice
+    println("Generating slice for m/z $mass...")
+    _iterate_spectra_fast(msi_data) do spec_idx, mz_array, intensity_array
+        meta = msi_data.spectra_metadata[spec_idx]
+        
+        # Find the peak intensity using the modern, robust find_mass
+        intensity = find_mass(mz_array, intensity_array, mass, tolerance)
+        
+        if intensity > 0.0
+            # Populate the matrix using (y, x) indexing
+            if 1 <= meta.x <= width && 1 <= meta.y <= height
+                slice_matrix[meta.y, meta.x] = intensity
+            end
+        end
+    end
+    println("Slice generation complete.")
+
+    # 3. Plot the resulting slice matrix using CairoMakie
+    println("Plotting slice...")
+    
+    fig = Figure(size = (600, 500))
+    ax = CairoMakie.Axis(fig[1, 1],
+        aspect=DataAspect(),
+        title=@sprintf("Slice for m/z: %.2f", mass)
+    )
+    hidedecorations!(ax)
+
+    # Use mass-specific bounds for colorrange, ensuring a valid range
+    min_val, max_val = extrema(slice_matrix)
+    if min_val == max_val
+        max_val = min_val + 1.0 # Ensure the color range has a non-zero width
+    end
+    hm = heatmap!(ax, slice_matrix,
+        colormap=cgrad(ColorSchemes.viridis, bins),
+        colorrange=(min_val, max_val)
+    )
+    
+    Colorbar(fig[1, 2], hm, label="Intensity")
+    colgap!(fig.layout, 5)
+
+    # 4. Save the plot
+    mkpath(output_dir)
+    filename = "$(stage_name).png"
+    save_path = joinpath(output_dir, filename)
+    save(save_path, fig)
+    @info "Saved slice plot to $save_path"
+    
+    return fig
 end
 
 # ============================================================================
@@ -646,54 +677,4 @@ function plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dp
         @info "Saved $(fmt) overview plot to $save_path"
     end
     return fig
-end
-
-# =============================================================================
-#
-#
-# Main Workflow
-#
-# ============================================================================
-
-function load_config(path)
-    config = Dict{String, Any}()
-    if !isfile(path)
-        @warn "Config file not found at $(path). Using default parameters."
-        # Define defaults here in case the file is missing
-        config["masses"] = [100]
-        config["tolerance"] = 0.1
-        config["color_depth"] = 255
-        config["outlier_prob"] = 0.98
-        return config
-    end
-
-    for line in eachline(path)
-        line = strip(line)
-        if isempty(line) || startswith(line, "#")
-            continue # Skip empty lines and comments
-        end
-        parts = split(line, '=', limit=2)
-        if length(parts) != 2
-            @warn "Skipping malformed line in config: $(line)"
-            continue
-        end
-        key = strip(parts[1])
-        value_str = strip(parts[2])
-
-        try
-            if key == "masses"
-                values = [parse(Float64, s) for s in split(value_str, ',')]
-                config[key] = values
-            elseif key == "tolerance"
-                config[key] = parse(Float64, value_str)
-            elseif key == "color_depth"
-                config[key] = parse(Int, value_str)
-            elseif key == "outlier_prob"
-                config[key] = parse(Float64, value_str)
-            end
-        catch e
-            @error "Could not parse value for key '$(key)': $(value_str)"
-        end
-    end
-    return config
 end
