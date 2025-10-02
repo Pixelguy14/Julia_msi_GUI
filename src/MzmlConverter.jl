@@ -26,26 +26,19 @@ struct BinaryMetadata
 end
 
 """
-    GetMzmlScanTime(fileName::String)
+    GetMzmlScanTime_linebyline(fileName::String)
 
-Parses a .mzML file to extract the scan start time for each spectrum.
-
-# Arguments
-* `fileName`: Path to the .mzML file.
-
-# Returns
-- A `Matrix{Int64}` where each row is `[spectrum_index, time_in_milliseconds]`.
+(Internal) Slow, line-by-line parser for scan times. Used as a fallback if
+the .mzML file index is missing or corrupt.
 """
-function GetMzmlScanTime(fileName::String)
+function GetMzmlScanTime_linebyline(fileName::String)
     times = Tuple{Int64, Int64}[]
     
-    # Pre-allocate based on an estimate to reduce re-allocations
     try
         file_size = filesize(fileName)
-        estimated_spectra = max(1000, file_size ÷ 10000) # Heuristic
+        estimated_spectra = max(1000, file_size ÷ 10000)
         sizehint!(times, estimated_spectra)
     catch
-        # Ignore if filesize fails, sizehint! is just an optimization
     end
 
     open(fileName, "r") do stream
@@ -60,27 +53,23 @@ function GetMzmlScanTime(fileName::String)
                     current_index = 0
                     current_time = nothing
                     
-                    # Process index from the start tag itself
                     idx_match = match(r"index=\"(\d+)\"", line)
                     if idx_match !== nothing
                         current_index = parse(Int, idx_match.captures[1]) + 1
                     end
                 end
             elseif state == :in_spectrum
-                # Look for time cvParam
                 if occursin("<cvParam", line)
                     if occursin("MS:1000016", line) || occursin("MS:1000015", line)
                         time_match = match(r"value=\"([\d\.]+)\"", line)
                         if time_match !== nothing
                             time_val = parse(Float64, time_match.captures[1])
-                            # MS:1000016 is minutes, MS:1000015 is seconds
                             unit_scale = occursin("MS:1000016", line) ? 60000 : 1000
                             current_time = round(Int64, time_val * unit_scale)
                         end
                     end
                 end
 
-                # Check for end of spectrum
                 if occursin("</spectrum>", line)
                     state = :outside_spectrum
                     if current_index > 0 && current_time !== nothing
@@ -91,9 +80,100 @@ function GetMzmlScanTime(fileName::String)
         end
     end
     
-    # Sort by spectrum index to ensure correct order before normalization
     sort!(times, by = x -> x[1])
 
+    if !isempty(times)
+        first_time = times[1][2]
+        for i in eachindex(times)
+            times[i] = (times[i][1], times[i][2] - first_time)
+        end
+    end
+    
+    if isempty(times)
+        return Matrix{Int64}(undef, 0, 2)
+    end
+    return permutedims(hcat(collect.(times)...))
+end
+
+"""
+    GetMzmlScanTime(fileName::String)
+
+Parses a .mzML file to extract the scan start time for each spectrum.
+Uses the indexed part of the .mzML file for fast access, falling back to
+a slower line-by-line parse if the index is not present.
+
+# Arguments
+* `fileName`: Path to the .mzML file.
+
+# Returns
+- A `Matrix{Int64}` where each row is `[spectrum_index, time_in_milliseconds]`.
+"""
+function GetMzmlScanTime(fileName::String)
+    times = Tuple{Int64, Int64}[]
+    
+    try
+        open(fileName, "r") do stream
+            # 1. Find and parse the spectrum index offsets
+            seekend(stream)
+            end_chunk_size = min(filesize(stream), 8192)
+            seek(stream, filesize(stream) - end_chunk_size)
+            footer = read(stream, String)
+            
+            index_offset_match = match(r"<indexListOffset>(\d+)</indexListOffset>", footer)
+            if index_offset_match === nothing
+                @warn "No <indexListOffset> found. Falling back to slow line-by-line parsing for scan times. This may be memory intensive."
+                return GetMzmlScanTime_linebyline(fileName)
+            end
+            
+            index_offset = parse(Int64, index_offset_match.captures[1])
+            seek(stream, index_offset)
+            
+            # The find_tag function is defined in ParserHelpers.jl
+            if find_tag(stream, r"<index\s+name=\"spectrum\"") === nothing
+                @warn "Could not find spectrum index. Falling back to slow line-by-line parsing."
+                return GetMzmlScanTime_linebyline(fileName)
+            end
+
+            # The parse_offset_list function is defined in mzML.jl
+            spectrum_offsets = parse_offset_list(stream)
+
+            # 2. Iterate through offsets and parse time for each spectrum
+            for (idx, offset) in enumerate(spectrum_offsets)
+                seek(stream, offset)
+                
+                current_time = nothing
+                
+                # Read a limited number of lines to find the time
+                for _ in 1:100 
+                    if eof(stream) break end
+                    line = readline(stream)
+
+                    if occursin("MS:1000016", line) || occursin("MS:1000015", line) # scan start time
+                        time_match = match(r"value=\"([\d\.]+)\"", line)
+                        if time_match !== nothing
+                            time_val = parse(Float64, time_match.captures[1])
+                            unit_scale = occursin("MS:1000016", line) ? 60000 : 1000 # minutes vs seconds
+                            current_time = round(Int64, time_val * unit_scale)
+                            break 
+                        end
+                    end
+                    if occursin("<binary>", line) || occursin("</spectrum>", line)
+                        break
+                    end
+                end
+
+                if current_time !== nothing
+                    push!(times, (idx, current_time))
+                end
+            end
+        end
+    catch e
+        @error "Failed to parse scan times with indexed method. Falling back to line-by-line." exception=(e, catch_backtrace())
+        return GetMzmlScanTime_linebyline(fileName)
+    end
+
+    # The index is already sorted by spectrum index, so no need to sort `times`.
+    
     # Normalize times relative to the first scan
     if !isempty(times)
         first_time = times[1][2]
@@ -102,7 +182,6 @@ function GetMzmlScanTime(fileName::String)
         end
     end
     
-    # Convert vector of tuples to a matrix
     if isempty(times)
         return Matrix{Int64}(undef, 0, 2)
     end
@@ -329,131 +408,113 @@ function RenderPixel(pixel_info, scans, msi_data::MSIData, scan_time_deltas, pix
     return (mz_array, new_intensity)
 end
 
-function ConvertMzmlToImzml(source_file::String, timing_matrix::Matrix{Int64}, scans::Matrix{Int64})
+function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing_matrix::Matrix{Int64}, scans::Matrix{Int64})
     if size(timing_matrix, 1) == 0
-        return ProcessedPixel[], (0, 0)
+        # Create an empty .ibd file if there's nothing to process
+        open(target_ibd_file, "w") do ibd_stream
+            write(ibd_stream, zeros(UInt8, 16)) # UUID placeholder
+        end
+        return BinaryMetadata[], Tuple{Int, Int}[], (0, 0)
     end
     
-    # Get image dimensions from timing_matrix (assuming columns 1 and 2 are X and Y)
     width = maximum(timing_matrix[:, 1])
     height = maximum(timing_matrix[:, 2])
 
-    # Open the mzML file using the new memory-efficient API
     msi_data = OpenMSIData(source_file)
 
-    # Pre-calculate time deltas robustly
     scan_time_deltas = zeros(Int64, size(scans, 1))
     if size(scans, 1) > 1
         for i in 1:(size(scans, 1) - 1)
             delta = scans[i+1, 2] - scans[i, 2]
-            scan_time_deltas[i] = max(1, delta) # Ensure delta is at least 1
+            scan_time_deltas[i] = max(1, delta)
         end
-        scan_time_deltas[end] = max(1, scan_time_deltas[end-1]) # Use previous delta for last scan, ensure at least 1
+        scan_time_deltas[end] = max(1, scan_time_deltas[end-1])
     end
 
     pixel_time_deltas = zeros(Int64, size(timing_matrix, 1))
     if size(timing_matrix, 1) > 1
         for i in 1:(size(timing_matrix, 1) - 1)
-            # Assumes time is in the 3rd column of the timing_matrix
             delta = timing_matrix[i+1, 3] - timing_matrix[i, 3]
-            pixel_time_deltas[i] = max(1, delta) # Ensure delta is at least 1
+            pixel_time_deltas[i] = max(1, delta)
         end
-        pixel_time_deltas[end] = max(1, pixel_time_deltas[end-1]) # Use previous delta for last pixel, ensure at least 1
+        pixel_time_deltas[end] = max(1, pixel_time_deltas[end-1])
     end
 
-    processed_pixels = ProcessedPixel[]
-    sizehint!(processed_pixels, size(timing_matrix, 1))
+    binary_meta_vec = BinaryMetadata[]
+    sizehint!(binary_meta_vec, size(timing_matrix, 1))
+    coords_vec = Tuple{Int, Int}[]
+    sizehint!(coords_vec, size(timing_matrix, 1))
     empty_pixel_count = 0
 
-    # DEBUG: Scan coverage analysis
-    println("DEBUG: Scan coverage analysis:")
-    covered_pixels_count = 0
-    for i in 1:size(timing_matrix, 1)
-        first_scan = timing_matrix[i, 4]
-        last_scan = timing_matrix[i, 5]
-        if first_scan <= last_scan && first_scan >= 1 && last_scan <= size(scans, 1)
-            covered_pixels_count += 1
+    open(target_ibd_file, "w") do ibd_stream
+        write(ibd_stream, zeros(UInt8, 16)) # UUID placeholder
+
+        for i in 1:size(timing_matrix, 1)
+            pixel_info = timing_matrix[i, :]
+            x, y = pixel_info[1], pixel_info[2]
+            push!(coords_vec, (x, y))
+
+            first_scan = pixel_info[4]
+            last_scan = pixel_info[5]
+
+            if first_scan > last_scan || first_scan < 1 || last_scan > size(scans, 1)
+                empty_pixel_count += 1
+                # For empty pixels, offsets point to the current end of file, with zero length
+                current_pos = position(ibd_stream)
+                push!(binary_meta_vec, BinaryMetadata(current_pos, 0, current_pos, 0))
+                continue
+            end
+
+            mz, intensity = RenderPixel(pixel_info, scans, msi_data, scan_time_deltas, pixel_time_deltas)
+            
+            # Write m/z array
+            mz_offset = position(ibd_stream)
+            for val in mz
+                write(ibd_stream, htol(Float64(val)))
+            end
+            mz_length = position(ibd_stream) - mz_offset
+
+            # Write intensity array
+            int_offset = position(ibd_stream)
+            for val in intensity
+                write(ibd_stream, htol(Float32(val)))
+            end
+            int_length = position(ibd_stream) - int_offset
+            
+            push!(binary_meta_vec, BinaryMetadata(mz_offset, mz_length, int_offset, int_length))
         end
     end
-    println("  Pixels with potential scans: $covered_pixels_count/$(size(timing_matrix, 1))")
-    println("  Total scans available: $(size(scans, 1))")
 
-    for i in 1:size(timing_matrix, 1)
-        pixel_info = timing_matrix[i, :]
-        x = pixel_info[1]
-        y = pixel_info[2]
-        first_scan = pixel_info[4]
-        last_scan = pixel_info[5]
-
-        if first_scan > last_scan || first_scan < 1 || last_scan > size(scans, 1)
-            empty_pixel_count += 1
-            push!(processed_pixels, ProcessedPixel((x, y), Float64[], Float32[]))
-            continue
-        end
-
-        mz, intensity = RenderPixel(pixel_info, scans, msi_data, scan_time_deltas, pixel_time_deltas)
-        push!(processed_pixels, ProcessedPixel((x, y), mz, intensity))
-    end
-
-    @info "Found and created $empty_pixel_count empty pixels out of $(size(timing_matrix, 1)) total."
-    return processed_pixels, (width, height)
+    @info "Found and processed $empty_pixel_count empty pixels out of $(size(timing_matrix, 1)) total."
+    return binary_meta_vec, coords_vec, (width, height)
 end
 
-function ExportImzml(target_file::String, pixels::Vector{ProcessedPixel}, dims::Tuple{Int, Int})
+function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, coords::Vector{Tuple{Int, Int}}, dims::Tuple{Int, Int})
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
     
-    # Ensure we have valid pixels
-    if isempty(pixels)
-        @error "No pixels to export"
-        return false
+    if isempty(binary_meta)
+        @warn "No binary metadata to export; creating empty imzML file."
+        # Still create a valid, empty imzML file
     end
 
-    binary_meta = BinaryMetadata[]
-    sizehint!(binary_meta, length(pixels))
-
     try
-        # Step 1: Write .ibd file with proper binary format
-        open(ibd_file, "w") do ibd_stream
-            # Write UUID as first 16 bytes (placeholder)
-            write(ibd_stream, zeros(UInt8, 16))
+        # The .ibd file is now written by ConvertMzmlToImzml.
+        # This function is only responsible for the .imzML XML metadata file.
 
-            # Write in little-endian format (standard for imzML)
-            for pixel in pixels
-                # Write m/z array as 64-bit little-endian floats
-                mz_offset = position(ibd_stream)
-                for val in pixel.mz
-                    write(ibd_stream, htol(Float64(val)))  # Host to little-endian
-                end
-                mz_length = position(ibd_stream) - mz_offset
-
-                # Write intensity array as 32-bit little-endian floats  
-                int_offset = position(ibd_stream)
-                for val in pixel.intensity
-                    write(ibd_stream, htol(Float32(val)))  # Host to little-endian
-                end
-                int_length = position(ibd_stream) - int_offset
-                
-                push!(binary_meta, BinaryMetadata(mz_offset, mz_length, int_offset, int_length))
-            end
-        end
-
-        # Step 2: Write proper .imzML XML file
         open(target_file, "w") do imzml_stream
-            # Use indexedmzML wrapper
+            # XML Header
             write(imzml_stream, """<?xml version="1.0" encoding="ISO-8859-1"?>
 <indexedmzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0_idx.xsd">
   <mzML version="1.1" id="$(splitext(basename(target_file))[1])">
 """)
 
-            # CV List
+            # CV List, File Description, etc. (static parts)
             write(imzml_stream, """  <cvList count="3">
     <cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" version="1.3.1" URI="http://psidev.info/ms/mzML/psi-ms.obo"/>
     <cv id="UO" fullName="Unit Ontology" version="1.15" URI="http://obo.cvs.sourceforge.net/obo/obo/ontology/phenotype/unit.obo"/>
     <cv id="IMS" fullName="Imaging MS Ontology" version="0.9.1" URI="http://www.maldi-msi.org/download/imzml/imagingMS.obo"/>
   </cvList>
 """)
-
-            # File Description
             write(imzml_stream, """  <fileDescription>
     <fileContent>
       <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum"/>
@@ -462,8 +523,6 @@ function ExportImzml(target_file::String, pixels::Vector{ProcessedPixel}, dims::
     </fileContent>
   </fileDescription>
 """)
-
-            # Referenceable Param Groups
             write(imzml_stream, """  <referenceableParamGroupList count="2">
     <referenceableParamGroup id="mzArray">
       <cvParam cvRef="MS" accession="MS:1000576" name="no compression"/>
@@ -479,24 +538,18 @@ function ExportImzml(target_file::String, pixels::Vector{ProcessedPixel}, dims::
     </referenceableParamGroup>
   </referenceableParamGroupList>
 """)
-
-            # Sample List
             write(imzml_stream, """  <sampleList count="1">
     <sample id="sample1" name="ImagingSample">
       <cvParam cvRef="MS" accession="MS:1000001" name="sample number" value="1"/>
     </sample>
   </sampleList>
 """)
-
-            # Software List - OPEN SOURCE
             write(imzml_stream, """  <softwareList count="1">
     <software id="MSIConverter" version="1.0">
       <cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="mzML to imzML converter"/>
     </software>
   </softwareList>
 """)
-
-            # Scan Settings IMAGING
             write(imzml_stream, """  <scanSettingsList count="1">
     <scanSettings id="scanSettings1">
       <cvParam cvRef="IMS" accession="IMS:1000042" name="max count of pixel x" value="$(dims[1])"/>
@@ -506,8 +559,6 @@ function ExportImzml(target_file::String, pixels::Vector{ProcessedPixel}, dims::
     </scanSettings>
   </scanSettingsList>
 """)
-
-            # Instrument Configuration MALDI/TOF
             write(imzml_stream, """  <instrumentConfigurationList count="1">
     <instrumentConfiguration id="instrument1">
       <componentList count="3">
@@ -525,8 +576,6 @@ function ExportImzml(target_file::String, pixels::Vector{ProcessedPixel}, dims::
     </instrumentConfiguration>
   </instrumentConfigurationList>
 """)
-
-            # Data Processing
             write(imzml_stream, """  <dataProcessingList count="1">
     <dataProcessing id="conversionProcessing">
       <processingMethod order="1" softwareRef="MSIConverter">
@@ -539,18 +588,21 @@ function ExportImzml(target_file::String, pixels::Vector{ProcessedPixel}, dims::
             # Run and Spectrum List
             spectrum_offsets = UInt64[]
             write(imzml_stream, """  <run defaultInstrumentConfigurationRef="instrument1" id="run1" sampleRef="sample1">
-    <spectrumList count="$(length(pixels))" defaultDataProcessingRef="conversionProcessing">
+    <spectrumList count="$(length(binary_meta))" defaultDataProcessingRef="conversionProcessing">
 """)
 
-            # Write each spectrum
-            for (i, pixel) in enumerate(pixels)
-                meta = binary_meta[i]
-                x, y = pixel.coords
+            # Write each spectrum's metadata
+            for (i, meta) in enumerate(binary_meta)
+                x, y = coords[i]
                 
                 spectrum_start = position(imzml_stream)
                 push!(spectrum_offsets, spectrum_start)
 
-                write(imzml_stream, """      <spectrum id="Scan=$(i)" defaultArrayLength="$(length(pixel.mz))" index="$(i-1)">
+                # Calculate number of points from byte length
+                mz_points = meta.mz_length ÷ sizeof(Float64)
+                int_points = meta.int_length ÷ sizeof(Float32)
+
+                write(imzml_stream, """      <spectrum id="Scan=$(i)" defaultArrayLength="$(mz_points)" index="$(i-1)">
         <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="1"/>
         <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum"/>
         <scanList count="1">
@@ -563,14 +615,14 @@ function ExportImzml(target_file::String, pixels::Vector{ProcessedPixel}, dims::
           <binaryDataArray encodedLength="0">
             <referenceableParamGroupRef ref="mzArray"/>
             <cvParam cvRef="IMS" accession="IMS:1000102" name="external offset" value="$(meta.mz_offset)"/>
-            <cvParam cvRef="IMS" accession="IMS:1000103" name="external array length" value="$(length(pixel.mz))"/>
+            <cvParam cvRef="IMS" accession="IMS:1000103" name="external array length" value="$(mz_points)"/>
             <cvParam cvRef="IMS" accession="IMS:1000104" name="external encoded length" value="$(meta.mz_length)"/>
             <binary/>
           </binaryDataArray>
           <binaryDataArray encodedLength="0">
             <referenceableParamGroupRef ref="intensityArray"/>
             <cvParam cvRef="IMS" accession="IMS:1000102" name="external offset" value="$(meta.int_offset)"/>
-            <cvParam cvRef="IMS" accession="IMS:1000103" name="external array length" value="$(length(pixel.intensity))"/>
+            <cvParam cvRef="IMS" accession="IMS:1000103" name="external array length" value="$(int_points)"/>
             <cvParam cvRef="IMS" accession="IMS:1000104" name="external encoded length" value="$(meta.int_length)"/>
             <binary/>
           </binaryDataArray>
@@ -603,10 +655,10 @@ function ExportImzml(target_file::String, pixels::Vector{ProcessedPixel}, dims::
         return true
         
     catch e
-        @error "Failed to export imzML files" exception=(e, catch_backtrace())
-        # Clean up partial files
-        isfile(ibd_file) && rm(ibd_file, force=true)
+        @error "Failed to export imzML metadata file" exception=(e, catch_backtrace())
+        # Clean up partial .imzML file
         isfile(target_file) && rm(target_file, force=true)
+        # Do not delete the .ibd file as it might be useful for debugging
         return false
     end
 end
@@ -630,17 +682,15 @@ function ImportMzmlFile(source_file::String, sync_file::String, target_file::Str
     println("Step 2: Matching acquisition times...")
     timing_matrix = MatchAcquireTime(sync_file, scans; img_width=img_width, img_height=img_height)
 
-    println("Step 3: Converting spectra...")
-    processed_pixels, (width, height) = ConvertMzmlToImzml(source_file, timing_matrix, scans)
+    println("Step 3: Converting spectra and writing .ibd file...")
+    ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
+    binary_meta, coords, (width, height) = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans)
 
     # Flip image vertically to match R script output
-    for i in eachindex(processed_pixels)
-        x, y = processed_pixels[i].coords
-        processed_pixels[i] = ProcessedPixel((x, height - y + 1), processed_pixels[i].mz, processed_pixels[i].intensity)
-    end
+    flipped_coords = [(x, height - y + 1) for (x, y) in coords]
 
-    println("Step 4: Exporting to .imzML/.ibd format...")
-    success = ExportImzml(target_file, processed_pixels, (width, height))
+    println("Step 4: Exporting .imzML metadata file...")
+    success = ExportImzml(target_file, binary_meta, flipped_coords, (width, height))
 
     if success
         println("Conversion successful: $target_file")

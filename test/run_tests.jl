@@ -32,7 +32,8 @@ using MSI_src
 # A regular, non-imaging mzML file.
 # const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/mzML/T9_A1.mzML"
 # const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/CE4_BF_R1/CE4_BF_R1.mzML"
-const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/CE4_BF_R1/CE4_BF_R1.mzML"
+# const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/CE4_BF_R1/CE4_BF_R1.mzML"
+const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging_paper_spray/Imaging_paper_spray.mzML"
 const SPECTRUM_TO_PLOT = 1 # Which spectrum to plot from the file
 
 # --- Test Case 2: .mzML + Sync File for Conversion ---
@@ -49,15 +50,18 @@ const CONVERSION_TARGET_IMZML = "test/results/converted_mzml.imzML"
 
 # --- Test Case 3: Standard .imzML file ---
 # An existing imzML file (can be the one generated from Case 2).
-const TEST_IMZML_FILE = CONVERSION_TARGET_IMZML # The output from case 2
+# const TEST_IMZML_FILE = CONVERSION_TARGET_IMZML # The output from case 2
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML"
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging_paper_spray/Imaging_paper_spray.imzML"
+const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging prueba Roya 1/royaimg.imzML"
 # The m/z value to use for creating an image slice.
-const MZ_VALUE_FOR_SLICE = 309.06 # BF
+# const MZ_VALUE_FOR_SLICE = 309.06 # BF
 # const MZ_VALUE_FOR_SLICE = 896.0 # HR2MSI
 # const MZ_VALUE_FOR_SLICE = 76.03 # I PS
+const MZ_VALUE_FOR_SLICE = 473 # ROYA
 # const MZ_TOLERANCE = 0.1
-const MZ_TOLERANCE = 1
+# const MZ_TOLERANCE = 1
+const MZ_TOLERANCE = 0.5
 
 # Coordinates to plot a specific spectrum from imzML
 const COORDS_TO_PLOT = (50, 50) # Example coordinates (X, Y)
@@ -65,8 +69,8 @@ const COORDS_TO_PLOT = (50, 50) # Example coordinates (X, Y)
 # --- Output Directory ---
 const RESULTS_DIR = "test/results"
 
-test1 = true
-test2 = true 
+test1 = false
+test2 = false 
 test3 = true
 
 # ===================================================================
@@ -216,8 +220,7 @@ function run_test()
     end
 
     # --- Test Case 3: Process an existing .imzML file ---
-    println("
-" * "="^20 * " Test Case 3: Processing .imzML " * "="^20)
+    println("" * "="^20 * " Test Case 3: Processing .imzML " * "="^20)
     if test3 == true
         # Run new, stronger validation for imzML
         validate_msi_data(TEST_IMZML_FILE)
@@ -226,6 +229,7 @@ function run_test()
         if isfile(TEST_IMZML_FILE)
             # Add spectrum plotting for imzML to match Test Case 1
             try
+                """
                 # Get the msi data from the imzml
                 println("Plotting a sample spectrum from $TEST_IMZML_FILE...")
                 msi_data = OpenMSIData(TEST_IMZML_FILE)
@@ -271,6 +275,8 @@ function run_test()
                 output_path = joinpath(RESULTS_DIR, "test_imzml_average_spectrum.png")
                 save(output_path, fig)
                 println("SUCCESS: Total spectrum plot saved to $output_path")
+                """
+                println("No spectrums tested on this try.")
             catch e
                 println("ERROR during spectrum plotting in Test Case 3: $e")
             end
@@ -279,7 +285,7 @@ function run_test()
             try
                 println("Testing plot_slice function on $TEST_IMZML_FILE...")
                 msi_data = OpenMSIData(TEST_IMZML_FILE)
-                plot_slice(msi_data, MZ_VALUE_FOR_SLICE, MZ_TOLERANCE, RESULTS_DIR, stage_name="test_imzml_single_slice")
+                @time plot_slice(msi_data, MZ_VALUE_FOR_SLICE, MZ_TOLERANCE, RESULTS_DIR, stage_name="test_imzml_single_slice")
                 # The success message is now inside plot_slice
             catch e
                 println("ERROR during plot_slice test in Test Case 3: $e")

@@ -1,4 +1,4 @@
-using Images, Statistics, CairoMakie, DataFrames, Printf, ColorSchemes
+using Images, Statistics, CairoMakie, DataFrames, Printf, ColorSchemes, StatsBase
 
 # --- Extracted from imzML.jl ---
 
@@ -348,6 +348,38 @@ end
 
 
 """
+    get_mz_slice(data::MSIData, mass::Real, tolerance::Real)
+
+Extracts an image slice for a given m/z value without plotting.
+This is a performant function that iterates through spectra once.
+
+# Returns
+- A `Matrix{Float64}` representing the intensity slice.
+"""
+function get_mz_slice(data::MSIData, mass::Real, tolerance::Real)
+    width, height = data.image_dims
+    slice_matrix = zeros(Float64, height, width) # Note: height, width for (y,x) indexing
+
+    _iterate_spectra_fast(data) do spec_idx, mz_array, intensity_array
+        meta = data.spectra_metadata[spec_idx]
+        
+        intensity = find_mass(mz_array, intensity_array, mass, tolerance)
+        
+        if intensity > 0.0
+            # Populate the matrix using (y, x) indexing
+            if 1 <= meta.x <= width && 1 <= meta.y <= height
+                slice_matrix[meta.y, meta.x] = intensity
+            end
+        end
+    end
+    
+    # The original function had a NaN replacement, which is good practice to keep.
+    replace!(slice_matrix, NaN => 0.0)
+    return slice_matrix
+end
+
+
+"""
     plot_slice(msi_data::MSIData, mass::Float64, tolerance::Float64, output_dir::String; stage_name="slice", bins=256)
 
 Generates and saves a plot of a single image slice for a given m/z value.
@@ -487,6 +519,30 @@ function set_pixel_depth(img, bounds, depth)
 end
 
 """
+    TrIQ(pixMap, depth, prob=0.98)
+
+Applies TrIQ (Treshold Intensity Quantization) normalization to an image.
+This function first computes dynamic intensity range bounds by identifying outliers
+based on a cumulative probability, then sets the pixel depth (quantizes intensities)
+within these bounds.
+
+# Arguments
+- `pixMap`: The input image matrix (e.g., a slice from `GetMzSliceJl`).
+- `depth`: The number of grey levels (bins) to quantize the intensities into.
+- `prob`: The target cumulative probability (e.g., 0.98) used to determine outlier thresholds.
+
+# Returns
+- A new image matrix with intensities quantized to the specified depth within the TrIQ bounds.
+"""
+function TrIQ(pixMap, depth, prob=0.98)
+    # Compute new dynamic range
+    bounds = get_outlier_thres(pixMap, prob)
+    
+    # Set intensity dynamic range
+    return set_pixel_depth(pixMap, bounds, depth)
+end
+
+"""
     norm_slices_hist(slices, bins; prob=0.98)
 
 Normalizes a set of image slices based on a shared histogram range.
@@ -515,9 +571,71 @@ function norm_slices_hist(slices, bins; prob=0.98)
     return (norm_img=norm_img, bounds=mass_bounds)  # bounds is now a vector, one per mass
 end
 
+"""
+    quantize_intensity(slice::AbstractMatrix{<:Real}, levels::Integer=256)
+
+Linearly scales the intensity values in a slice to a specified number of levels.
+The output is an array of `UInt8` values.
+This is a modernized version of `IntQuantCl`.
+"""
+function quantize_intensity(slice::AbstractMatrix{<:Real}, levels::Integer=256)
+    max_val = maximum(slice)
+    if max_val <= 0
+        return zeros(UInt8, size(slice))
+    end
+    
+    # Scale relative to the absolute maximum value to preserve the zero point.
+    # The original logic used 'colorLevel' which was the max value (e.g., 255).
+    scale = (levels - 1) / max_val
+    
+    # round is equivalent to floor(x+0.5) for positive numbers.
+    # clamp is used for robustness against floating point inaccuracies.
+    image = round.(UInt8, clamp.(slice .* scale, 0, levels - 1))
+    
+    return image
+end
+
 function median_filter(img)
     # 3x3 median filter implementation
     return mapwindow(median, img, (3, 3))
+end
+
+
+
+"""
+    downsample_spectrum(mz, intensity, n_points=2000)
+
+Reduces the number of points in a spectrum for faster plotting, while preserving peaks.
+It divides the m/z range into `n_points` bins and keeps only the most intense point from each bin.
+"""
+function downsample_spectrum(mz::AbstractVector, intensity::AbstractVector, n_points::Integer=2000)
+    if isempty(mz) || length(mz) <= n_points
+        return mz, intensity
+    end
+
+    mz_min, mz_max = extrema(mz)
+    bin_width = (mz_max - mz_min) / n_points
+    
+    # We use a vector of tuples to store the max intensity and its corresponding mz for each bin
+    # (max_intensity, mz_value)
+    bins = fill((0.0, 0.0), n_points)
+    
+    for i in eachindex(mz)
+        # Determine the bin for the current point
+        # Bin indices are 1-based
+        bin_index = min(n_points, floor(Int, (mz[i] - mz_min) / bin_width) + 1)
+        
+        # If the current point's intensity is higher than what's in the bin, replace it
+        if intensity[i] > bins[bin_index][1]
+            bins[bin_index] = (intensity[i], mz[i])
+        end
+    end
+    
+    # Filter out empty bins and separate the mz and intensity values
+    final_mz = [b[2] for b in bins if b[1] > 0.0]
+    final_intensity = [b[1] for b in bins if b[1] > 0.0]
+    
+    return final_mz, final_intensity
 end
 
 # ============================================================================
@@ -678,3 +796,97 @@ function plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dp
     end
     return fig
 end
+
+"""
+    save_bitmap(name::String, pixMap::Matrix{UInt8}, colorTable::Vector{UInt32})
+
+Saves an 8-bit indexed image as a BMP file.
+This is a modernized version of `SaveBitmapCl`.
+"""
+function save_bitmap(name::String, pixMap::Matrix{UInt8}, colorTable::Vector{UInt32})
+    # Get image dimensions
+    height, width = size(pixMap)
+
+    # Normalize pixel values to stretch contrast, as in the original SaveBitmapCl
+    minVal, maxVal = extrema(pixMap)
+    if maxVal > minVal
+        pixMap = round.(UInt8, 255 * (pixMap .- minVal) ./ (maxVal - minVal))
+    end
+
+    # Compute row padding (each row must be a multiple of 4 bytes)
+    padding = (4 - (width % 4)) % 4
+
+    # BMP color table must have 256 entries for 8-bit images
+    fullColorTable = Vector{UInt32}(undef, 256)
+    if length(colorTable) <= 256
+        fullColorTable[1:length(colorTable)] .= colorTable
+        fullColorTable[length(colorTable)+1:end] .= 0
+    else
+        fullColorTable .= colorTable[1:256]
+    end
+
+    # Compute file dimensions
+    offset = 14 + 40 + (256 * 4) # 14(file) + 40(info) + 1024(palette) = 1078
+    imgBytes = height * (width + padding)
+    fileSize = offset + imgBytes
+
+    open(name, "w") do stream
+        # === File Header (14 bytes) ===
+        write(stream, UInt16(0x4D42)) # "BM"
+        write(stream, UInt32(fileSize))
+        write(stream, UInt16(0)) # Reserved
+        write(stream, UInt16(0)) # Reserved
+        write(stream, UInt32(offset))
+
+        # === Info Header (40 bytes) ===
+        write(stream, UInt32(40)) # Info header size
+        write(stream, Int32(width))
+        write(stream, Int32(height)) # Positive for bottom-up storage
+        write(stream, UInt16(1)) # Number of color planes
+        write(stream, UInt16(8)) # Bits per pixel
+        write(stream, UInt32(0)) # Compression (BI_RGB)
+        write(stream, UInt32(imgBytes))
+        write(stream, Int32(2835)) # Pels per meter X (~72 DPI)
+        write(stream, Int32(2835)) # Pels per meter Y (~72 DPI)
+        write(stream, UInt32(256)) # Colors in color table
+        write(stream, UInt32(0)) # Important colors (0 = all)
+
+        # === Color Table ===
+        write(stream, fullColorTable)
+
+        # === Image Pixels (written bottom-up) ===
+        row_buffer = Vector{UInt8}(undef, width + padding)
+        row_buffer[width+1:end] .= 0 # pre-fill padding bytes
+
+        for i in height:-1:1
+            row_data = @view pixMap[i, :]
+            row_buffer[1:width] = row_data
+            write(stream, row_buffer)
+        end
+    end
+end
+
+# ********************************************************************
+# Viridis color palette (256 colors)
+# ********************************************************************
+
+"""
+    generate_palette(colorscheme, n_colors=256)
+
+Generates a BMP-compatible UInt32 color palette from a ColorScheme.
+"""
+function generate_palette(colorscheme, n_colors=256)
+    palette = Vector{UInt32}(undef, n_colors)
+    colors = get(colorscheme, range(0, 1, length=n_colors))
+    for i in 1:n_colors
+        c = colors[i]
+        r = round(UInt8, c.r * 255)
+        g = round(UInt8, c.g * 255)
+        b = round(UInt8, c.b * 255)
+        # BMP color table format is 0x00RRGGBB, written little-endian becomes BB GG RR 00
+        palette[i] = (UInt32(r) << 16) | (UInt32(g) << 8) | UInt32(b)
+    end
+    return palette
+end
+
+const ViridisPalette = generate_palette(ColorSchemes.viridis)

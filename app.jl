@@ -6,7 +6,8 @@ using Libz
 using PlotlyBase
 using CairoMakie
 using Colors
-using julia_mzML_imzML
+# using julia_mzML_imzML
+using MSI_src # Import the new MSIData library
 using Statistics
 using NaturalSort
 using Images
@@ -14,6 +15,10 @@ using LinearAlgebra
 using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
 using Base.Filesystem: mv # To rename files in the system
+
+# Bring MSIData into App module's scope
+using .MSI_src: MSIData, OpenMSIData, GetSpectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ
+
 include("./julia_imzML_visual.jl")
 
 @genietools
@@ -57,6 +62,7 @@ include("./julia_imzML_visual.jl")
     @in compareBtn=false # To open dialog
     @in createMeanPlot=false # To generate mean spectrum plot
     @in createXYPlot=false # To generate an spectrum plot according to the xy values inputed
+    @in createSumPlot=false # To generate a sum of all the spectrum plots
     @in image3dPlot=false # To generate 3d plot based on current image
     @in triq3dPlot=false # To generate 3d plot based on current triq image
     @in imageCPlot=false # To generate contour plots of current image
@@ -110,10 +116,12 @@ include("./julia_imzML_visual.jl")
     @out msgimgComp=""
     @out msgtriqComp=""
 
+    # Centralized MSIData object
+    @out msi_data::Union{MSIData, Nothing} = nothing
+
     # Saves the route where imzML and mzML files are located
     @out full_route=""
-    @out full_routeMz=""
-    @out full_routeMz2=""
+
 
     # For the creation of images with a more specific mass charge
     @out text_nmass=""
@@ -145,10 +153,12 @@ include("./julia_imzML_visual.jl")
     layoutImg=PlotlyBase.Layout(
         xaxis=PlotlyBase.attr(
             visible=false,
-            scaleanchor="y"
+            scaleanchor="y",
+            range=[0, 0]
         ),
         yaxis=PlotlyBase.attr(
-            visible=false
+            visible=false,
+            range=[0, 0]
         ),
         margin=attr(l=0,r=0,t=0,b=0,pad=0)
     )
@@ -168,10 +178,10 @@ include("./julia_imzML_visual.jl")
     # Interface Plot Spectrum
     layoutSpectra=PlotlyBase.Layout(
         title="Spectrum plot",
+        hovermode="closest",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
-            showgrid=true,
-            tickformat = ".3g"
+            showgrid=true
         ),
         yaxis=PlotlyBase.attr(
             title="Intensity",
@@ -249,319 +259,305 @@ include("./julia_imzML_visual.jl")
     # Reactive handlers watch a variable and execute a block of code when its value changes
     # The onbutton handler will set the variable to false after the block is executed
 
-    @onbutton btnSearch begin
-        full_route=pick_file(; filterlist="imzML,imzml,mzML,mzml")
-        msg=""
-        if full_route != ""
-            if endswith(full_route, "imzml")
-                alt_route=replace(full_route, r"\.[^.]*$" => ".imzML")
-                mv(full_route, alt_route)
-                full_route=alt_route
-                # to detect if there's an mzml named wrong
-                alt_routeMz=replace(full_route, r"\.[^.]*$" => ".mzml") 
-                if isfile(alt_routeMz)
-                    alt_routeMz2=replace(alt_routeMz, r"\.[^.]*$" => ".mzML") 
-                    mv(alt_routeMz, alt_routeMz2)
-                    alt_routeMz=alt_routeMz2
-                end
-            end
-            if endswith(full_route, "mzml")
-                alt_route=replace(full_route, r"\.[^.]*$" => ".mzML") 
-                mv(full_route, alt_route)
-                full_route = alt_route 
-                # to detect if there's an imzml named wrong
-                alt_routeMz=replace(full_route, r"\.[^.]*$" => ".imzml") 
-                if isfile(alt_routeMz)
-                    alt_routeMz2=replace(alt_routeMz, r"\.[^.]*$" => ".imzML") 
-                    mv(alt_routeMz, alt_routeMz2)
-                    alt_routeMz=alt_routeMz2
-                end
-            end
+    @onbutton btnSearch @time begin
+        # This part is synchronous and blocking, which is unavoidable
+        picked_route = pick_file(; filterlist="imzML,imzml,mzML,mzml")
+        
+        if isempty(picked_route)
+            msg = "No file selected."
+            warning_msg = true
+            return
         end
-        if full_route==""
-            msg="No file selected"
-            warning_msg=true
-            btnStartDisable=true
-            btnSpectraDisable=true
-            SpectraEnabled=false
-        else
-            if endswith(full_route, "imzML") # Case if the file loaded is imzML
-                btnStartDisable=false
-                btnPlotDisable=false
-                # Splitting the route with regex from imzml to mzml so the plotting can work
-                full_routeMz=replace(full_route, r"\.[^.]*$" => ".mzML") 
-                if isfile(full_routeMz)
-                    # Start the mean spectrum creation on loading
-                    progressSpectraPlot=true
-                    btnPlotDisable=true
-                    btnStartDisable=true
-                    msg="Loading mean spectrum plot..."
-                    sTime=time()
-                    plotdata, plotlayout, xSpectraMz, ySpectraMz=meanSpectrumPlot(full_routeMz)
-                    selectedTab="tab2"
-                    progressSpectraPlot=false
-                    btnPlotDisable=false
 
-                    # We enable coord search and spectra plot creation, also re-enable main process
-                    btnSpectraDisable=false
-                    SpectraEnabled=true
-                    btnStartDisable=false
-
-                    fTime=time()
-                    eTime=round(fTime-sTime,digits=3)
-                    msg="Plot loaded in $(eTime) seconds"
+        # UI updates immediately
+        progress = true
+        msg = "Opening file: $(basename(picked_route))..."
+        
+        @async begin
+            try
+                # --- Normalize file extension and path ---
+                if endswith(picked_route, "imzml")
+                    full_route = replace(picked_route, r"\.imzml$"i => ".imzML")
+                    mv(picked_route, full_route, force=true)
+                elseif endswith(picked_route, "mzml")
+                    full_route = replace(picked_route, r"\.mzml$"i => ".mzML")
+                    mv(picked_route, full_route, force=true)
                 else
-                    # If there's no mzML file, we deny access again
-                    btnSpectraDisable=true
-                    SpectraEnabled=false
+                    full_route = picked_route
                 end
-            else # Case if the file loaded is mzML
-                full_routeMz=full_route
-                btnSpectraDisable=false
-                SpectraEnabled=true
-                if isfile(full_routeMz)
-                    # Start the mean spectrum creation on loading
-                    progressSpectraPlot=true
-                    btnPlotDisable=true
-                    btnStartDisable=true
-                    msg="Loading mean spectrum plot..."
-                    sTime=time()
-                    plotdata, plotlayout, xSpectraMz, ySpectraMz=meanSpectrumPlot(full_routeMz)
-                    selectedTab="tab2"
-                    progressSpectraPlot=false
-                    btnPlotDisable=false
 
-                    # We enable coord search and spectra plot creation
-                    btnSpectraDisable=false
-                    SpectraEnabled=true
+                # --- Load data using the new MSIData library ---
+                sTime = time()
+                msi_data = OpenMSIData(full_route)
+                
+                w, h = msi_data.image_dims
+                imgWidth, imgHeight = w > 0 ? (w, h) : (500, 500)
 
-                    fTime=time()
-                    eTime=round(fTime-sTime,digits=3)
-                    msg="Plot loaded in $(eTime) seconds"
-                end
-                # Splitting the route the same way
-                full_route=replace(full_route, r"\.[^.]*$" => ".imzML")
-                if isfile(full_route)
-                    btnStartDisable=false
-                else
-                    btnStartDisable=true
-                    full_route=full_routeMz
-                end
+                fTime = time()
+                eTime = round(fTime - sTime, digits=3)
+                msg = "File loaded in $(eTime) seconds. Calculating total spectrum..."
+
+                # Enable UI controls
+                btnStartDisable = !(msi_data.source isa ImzMLSource)
+                btnPlotDisable = false
+                btnSpectraDisable = false
+                SpectraEnabled = true
+
+                # --- Automatically generate and display the sum spectrum plot ---
+                # This is still part of the same async task
+                progressSpectraPlot = true
+                sTime = time()
+
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data)
+                
+                selectedTab = "tab2"
+                fTime = time()
+                eTime = round(fTime - sTime, digits=3)
+                msg = "Total spectrum plot loaded in $(eTime) seconds."
+
+            catch e
+                msi_data = nothing
+                msg = "Error loading file: $e"
+                warning_msg = true
+                btnStartDisable = true
+                btnSpectraDisable = true
+                SpectraEnabled = false
+                @error "File loading failed" exception=(e, catch_backtrace())
+            finally
+                # This now correctly runs after everything is finished
+                progress = false
+                progressSpectraPlot = false
             end
-            xCoord=0
-            yCoord=0
         end
     end
     
-    @onbutton mainProcess begin
-        progress=true # Start progress button animation
-        btnStartDisable=true # We disable the button to avoid multiple requests
-        btnPlotDisable=true
-        btnSpectraDisable=true
-        text_nmass=replace(string(Nmass), "." => "_")
-        sTime=time()
-        if isfile(full_route) && Nmass > 0 && Tol > 0 && Tol <=1 && colorLevel > 1 && colorLevel < 257
-            msg="File exists, Nmass=$(Nmass) Tol=$(Tol). Loading file will begin, please be patient."
+    @onbutton mainProcess @time begin
+        # UI updates immediately
+        progress = true
+        btnStartDisable = true
+        btnPlotDisable = true
+        btnSpectraDisable = true
+
+        @async begin
             try
-                spectra=LoadImzml(full_route)
-                msg="File loaded. Creating spectra with the specific mass and tolerance, please be patient."
-                slice=GetMzSliceJl(spectra,Nmass,Tol)
-                fig=CairoMakie.Figure(size=(150, 250)) # Container
-                # Append a query string to force the image to refresh 
-                timestamp=string(time_ns()) 
-                if triqEnabled # If we have TrIQ
-                    if triqProb < 0.8 || triqProb > 1
-                        msg="Incorrect TrIQ values, please adjust accordingly and try again."
-                        warning_msg=true
-                    else
-                        image_path=joinpath("./public", "TrIQ_$(text_nmass).bmp")
-                        valid_slice=false
-                        while Tol <= 1.0 && !valid_slice
-                            try
-                                slice=GetMzSliceJl(spectra, Nmass, Tol)
-                                sliceTriq=TrIQ(slice, colorLevel, triqProb)
-                                if MFilterEnabled # If the Median filter is ON
-                                    sliceTriq=medianFilterjl(sliceTriq)
-                                end
-                                valid_slice=true
-                            catch e
-                                msg="Warning: insufficient tolerance, inputs modified to allow the creation of an image regardless=$Tol: $e"
-                                Tol += 0.1
-                            end
-                        end
-                        sliceTriq=reverse(sliceTriq, dims=2)
-                        SaveBitmapCl(joinpath("public", "TrIQ_$(text_nmass).bmp"),sliceTriq,ViridisPalette)
-                        # Use timestamp to refresh image interface container
-                        imgIntT="/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
-                        plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
-                        # Get current image 
-                        current_triq="TrIQ_$(text_nmass).bmp"
-                        msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
-                        # Create colorbar
-                        bound=julia_mzML_imzML.GetOutlierThres(slice, triqProb)
-                        levels=range(bound[1],stop=bound[2], length=8)
-                        levels=vcat(levels, 2*levels[end]-levels[end-1])
-                        Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, bound[2]),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size=25)
-                        save("public/colorbar_TrIQ_$(text_nmass).png", fig)
-                        colorbarT="/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
-                        # Get current colorbar 
-                        current_col_triq="colorbar_TrIQ_$(text_nmass).png"
-                        # We update the directory to include the new placed images.
-                        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-                        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-                        fTime=time()
-                        eTime=round(fTime-sTime,digits=3)
-                        msg="The file has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
-                        selectedTab="tab1"
-                    end
-                else # If we don't use TrIQ
-                    image_path=joinpath("./public", "MSI_$(text_nmass).bmp")
+                text_nmass = replace(string(Nmass), "." => "_")
+                sTime = time()
+
+                if msi_data === nothing || !(msi_data.source isa ImzMLSource)
+                    msg = "No .imzML file loaded or selected file is not an .imzML. Please select a valid file."
+                    warning_msg = true
+                elseif Nmass > 0 && Tol > 0 && Tol <= 1 && colorLevel > 1 && colorLevel < 257
+                    msg = "Creating image for Nmass=$(Nmass) Tol=$(Tol). Please be patient."
                     try
-                        sliceQuant=IntQuantCl(slice,Int(colorLevel-1))
-                        if MFilterEnabled # If the Median filter is ON
-                            sliceQuant=medianFilterjl(sliceQuant)
+                        # Use the new get_mz_slice with the centralized MSIData object
+                        slice = get_mz_slice(msi_data, Nmass, Tol)
+                        fig = CairoMakie.Figure(size=(150, 250)) # Container
+                        timestamp = string(time_ns())
+
+                        if triqEnabled # If we have TrIQ
+                            if triqProb < 0.8 || triqProb > 1
+                                msg = "Incorrect TrIQ values, please adjust accordingly and try again."
+                                warning_msg = true
+                            else
+                                sliceTriq = TrIQ(slice, colorLevel, triqProb)
+                                if MFilterEnabled
+                                    sliceTriq = round.(UInt8, median_filter(sliceTriq))
+                                end
+                                sliceTriq = reverse(sliceTriq, dims=2)
+                                save_bitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"), sliceTriq, ViridisPalette)
+
+                                imgIntT = "/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
+                                plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
+                                current_triq = "TrIQ_$(text_nmass).bmp"
+                                msgtriq = "TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
+
+                                bound = MSI_src.get_outlier_thres(slice, triqProb)
+                                levels = range(bound[1], stop=bound[2], length=8)
+                                levels = vcat(levels, 2 * levels[end] - levels[end-1])
+                                Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, bound[2]), ticks=levels, tickformat=log_tick_formatter, label="Intensity", size=25)
+                                save("public/colorbar_TrIQ_$(text_nmass).png", fig)
+                                colorbarT = "/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
+                                current_col_triq = "colorbar_TrIQ_$(text_nmass).png"
+
+                                triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
+                                col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")), lt=natural)
+
+                                fTime = time()
+                                eTime = round(fTime - sTime, digits=3)
+                                msg = "The TrIQ image has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
+                                selectedTab = "tab1"
+                            end
+                        else # If we don't use TrIQ
+                            sliceQuant = quantize_intensity(slice, colorLevel)
+                            if MFilterEnabled
+                                sliceQuant = round.(UInt8, median_filter(sliceQuant))
+                            end
+                            sliceQuant = reverse(sliceQuant, dims=2)
+                            save_bitmap(joinpath("public", "MSI_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
+
+                            imgInt = "/MSI_$(text_nmass).bmp?t=$(timestamp)"
+                            plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+                            current_msi = "MSI_$(text_nmass).bmp"
+                            msgimg = "Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+
+                            levels = range(0, maximum(slice), length=8)
+                            Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)), ticks=levels, tickformat=log_tick_formatter, label="Intensity", size=25)
+                            save("public/colorbar_MSI_$(text_nmass).png", fig)
+                            colorbar = "/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
+                            current_col_msi = "colorbar_MSI_$(text_nmass).png"
+
+                            msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
+                            col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")), lt=natural)
+                            selectedTab = "tab0"
+                            fTime = time()
+                            eTime = round(fTime - sTime, digits=3)
+                            msg = "The image has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
                         end
                     catch e
-                        msg="Warning: $e"
+                        msg = "There was an error creating the image: $e"
+                        warning_msg = true
+                        @error "Image creation failed" exception=(e, catch_backtrace())
                     end
-                    sliceQuant=reverse(sliceQuant, dims=2)
-                    SaveBitmapCl(joinpath("public", "MSI_$(text_nmass).bmp"),sliceQuant,ViridisPalette)
-                    # Use timestamp to refresh image interface container
-                    imgInt="/MSI_$(text_nmass).bmp?t=$(timestamp)"
-                    plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-                    # Get current image 
-                    current_msi="MSI_$(text_nmass).bmp"
-                    msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
-                    # Create colorbar 
-                    levels=range(0,maximum(slice),length=8)
-                    Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)),ticks=levels,tickformat=log_tick_formatter, label="Intensity", size=25)
-                    save("public/colorbar_MSI_$(text_nmass).png", fig)
-                    colorbar="/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
-                    # Get current colorbar 
-                    current_col_msi="colorbar_MSI_$(text_nmass).png"
-                    # We update the directory to include the new placed images.
-                    msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-                    col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-                    selectedTab="tab0"
-                    fTime=time()
-                    eTime=round(fTime-sTime,digits=3)
-                    msg="The file has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
+                else
+                    msg = "Invalid parameters. Nmass, Tol, or colorLevel are incorrect."
+                    warning_msg = true
+                    @error msg
                 end
-            catch e
-                msg="There was an error loading the ImzML file, please verify the file accordingly and try again. $(e)"
-                warning_msg=true
+            finally
+                # This block will always run at the end of the async task
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                end
+                btnStartDisable = false
+                btnPlotDisable = false
+                btnOpticalDisable = false
+                progress = false
+                btnSpectraDisable = false
+                SpectraEnabled = true
             end
-        else
-            msg="File does not exist or a parameter is incorrect, please try again."
-            warning_msg=true
-        end
-        GC.gc() # Trigger garbage collection
-        if Sys.islinux()
-            ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
-        end
-        btnStartDisable=false
-        btnPlotDisable=false
-        btnOpticalDisable=false
-        progress=false
-        if isfile(full_routeMz)
-            # We enable coord search and spectra plot creation
-            btnSpectraDisable=false
-            SpectraEnabled=true
         end
     end
 
     @onbutton createMeanPlot begin
-        msg="Mean spectrum plot selected"
-        sTime=time()
-        if isfile(full_routeMz) # Check if the file exists
-            progressSpectraPlot=true
-            btnPlotDisable=true
-            btnStartDisable=true
-            msg="Loading plot..."
-            plotdata, plotlayout, xSpectraMz, ySpectraMz=meanSpectrumPlot(full_routeMz)
-            GC.gc() # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+        if msi_data === nothing
+            msg = "No data loaded. Please select a file first."
+            warning_msg = true
+            return
+        end
+
+        # UI updates immediately
+        progressSpectraPlot = true
+        btnPlotDisable = true
+        btnStartDisable = true
+        msg = "Loading plot..."
+
+        @async begin
+            try
+                sTime = time()
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data)
+                
+                selectedTab = "tab2"
+                fTime = time()
+                eTime = round(fTime - sTime, digits=3)
+                msg = "Plot loaded in $(eTime) seconds"
+            catch e
+                msg = "Could not generate mean spectrum plot: $e"
+                warning_msg = true
+                @error "Mean spectrum plotting failed" exception=(e, catch_backtrace())
+            finally
+                # This runs after the async task is finished
+                progressSpectraPlot = false
+                btnPlotDisable = false
+                btnSpectraDisable = false
+                if msi_data !== nothing && msi_data.source isa ImzMLSource
+                    btnStartDisable = false
+                end
             end
-            selectedTab="tab2"
-            fTime=time()
-            eTime=round(fTime-sTime,digits=3)
-            msg="Plot loaded in $(eTime) seconds"
-        else
-            msg="there was an error with the mzML, please try again"
-            warning_msg=true
         end
-        progressSpectraPlot=false
-        btnPlotDisable=false
-        if endswith(full_route, "imzML")
-            btnStartDisable=false
+    end
+
+    @onbutton createSumPlot begin
+        if msi_data === nothing
+            msg = "No data loaded. Please select a file first."
+            warning_msg = true
+            return
         end
-        if isfile(full_routeMz)
-            # We enable coord search and spectra plot creation
-            btnSpectraDisable=false
-            SpectraEnabled=true
+
+        # UI updates immediately
+        progressSpectraPlot = true
+        btnPlotDisable = true
+        btnStartDisable = true
+        msg = "Loading total spectrum plot..."
+
+        @async begin
+            try
+                sTime = time()
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data)
+                
+                selectedTab = "tab2"
+                fTime = time()
+                eTime = round(fTime - sTime, digits=3)
+                msg = "Total plot loaded in $(eTime) seconds"
+            catch e
+                msg = "Could not generate total spectrum plot: $e"
+                warning_msg = true
+                @error "Total spectrum plotting failed" exception=(e, catch_backtrace())
+            finally
+                # This runs after the async task is finished
+                progressSpectraPlot = false
+                btnPlotDisable = false
+                btnSpectraDisable = false
+                if msi_data !== nothing && msi_data.source isa ImzMLSource
+                    btnStartDisable = false
+                end
+            end
         end
     end
 
     @onbutton createXYPlot begin
-        msg="XY spectrum plot selected"
-        sTime=time()
-        if isfile(full_routeMz) # Check if the file exists
-            progressSpectraPlot=true
-            btnStartDisable=true
-            btnPlotDisable=true
-            btnSpectraDisable=true
-            msg="Loading plot..."
-            spectraMz=LoadMzml(full_routeMz)
-            layoutSpectra=PlotlyBase.Layout(
-                title="($xCoord, $yCoord) Specific spectrum plot",
-                xaxis=PlotlyBase.attr(
-                    title="<i>m/z</i>",
-                    showgrid=true
-                ),
-                yaxis=PlotlyBase.attr(
-                    title="Intensity",
-                    showgrid=true
-                ),
-                autosize=false,
-                margin=attr(l=0,r=0,t=120,b=0,pad=0)
-            )
-            if xCoord < 1
-                xCoord=1
-            elseif xCoord > imgWidth
-                xCoord=imgWidth
-            end
-            if yCoord > -1
-                yCoord=-1
-            elseif yCoord < -imgHeight
-                yCoord=-imgHeight
-            end
-            xSpectraMz=spectraMz[1,abs(xCoord)]
-            ySpectraMz=spectraMz[2,abs(yCoord)]
-            traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
-            plotdata=[traceSpectra] # We add the data from spectra to the plot
-            plotlayout=layoutSpectra
-            GC.gc() # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
-            end
-            selectedTab="tab2"
-            fTime=time()
-            eTime=round(fTime-sTime,digits=3)
-            msg="Plot loaded in $(eTime) seconds"
-        else
-            msg="there was an error with the mzML or the coordenates, please try again"
-            warning_msg=true
+        if msi_data === nothing
+            msg = "No data loaded. Please select a file first."
+            warning_msg = true
+            return
         end
-        progressSpectraPlot=false
-        btnPlotDisable=false
-        if endswith(full_route, "imzML")
-            btnStartDisable=false
-        end
-        if isfile(full_routeMz)
-            # We enable coord search and spectra plot creation
-            btnSpectraDisable=false
-            SpectraEnabled=true
+
+        # UI updates immediately
+        progressSpectraPlot = true
+        btnStartDisable = true
+        btnPlotDisable = true
+        btnSpectraDisable = true
+        msg = "Loading plot..."
+
+        @async begin
+            try
+                sTime = time()
+                # The UI uses negative Y values, so we adjust before calling the plot function
+                y = yCoord < 0 ? abs(yCoord) : yCoord
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y, imgWidth, imgHeight)
+                
+                # Update UI coordinates
+                xCoord = plotlayout.title == "Spectrum #$(xCoord)" ? xCoord : clamp(xCoord, 1, imgWidth)
+                yCoord = plotlayout.title == "Spectrum #$(xCoord)" ? 0 : -clamp(y, 1, imgHeight)
+
+                selectedTab = "tab2"
+
+                fTime = time()
+                eTime = round(fTime - sTime, digits=3)
+                msg = "Plot loaded in $(eTime) seconds"
+            catch e
+                msg = "Could not retrieve spectrum: $e"
+                warning_msg = true
+                @error "Spectrum plotting failed" exception=(e, catch_backtrace())
+            finally
+                # This runs after the async task is finished
+                progressSpectraPlot = false
+                btnPlotDisable = false
+                btnSpectraDisable = false
+                if msi_data !== nothing && msi_data.source isa ImzMLSource
+                    btnStartDisable = false
+                end
+            end
         end
     end
 
@@ -796,14 +792,21 @@ include("./julia_imzML_visual.jl")
         cleaned_imgInt=replace(imgInt, r"\?.*" => "")
         cleaned_imgInt=lstrip(cleaned_imgInt, '/')
         var=joinpath( "./public", cleaned_imgInt )
-        sTime=time()
 
-        if isfile(var)
-            progressPlot=true
-            btnPlotDisable=true
-            btnStartDisable=true
-            btnSpectraDisable=true
+        if !isfile(var)
+            msg="Image could not be 3d plotted"
+            warning_msg=true
+            return
+        end
+
+        progressPlot=true
+        btnPlotDisable=true
+        btnStartDisable=true
+        btnSpectraDisable=true
+        
+        @async begin
             try
+                sTime=time()
                 plotdata3d, plotlayout3d=loadSurfacePlot(imgInt)
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
@@ -816,34 +819,39 @@ include("./julia_imzML_visual.jl")
             catch e 
                 msg="Failed to load and process image: $e" 
                 warning_msg=true
+            finally
+                progressPlot=false
+                btnPlotDisable=false
+                btnStartDisable=false
+                if msi_data !== nothing
+                    # We enable coord search and spectra plot creation
+                    btnSpectraDisable=false
+                    SpectraEnabled=true
+                end
             end
-        else
-            msg="Image could not be 3d plotted"
-            warning_msg=true
         end
-        progressPlot=false
-        btnPlotDisable=false
-        btnStartDisable=false
-        if isfile(full_routeMz)
-            # We enable coord search and spectra plot creation
-            btnSpectraDisable=false
-            SpectraEnabled=true
-        end
-    end
-    # 3d plot for TrIQ
+    end    # 3d plot for TrIQ
+    
     @onbutton triq3dPlot begin
         msg="TrIQ 3D plot selected"
         cleaned_imgIntT=replace(imgIntT, r"\?.*" => "")
         cleaned_imgIntT=lstrip(cleaned_imgIntT, '/')
         var=joinpath( "./public", cleaned_imgIntT )
-        sTime=time()
 
-        if isfile(var)
-            progressPlot=true
-            btnPlotDisable=true
-            btnStartDisable=true
-            btnSpectraDisable=true
+        if !isfile(var)
+            msg="Image could not be 3d plotted"
+            warning_msg=true
+            return
+        end
+
+        progressPlot=true
+        btnPlotDisable=true
+        btnStartDisable=true
+        btnSpectraDisable=true
+        
+        @async begin
             try
+                sTime=time()
                 plotdata3d, plotlayout3d=loadSurfacePlot(imgIntT)
                 GC.gc() # Trigger garbage collection
                 if Sys.islinux()
@@ -856,18 +864,16 @@ include("./julia_imzML_visual.jl")
             catch e 
                 msg="Failed to load and process image: $e" 
                 warning_msg=true
+            finally
+                progressPlot=false
+                btnPlotDisable=false
+                btnStartDisable=false
+                if msi_data !== nothing
+                    # We enable coord search and spectra plot creation
+                    btnSpectraDisable=false
+                    SpectraEnabled=true
+                end
             end
-        else
-            msg="Image could not be 3d plotted"
-            warning_msg=true
-        end
-        progressPlot=false
-        btnPlotDisable=false
-        btnStartDisable=false
-        if isfile(full_routeMz)
-            # We enable coord search and spectra plot creation
-            btnSpectraDisable=false
-            SpectraEnabled=true
         end
     end
 
@@ -877,15 +883,21 @@ include("./julia_imzML_visual.jl")
         cleaned_imgInt=replace(imgInt, r"\?.*" => "")
         cleaned_imgInt=lstrip(cleaned_imgInt, '/')
         var=joinpath("./public", cleaned_imgInt)
-        sTime=time()
-    
-        if isfile(var)
-            progressPlot=true
-            btnPlotDisable=true
-            btnStartDisable=true
-            btnSpectraDisable=true
+        
+        if !isfile(var)
+            msg="Image could not be 2D plotted"
+            warning_msg=true
+            return
+        end
+
+        progressPlot=true
+        btnPlotDisable=true
+        btnStartDisable=true
+        btnSpectraDisable=true
+        
+        @async begin
             try
-                img=load(var)
+                sTime=time()
                 plotdataC,plotlayoutC=loadContourPlot(imgInt)
                 GC.gc()  # Trigger garbage collection
                 if Sys.islinux()
@@ -898,18 +910,16 @@ include("./julia_imzML_visual.jl")
             catch e
                 msg="Failed to load and process image: $e"
                 warning_msg=true
+            finally
+                progressPlot=false
+                btnPlotDisable=false
+                btnStartDisable=false
+                if msi_data !== nothing
+                    # We enable coord search and spectra plot creation
+                    btnSpectraDisable=false
+                    SpectraEnabled=true
+                end
             end
-        else
-            msg="Image could not be 2D plotted"
-            warning_msg=true
-        end
-        progressPlot=false
-        btnPlotDisable=false
-        btnStartDisable=false
-        if isfile(full_routeMz)
-            # We enable coord search and spectra plot creation
-            btnSpectraDisable=false
-            SpectraEnabled=true
         end
     end
     # Contour 2d plot for TrIQ
@@ -918,15 +928,21 @@ include("./julia_imzML_visual.jl")
         cleaned_imgIntT=replace(imgIntT, r"\?.*" => "")
         cleaned_imgIntT=lstrip(cleaned_imgIntT, '/')
         var=joinpath("./public", cleaned_imgIntT)
-        sTime=time()
-    
-        if isfile(var)
-            progressPlot=true
-            btnPlotDisable=true
-            btnStartDisable=true
-            btnSpectraDisable=true
+        
+        if !isfile(var)
+            msg="Image could not be 2D plotted"
+            warning_msg=true
+            return
+        end
+
+        progressPlot=true
+        btnPlotDisable=true
+        btnStartDisable=true
+        btnSpectraDisable=true
+        
+        @async begin
             try
-                img=load(var)
+                sTime=time()
                 plotdataC,plotlayoutC=loadContourPlot(imgIntT)
                 GC.gc()  # Trigger garbage collection
                 if Sys.islinux()
@@ -939,18 +955,16 @@ include("./julia_imzML_visual.jl")
             catch e
                 msg="Failed to load and process image: $e"
                 warning_msg=true
+            finally
+                progressPlot=false
+                btnPlotDisable=false
+                btnStartDisable=false
+                if msi_data !== nothing
+                    # We enable coord search and spectra plot creation
+                    btnSpectraDisable=false
+                    SpectraEnabled=true
+                end
             end
-        else
-            msg="Image could not be 2D plotted"
-            warning_msg=true
-        end
-        progressPlot=false
-        btnPlotDisable=false
-        btnStartDisable=false
-        if isfile(full_routeMz)
-            # We enable coord search and spectra plot creation
-            btnSpectraDisable=false
-            SpectraEnabled=true
         end
     end
 
@@ -961,48 +975,39 @@ include("./julia_imzML_visual.jl")
     # To include a visualization in the spectrum plot indicating where is the selected mass
     @onchange Nmass begin
         if !isempty(xSpectraMz)
-            traceSpectra=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines",name="Spectra",showlegend=false)
-            trace2=PlotlyBase.scatter(x=[Nmass, Nmass],y=[0, maximum(ySpectraMz)],mode="lines",line=attr(color="red", width=0.5),name="<i>m/z</i> selected",showlegend=false)
-            plotdata=[traceSpectra,trace2] # We add the data from spectra and the red line to the plot
+            # Use a stem plot for the main spectrum for consistency
+            traceSpectra = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>", showlegend=false)
+            
+            # Keep this as a scatter plot to draw the vertical line
+            trace2 = PlotlyBase.scatter(x=[Nmass, Nmass], y=[0, maximum(ySpectraMz)], mode="lines", line=attr(color="red", width=0.5), name="<i>m/z</i> selected", showlegend=false)
+            
+            plotdata = [traceSpectra, trace2]
         end
     end
 
     # Event detection for clicking on the images
     @onchange data_click begin
+        if selectedTab == "tab1" || selectedTab == "tab0"
+            # This is for the image heatmaps
+            cursor_data = data_click["cursor"]
+            x = Int32(round(cursor_data["x"]))
+            y = Int32(round(cursor_data["y"])) # y is negative in the UI
+
+            # Update the reactive coordinates, which will trigger the crosshair update
+            xCoord = clamp(x, 1, imgWidth)
+            yCoord = clamp(y, -imgHeight, -1)
+        end
+    end
+
+    @onchange xCoord, yCoord begin 
         if selectedTab == "tab1"
-            cursor_data=data_click["cursor"] 
-            xCoord=Int32(round(cursor_data["x"]))
-            yCoord=Int32(round(cursor_data["y"]))
-            if xCoord < 1
-                xCoord=1
-            elseif xCoord > imgWidth
-                xCoord=imgWidth
-            end
-            if yCoord > -1
-                yCoord=-1
-            elseif yCoord < -imgHeight
-                yCoord=-imgHeight
-            end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
-            plotdataImgT=filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImgT)
-            trace1, trace2=crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
-            plotdataImgT=append!(plotdataImgT, [trace1, trace2])
+            plotdataImgT = filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImgT)
+            trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
+            plotdataImgT = append!(plotdataImgT, [trace1, trace2])
         elseif selectedTab == "tab0"
-            cursor_data=data_click["cursor"] 
-            xCoord=Int32(round(cursor_data["x"]))
-            yCoord=Int32(round(cursor_data["y"]))
-            if xCoord < 1
-                xCoord=1
-            elseif xCoord > imgWidth
-                xCoord=imgWidth
-            end
-            if yCoord > -1
-                yCoord=-1
-            elseif yCoord < -imgHeight
-                yCoord=-imgHeight
-            end # Get the x and y values from the click of the cursor and make sure they don't exceed image proportions
-            plotdataImg=filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y","Optical"]), plotdataImg)
-            trace1, trace2=crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
-            plotdataImg=append!(plotdataImg, [trace1, trace2])
+            plotdataImg = filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y", "Optical"]), plotdataImg)
+            trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
+            plotdataImg = append!(plotdataImg, [trace1, trace2])
         end
     end
 

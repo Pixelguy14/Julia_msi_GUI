@@ -6,7 +6,7 @@ including caching and iteration logic, for handling large mzML and imzML dataset
 efficiently.
 """
 
-using Base64, Libz # For reading binary data
+using Base64, Libz, Serialization # For reading binary data
 
 # Abstract type for different data sources (e.g., mzML, imzML)
 # This allows dispatching to the correct binary reading logic.
@@ -179,17 +179,10 @@ function GetSpectrum(data::MSIData, x::Int, y::Int)
     return GetSpectrum(data, index) # Call the existing method
 end
 
-"""
-    get_total_spectrum(msi_data::MSIData; num_bins::Int=20000) -> Tuple{Vector{Float64}, Vector{Float64}}
+using Serialization
 
-Calculates the sum of all spectra in the dataset by binning.
-The m/z range is determined dynamically by finding the global min/max m/z values
-across the entire dataset.
-
-Returns a tuple containing two vectors: the binned m/z axis and the summed intensities.
-"""
-function get_total_spectrum(msi_data::MSIData; num_bins::Int=20000)
-    println("Calculating total spectrum...")
+function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
+    println("Calculating total spectrum (2-pass method for imzML)...")
 
     # 1. First Pass: Find the global m/z range
     println("  Pass 1: Finding global m/z range...")
@@ -222,7 +215,6 @@ function get_total_spectrum(msi_data::MSIData; num_bins::Int=20000)
             return # continue equivalent
         end
         for i in eachindex(mz)
-            # Find the correct bin for the current m/z value
             bin_index = clamp(round(Int, (mz[i] - global_min_mz) / bin_step) + 1, 1, num_bins)
             intensity_sum[bin_index] += intensity[i]
         end
@@ -230,6 +222,83 @@ function get_total_spectrum(msi_data::MSIData; num_bins::Int=20000)
     
     println("Total spectrum calculation complete.")
     return (collect(mz_bins), intensity_sum)
+end
+
+function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000)
+    println("Calculating total spectrum (single-pass optimization for mzML)...")
+    num_spectra = length(msi_data.spectra_metadata)
+    if num_spectra == 0
+        return (Float64[], Float64[])
+    end
+
+    temp_path, temp_io = mktemp()
+    try
+        # --- Pass 1: Write spectra to temp file and find min/max m/z ---
+        println("  Pass 1: Caching spectra and finding global m/z range...")
+        global_min_mz = Inf
+        global_max_mz = -Inf
+        
+        _iterate_spectra_fast(msi_data) do idx, mz, intensity
+            Serialization.serialize(temp_io, (mz, intensity))
+            if !isempty(mz)
+                local_min, local_max = extrema(mz)
+                global_min_mz = min(global_min_mz, local_min)
+                global_max_mz = max(global_max_mz, local_max)
+            end
+        end
+
+        flush(temp_io)
+
+        if !isfinite(global_min_mz)
+            @warn "Could not determine a valid m/z range. All spectra might be empty."
+            return (Float64[], Float64[])
+        end
+        println("  Global m/z range found: [$(global_min_mz), $(global_max_mz)]")
+
+        # --- Pass 2: Read from temp file and bin intensities ---
+        println("  Pass 2: Reading from cache and summing intensities into $num_bins bins...")
+        
+        seekstart(temp_io)
+        mz_bins = range(global_min_mz, stop=global_max_mz, length=num_bins)
+        intensity_sum = zeros(Float64, num_bins)
+        bin_step = step(mz_bins)
+
+        while !eof(temp_io)
+            mz, intensity = Serialization.deserialize(temp_io)::Tuple{AbstractVector, AbstractVector}
+            
+            if isempty(mz)
+                continue
+            end
+            for i in eachindex(mz)
+                bin_index = clamp(round(Int, (mz[i] - global_min_mz) / bin_step) + 1, 1, num_bins)
+                intensity_sum[bin_index] += intensity[i]
+            end
+        end
+        
+        println("Total spectrum calculation complete.")
+        return (collect(mz_bins), intensity_sum)
+
+    finally
+        close(temp_io)
+        rm(temp_path, force=true)
+    end
+end
+
+"""
+    get_total_spectrum(msi_data::MSIData; num_bins::Int=20000) -> Tuple{Vector{Float64}, Vector{Float64}}
+
+Calculates the sum of all spectra in the dataset by binning.
+This function dispatches to a specialized implementation based on the file type
+(.imzML or .mzML) for optimal performance.
+
+Returns a tuple containing two vectors: the binned m/z axis and the summed intensities.
+"""
+function get_total_spectrum(msi_data::MSIData; num_bins::Int=2000)
+    if msi_data.source isa ImzMLSource
+        return get_total_spectrum_imzml(msi_data, num_bins=num_bins)
+    else # MzMLSource
+        return get_total_spectrum_mzml(msi_data, num_bins=num_bins)
+    end
 end
 
 
@@ -241,7 +310,7 @@ This is effectively the total ion chromatogram (TIC) divided by the number of sp
 
 Returns a tuple containing two vectors: the binned m/z axis and the averaged intensities.
 """
-function get_average_spectrum(msi_data::MSIData; num_bins::Int=20000)
+function get_average_spectrum(msi_data::MSIData; num_bins::Int=2000)
     # This function uses the exact same logic as get_total_spectrum...
     mz_bins, intensity_sum = get_total_spectrum(msi_data, num_bins=num_bins)
 
@@ -365,5 +434,3 @@ function _iterate_spectra_fast(f::Function, data::MSIData)
     # Dispatch to the correct implementation based on the source type
     _iterate_spectra_fast_impl(f, data, data.source)
 end
-
-

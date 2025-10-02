@@ -1,84 +1,3 @@
-# IntQuantCl is originally a function of julia mzMl imzML with the adition 
-# of altering the scale of the colors according to colorlevel.
-function IntQuantCl( slice , colorLevel)
-    # Compute scale factor for amplitude discretization
-    lower  = minimum( slice )
-    scale  = colorLevel / maximum( slice )
-    dim    = size( slice )
-    image  = zeros( UInt8, dim[1], dim[2] )
-    for i in 1:length( slice )
-        image[i] = convert( UInt8, floor( slice[i] * scale + 0.5 ) )
-    end
-    return image
-end
-
-# SaveBitmap originally a function of the mzML imzML library in julia,
-# This function dinamically adjust the color palete adjusting to the ammount of colors
-# available in pixmap
-function SaveBitmapCl( name, pixMap::Array{UInt8,2}, colorTable::Array{UInt32,1} )
-    # Get image dimensions
-    dim = size( pixMap )
-    if length( dim ) != 2
-      return 0
-    end
-    # Normalize pixel values to get a more accurate reading of the image
-    minVal = minimum(pixMap)
-    maxVal = maximum(pixMap)
-    pixMap = round.(UInt8, 255 * (pixMap .- minVal) ./ (maxVal - minVal))
-    # Compute row padding
-    padding = ( 4 - dim[1] & 0x3 ) & 0x3
-    # Compute file dimensions. Header = 14 + 40 + ( 256 * 4 ) = 1078
-    offset   = 1078
-    imgBytes = dim[2] * ( dim[1] + padding )
-    # Create file
-    stream = open( name, "w" )
-    # Save file header
-    write( stream, UInt16( 0x4D42 ) )
-    write( stream, UInt32[ offset + imgBytes, 0 , offset ] )
-    # Save info header
-    write( stream, UInt32[ 40, dim[1], dim[2], 0x80001, 0 ] )
-    write( stream, UInt32[ imgBytes, 0, 0, 256, 0 ] )
-    # Save color table
-    write( stream, colorTable )
-    if length( colorTable ) < 256
-        fixTable = zeros( UInt32, 256 - length( colorTable ) )
-        write( stream, fixTable )
-    end
-    # Save image pixels
-    if padding == 0
-        for i = 1:dim[2]
-            write( stream, pixMap[:,i] )
-        end
-    else
-        zeroPad = zeros( UInt8, padding )
-        for i in 1:dim[2]
-            write( stream, pixMap[:,i] )
-            write( stream, zeroPad )
-        end
-    end
-    # Close file
-    close( stream )
-end
-
-# SaveBitmap originally a function of the mzML imzML library in julia,
-# now has an adjustment for NaN values in case they exist to mantain data integrity
-function GetMzSliceJl(imzML, mass, tolerance)
-    # Alloc space for slice
-    width = maximum(imzML[1, :])
-    height = maximum(imzML[2, :])
-    image = fill(0.0, width, height)
-
-    for i in 1:size(imzML)[2]
-        index = julia_mzML_imzML.FindMass(imzML[3, i], mass, tolerance)
-        if index != 0
-            image[imzML[1, i], imzML[2, i]] = imzML[4, i][index]
-        end
-    end
-    # Adjustment for NaN values with 0
-    replace!(image, NaN => 0.0)
-    return image
-end
-
 # == Search functions ==
 # Functions that recieve a list to update, and the current direction both as string for
 # searching in the directory the position the list is going
@@ -129,10 +48,12 @@ function loadImgPlot(interfaceImg::String)
     layout=PlotlyBase.Layout(
         xaxis=PlotlyBase.attr(
             visible=false,
-            scaleanchor="y"
+            scaleanchor="y",
+            range=[0, width]
         ),
         yaxis=PlotlyBase.attr(
-            visible=false
+            visible=false,
+            range=[-height, 0]
         ),
         margin=attr(l=0,r=0,t=0,b=0,pad=0)
     )
@@ -167,6 +88,7 @@ function loadImgPlot(interfaceImg::String)
     plotlayout=layout
     return plotdata, plotlayout, width, height
 end
+
 # loadImgPlot recieves the local directory of the image as a string, the local directory o the overlay image
 # and the transparency its required to have. Returns the layout and data for the heatmap plotly plot
 # this function loads the image into a plot
@@ -286,6 +208,7 @@ function loadContourPlot(interfaceImg::String)
     plotlayout=layout
     return plotdata, plotlayout
 end
+
 # loadSurfacePlot recieves the local directory of the image as a string,
 # returns the layout and data for the surface plotly plot
 # this function loads the image and applies a gaussian filter 
@@ -363,6 +286,7 @@ function loadSurfacePlot(interfaceImg::String)
     plotlayout=layout3D
     return plotdata, plotlayout
 end
+
 # This function recieves the x and y coords currently selected, and the dimentions of
 # the image to create two traces that will display in a cross section
 function crossLinesPlot(x, y, maxwidth, maxheight)
@@ -404,77 +328,117 @@ function log_tick_formatter(values::Vector{Float64})
 
 end
 
-# Median filter: an adaptation of the R medianfilter, which averages the matrix
-# with the close pixels just from the sides to reduce noise.
-# This one in particular is a midpoint fiter from a 3x3 neighbour area
-function medianFilterjl(pixMap)
-    height, width = size(pixMap)
-    padded_pixMap = padarray(pixMap, 1)
-    target = zeros(eltype(pixMap), height, width)
-    
-    for j in 1:width
-        for i in 1:height
-            neighbors = []
-            for dj in j:j+2
-                for di in i:i+2
-                    push!(neighbors, padded_pixMap[di, dj])
-                end
-            end
-            target[i, j] = median(neighbors)
-        end
-    end
-    
-    return target
-end
-
-function padarray(A, padsize)
-    h, w = size(A)
-    padded = zeros(eltype(A), h + 2*padsize, w + 2*padsize)
-    padded[padsize+1:end-padsize, padsize+1:end-padsize] .= A
-    padded[1:padsize, padsize+1:end-padsize] .= A[1:padsize, :]
-    padded[end-padsize+1:end, padsize+1:end-padsize] .= A[end-padsize+1:end, :]
-    padded[padsize+1:end-padsize, 1:padsize] .= A[:, 1:padsize]
-    padded[padsize+1:end-padsize, end-padsize+1:end] .= A[:, end-padsize+1:end]
-    padded[1:padsize, 1:padsize] .= A[1, 1]
-    padded[1:padsize, end-padsize+1:end] .= A[1, end]
-    padded[end-padsize+1:end, 1:padsize] .= A[end, 1]
-    padded[end-padsize+1:end, end-padsize+1:end] .= A[end, end]
-    return padded
-end
-
 # meanSpectrumPlot recieves the local directory of the image as a string,
 # returns the layout and data for the surface plotly plot
 # this function loads the spectra data and makes a mean to display
 # its values in the spectrum plot
-function meanSpectrumPlot(mzmlRoute::String)
-    spectraMz=LoadMzml(mzmlRoute)
-    xSpectraMz=Float64[]
-    ySpectraMz=Float64[]
-
-    layout=PlotlyBase.Layout(
-        title="Mean spectrum plot",
+function meanSpectrumPlot(data::MSIData)
+    layout = PlotlyBase.Layout(
+        title="Average Spectrum Plot",
+        hovermode="closest",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
+            showgrid=true
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Average Intensity",
             showgrid=true,
-            tickformat = ".3g"
+            tickformat=".3g"
+        ),
+        margin=attr(l=0, r=0, t=120, b=0, pad=0)
+    )
+
+    # Use the new, efficient function from the backend
+    xSpectraMz, ySpectraMz = get_average_spectrum(data)
+
+    if isempty(xSpectraMz)
+        @warn "Average spectrum is empty."
+        trace = PlotlyBase.stem(x=Float64[], y=Float64[])
+    else
+        trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x",hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    end
+
+
+    plotdata = [trace]
+    plotlayout = layout
+    return plotdata, plotlayout, xSpectraMz, ySpectraMz
+end
+
+function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, imgHeight::Int)
+    local mz::AbstractVector, intensity::AbstractVector
+    local plot_title::String
+
+    is_imaging = data.source isa ImzMLSource
+
+    if is_imaging
+        # For imaging data, use (X, Y) coordinates
+        x = clamp(xCoord, 1, imgWidth)
+        y = clamp(yCoord, 1, imgHeight)
+        
+        mz, intensity = GetSpectrum(data, x, y)
+        plot_title = "Spectrum at ($x, $y)"
+    else
+        # For non-imaging data, treat xCoord as the spectrum index
+        index = clamp(xCoord, 1, length(data.spectra_metadata))
+        
+        mz, intensity = GetSpectrum(data, index)
+        plot_title = "Spectrum #$index"
+    end
+
+    layout = PlotlyBase.Layout(
+        title=plot_title,
+        hovermode="closest",
+        xaxis=PlotlyBase.attr(
+            title="<i>m/z</i>",
+            showgrid=true
         ),
         yaxis=PlotlyBase.attr(
             title="Intensity",
             showgrid=true,
-            tickformat = ".3g"
+            tickformat=".3g"
         ),
-        autosize=false,
-        margin=attr(l=0,r=0,t=120,b=0,pad=0)
+        margin=attr(l=0, r=0, t=120, b=0, pad=0)
     )
-    try
-        xSpectraMz=mean(spectraMz[1,:])
-        ySpectraMz=mean(spectraMz[2,:])
-    catch e
-        xSpectraMz=spectraMz[1,1]
-        ySpectraMz=spectraMz[2,1]
+    
+    # Downsample for plotting performance
+    mz_down, int_down = MSI_src.downsample_spectrum(mz, intensity)
+
+    trace = PlotlyBase.stem(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    
+    plotdata = [trace]
+    plotlayout = layout
+    
+    # Return the full data for other uses, and the plot data
+    return plotdata, plotlayout, mz, intensity
+end
+
+function sumSpectrumPlot(data::MSIData)
+    layout = PlotlyBase.Layout(
+        title="Total Spectrum Plot",
+        hovermode="closest",
+        xaxis=PlotlyBase.attr(
+            title="<i>m/z</i>",
+            showgrid=true
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Total Intensity",
+            showgrid=true,
+            tickformat=".3g"
+        ),
+        margin=attr(l=0, r=0, t=120, b=0, pad=0)
+    )
+
+    # Use the get_total_spectrum function from the backend
+    xSpectraMz, ySpectraMz = get_total_spectrum(data)
+
+    if isempty(xSpectraMz)
+        @warn "Total spectrum is empty."
+        trace = PlotlyBase.stem(x=Float64[], y=Float64[])
+    else
+        trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x",hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
     end
-    trace=PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz,marker=attr(size=1, color="blue", opacity=0.1))
-    plotdata=[trace] # We add the data from spectra to the plot
-    plotlayout=layout
+
+    plotdata = [trace]
+    plotlayout = layout
     return plotdata, plotlayout, xSpectraMz, ySpectraMz
 end
