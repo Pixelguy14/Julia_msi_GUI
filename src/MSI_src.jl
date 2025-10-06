@@ -20,7 +20,7 @@ Opens a .mzML or .imzML file and prepares it for data access.
 
 This is the main entry point for the new data access API.
 """
-function OpenMSIData(filepath::String; cache_size=100)
+function OpenMSIData(filepath::String; cache_size=300)
     if endswith(lowercase(filepath), ".mzml")
         return load_mzml_lazy(filepath, cache_size=cache_size)
     elseif endswith(lowercase(filepath), ".imzml")

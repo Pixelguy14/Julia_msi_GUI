@@ -15,6 +15,7 @@ using LinearAlgebra
 using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
 using Base.Filesystem: mv # To rename files in the system
+using Printf # Required for @sprintf macro in colorbar generation
 
 # Bring MSIData into App module's scope
 using .MSI_src: MSIData, OpenMSIData, GetSpectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ
@@ -295,16 +296,16 @@ include("./julia_imzML_visual.jl")
 
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
-                msg = "File loaded in $(eTime) seconds. Calculating total spectrum..."
+                # msg = "File loaded in $(eTime) seconds. Calculating total spectrum..."
+                msg = "File loaded in $(eTime) seconds."
 
                 # Enable UI controls
                 btnStartDisable = !(msi_data.source isa ImzMLSource)
                 btnPlotDisable = false
                 btnSpectraDisable = false
                 SpectraEnabled = true
-
+                """
                 # --- Automatically generate and display the sum spectrum plot ---
-                # This is still part of the same async task
                 progressSpectraPlot = true
                 sTime = time()
 
@@ -314,7 +315,7 @@ include("./julia_imzML_visual.jl")
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
                 msg = "Total spectrum plot loaded in $(eTime) seconds."
-
+                """
             catch e
                 msi_data = nothing
                 msg = "Error loading file: $e"
@@ -324,7 +325,11 @@ include("./julia_imzML_visual.jl")
                 SpectraEnabled = false
                 @error "File loading failed" exception=(e, catch_backtrace())
             finally
-                # This now correctly runs after everything is finished
+                # This block will always run at the end of the async task
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                end
                 progress = false
                 progressSpectraPlot = false
             end
@@ -347,7 +352,7 @@ include("./julia_imzML_visual.jl")
                     msg = "No .imzML file loaded or selected file is not an .imzML. Please select a valid file."
                     warning_msg = true
                 elseif Nmass > 0 && Tol > 0 && Tol <= 1 && colorLevel > 1 && colorLevel < 257
-                    msg = "Creating image for Nmass=$(Nmass) Tol=$(Tol). Please be patient."
+                    msg = "Creating image for m/z=$(Nmass) Tol=$(Tol). Please be patient."
                     try
                         # Use the new get_mz_slice with the centralized MSIData object
                         slice = get_mz_slice(msi_data, Nmass, Tol)
@@ -371,11 +376,8 @@ include("./julia_imzML_visual.jl")
                                 current_triq = "TrIQ_$(text_nmass).bmp"
                                 msgtriq = "TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
 
-                                bound = MSI_src.get_outlier_thres(slice, triqProb)
-                                levels = range(bound[1], stop=bound[2], length=8)
-                                levels = vcat(levels, 2 * levels[end] - levels[end-1])
-                                Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, bound[2]), ticks=levels, tickformat=log_tick_formatter, label="Intensity", size=25)
-                                save("public/colorbar_TrIQ_$(text_nmass).png", fig)
+                                colorbar_path = joinpath("public", "colorbar_TrIQ_$(text_nmass).png")
+                                generate_colorbar_image(slice, colorLevel, colorbar_path, use_triq=true, triq_prob=triqProb)
                                 colorbarT = "/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
                                 current_col_triq = "colorbar_TrIQ_$(text_nmass).png"
 
@@ -400,9 +402,8 @@ include("./julia_imzML_visual.jl")
                             current_msi = "MSI_$(text_nmass).bmp"
                             msgimg = "Image with the Nmass of $(replace(text_nmass, "_" => "."))"
 
-                            levels = range(0, maximum(slice), length=8)
-                            Colorbar(fig[1, 1], colormap=cgrad(:viridis, colorLevel, categorical=true), limits=(0, maximum(slice)), ticks=levels, tickformat=log_tick_formatter, label="Intensity", size=25)
-                            save("public/colorbar_MSI_$(text_nmass).png", fig)
+                            colorbar_path = joinpath("public", "colorbar_MSI_$(text_nmass).png")
+                            generate_colorbar_image(slice, colorLevel, colorbar_path)
                             colorbar = "/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
                             current_col_msi = "colorbar_MSI_$(text_nmass).png"
 

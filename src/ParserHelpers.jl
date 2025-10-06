@@ -59,7 +59,15 @@ end
 """
     configure_spec_dim(stream)
 
-Fills a `SpecDim` struct by parsing `cvParam` tags from the stream.
+Parses a block of `<cvParam>` tags from an XML stream to configure a `SpecDim`
+struct. It reads accessions to determine the data format (e.g., `Float32`),
+compression status (`zlib`), and axis type (m/z vs. intensity).
+
+# Arguments
+- `stream`: An IO stream positioned at the start of the `cvParam` block.
+
+# Returns
+- A `SpecDim` struct populated with the parsed configuration.
 """
 function configure_spec_dim(stream)
     axis = SpecDim(Float64, false, 1, 0)
@@ -102,6 +110,18 @@ end
 #
 # ============================================================================
 
+"""
+    CVParams
+
+A mutable struct used during the parsing of mzML files to temporarily hold
+CV parameter information for a data array before it is converted into a
+`SpectrumAsset`.
+
+# Fields
+- `format`: The data type (e.g., `Float64`).
+- `is_compressed`: A boolean indicating if the data is compressed.
+- `axis_type`: A symbol indicating the array type (`:mz` or `:intensity`).
+"""
 mutable struct CVParams
     format::Type
     is_compressed::Bool

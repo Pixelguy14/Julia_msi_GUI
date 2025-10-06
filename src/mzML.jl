@@ -1,9 +1,22 @@
-# /home/pixel/Documents/Cinvestav_2025/JuliaMSI/src/mzML.jl
+# src/mzML.jl
 
 # This file is responsible for parsing metadata from .mzML files.
 # It has been refactored to produce a unified MSIData object.
 
-# This function is kept internal to the mzML parsing process
+"""
+    get_spectrum_asset_metadata(stream)
+
+Parses a `<binaryDataArray>` block within an mzML file to extract metadata
+for a single data array (e.g., m/z or intensity). It reads CV parameters to
+determine the data type, compression, and axis type.
+
+# Arguments
+- `stream`: An IO stream positioned at the beginning of a `<binaryDataArray>` block.
+
+# Returns
+- A `SpectrumAsset` struct containing the parsed metadata, including the binary
+  data offset, encoded length, format, and compression status.
+"""
 function get_spectrum_asset_metadata(stream)
     start_pos = position(stream)
     
@@ -56,6 +69,10 @@ function get_spectrum_asset_metadata(stream)
             elseif acc_str == "MS:1000523"
                 data_format = Float64
                 # println("DEBUG: Set format to Float64")
+            # MS:1000572 is a parent term for compression. While not ideal, if present, assume compression.
+            elseif acc_str == "MS:1000572"
+                compression_flag = true
+                # println("DEBUG: Set is_compressed to true based on parent term")
             elseif acc_str == "MS:1000574"
                 compression_flag = true
                 # println("DEBUG: Set is_compressed to true")
@@ -80,6 +97,20 @@ function get_spectrum_asset_metadata(stream)
 end
 
 # This function is updated to return the generic SpectrumMetadata struct
+"""
+    parse_spectrum_metadata(stream, offset::Int64)
+
+Parses an entire `<spectrum>` block from an mzML file, given a starting offset.
+It extracts the spectrum ID and calls `get_spectrum_asset_metadata` to parse
+the m/z and intensity array metadata.
+
+# Arguments
+- `stream`: An IO stream for the mzML file.
+- `offset`: The byte offset where the `<spectrum>` block begins.
+
+# Returns
+- A `SpectrumMetadata` struct containing the parsed metadata for one spectrum.
+"""
 function parse_spectrum_metadata(stream, offset::Int64)
     seek(stream, offset)
     
@@ -97,6 +128,18 @@ function parse_spectrum_metadata(stream, offset::Int64)
     return SpectrumMetadata(0, 0, id, mz_asset, int_asset)
 end
 
+"""
+    parse_offset_list(stream)
+
+Parses the `<index name="spectrum">` block in an indexed mzML file to extract
+the byte offsets for each spectrum.
+
+# Arguments
+- `stream`: An IO stream positioned at the start of the `<index>` block.
+
+# Returns
+- A `Vector{Int64}` containing the byte offsets for all spectra.
+"""
 function parse_offset_list(stream)
     offsets = Int64[]
     offset_regex = r"<offset[^>]*>(\d+)</offset>"
@@ -121,6 +164,20 @@ function parse_offset_list(stream)
 end
 
 # This is the main lazy-loading function for mzML, now returning an MSIData object.
+"""
+    load_mzml_lazy(file_path::String; cache_size::Int=100)
+
+Lazily loads an indexed `.mzML` file by parsing only the metadata. It reads the
+spectrum index from the end of the file to get the offsets of each spectrum,
+then parses the metadata for each spectrum without loading the binary data.
+
+# Arguments
+- `file_path`: The path to the `.mzML` file.
+- `cache_size`: The number of spectra to hold in an LRU cache for faster access.
+
+# Returns
+- An `MSIData` object ready for lazy data access.
+"""
 function load_mzml_lazy(file_path::String; cache_size::Int=100)
     println("DEBUG: Opening file stream for $file_path")
     stream = open(file_path, "r")
@@ -181,8 +238,16 @@ end
 """
     LoadMzml(fileName::String)
 
-Eagerly loads all spectra from a .mzML file.
-Provided for backward compatibility. Now uses the new MSIData architecture.
+Eagerly loads all spectra from a .mzML file into memory.
+This function now uses the new lazy-loading
+architecture internally but presents the data in the old format.
+
+# Arguments
+- `fileName`: The path to the `.mzML` file.
+
+# Returns
+- A `2xN` matrix where `N` is the number of spectra. The first row contains
+  m/z arrays and the second row contains intensity arrays.
 """
 function LoadMzml(fileName::String)
     # Use the lazy loader to get the MSIData object

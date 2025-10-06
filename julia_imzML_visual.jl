@@ -325,7 +325,66 @@ function log_tick_formatter(values::Vector{Float64})
         formValues[i]=value
     end
     return map((v, e) -> e == 0 ? "$(round(v, sigdigits=2))" : "$(round(v, sigdigits=2))x10" * Makie.UnicodeFun.to_superscript(e), formValues, exponents)
+end
 
+function generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String; use_triq::Bool=false, triq_prob::Float64=0.98)
+    # 1. Determine bounds based on whether TrIQ is used
+    min_val, max_val = if use_triq
+        MSI_src.get_outlier_thres(slice_data, triq_prob)
+    else
+        extrema(slice_data)
+    end
+
+    # 2. Replicate the tick calculation logic from plot_slices
+    bins = color_levels
+    levels = range(min_val, stop=max_val, length=bins + 1)
+    level_range = levels[end] - levels[1]
+    
+    if level_range == 0
+        levels = range(min_val - 0.1, stop=max_val + 0.1, length=bins + 1)
+        level_range = 0.2
+    end
+    
+    exponent = level_range > 0 ? floor(log10(level_range)) / 3 : 0
+    scale = 10^(3 * exponent)
+    scaled_levels = levels ./ scale
+    
+    format_num = level_range > 0 ? floor(log10(level_range)) % 3 : 0
+    labels = if format_num == 0
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    elseif format_num == 1
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    else
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    end
+    
+    divisors = 2:7
+    remainders = (bins - 1) .% divisors
+    best_divisor = divisors[findlast(x -> x == minimum(remainders), remainders)]
+    tick_indices = round.(Int, range(1, stop=bins + 1, length=best_divisor + 1))
+
+    if !(1 in tick_indices)
+        pushfirst!(tick_indices, 1)
+    end
+    if !((bins + 1) in tick_indices)
+        push!(tick_indices, bins + 1)
+    end
+    unique!(sort!(tick_indices))
+    
+    tick_positions = levels[tick_indices]
+    tick_labels = labels[tick_indices]
+
+    # 3. Create and save the colorbar image
+    fig = Figure(size=(150, 250))
+    Colorbar(fig[1, 1], 
+        colormap=cgrad(:viridis, bins),
+        limits=(min_val, max_val),
+        label=(scale == 1 ? "Intensity" : "Intensity ×10^$(round(Int, 3 * exponent))"),
+        ticks=(tick_positions, tick_labels),
+        labelsize=20,
+        ticklabelsize=16
+    )
+    save(output_path, fig)
 end
 
 # meanSpectrumPlot recieves the local directory of the image as a string,
@@ -408,7 +467,6 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     plotdata = [trace]
     plotlayout = layout
     
-    # Return the full data for other uses, and the plot data
     return plotdata, plotlayout, mz, intensity
 end
 

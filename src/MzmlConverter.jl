@@ -11,13 +11,33 @@ using DataFrames, Printf, CSV
 
 
 # A struct to hold the processed pixel data before exporting
+"""
+    ProcessedPixel
+
+A temporary struct to hold the data for a single, fully rendered pixel before
+it is written to the final `.ibd` file.
+
+# Fields
+- `coords`: A tuple `(x, y)` of the pixel's spatial coordinates.
+- `mz`: The m/z array for the pixel.
+- `intensity`: The calculated intensity array for the pixel.
+"""
 struct ProcessedPixel
     coords::Tuple{Int, Int}
     mz::Vector{Float64} # Assuming m/z is consistent, can be optimized later
     intensity::Vector{Float32}
 end
 
-# This struct will hold the metadata needed for the XML file
+"""
+    BinaryMetadata
+
+A struct to hold the file offset and length for a spectrum's binary data arrays
+(m/z and intensity) after they have been written to the `.ibd` file.
+
+# Fields
+- `mz_offset`, `mz_length`: Byte offset and length for the m/z array.
+- `int_offset`, `int_length`: Byte offset and length for the intensity array.
+"""
 struct BinaryMetadata
     mz_offset::UInt64
     mz_length::UInt64
@@ -28,8 +48,15 @@ end
 """
     GetMzmlScanTime_linebyline(fileName::String)
 
-(Internal) Slow, line-by-line parser for scan times. Used as a fallback if
-the .mzML file index is missing or corrupt.
+Parses a `.mzML` file line-by-line to extract the scan start time for each
+spectrum. This is a slow and memory-intensive fallback method used only when
+the faster, index-based `GetMzmlScanTime` fails.
+
+# Arguments
+- `fileName`: Path to the `.mzML` file.
+
+# Returns
+- A `Matrix{Int64}` where each row is `[spectrum_index, time_in_milliseconds]`.
 """
 function GetMzmlScanTime_linebyline(fileName::String)
     times = Tuple{Int64, Int64}[]
@@ -350,6 +377,28 @@ function MatchAcquireTime(sync_file_path::String, scans::Matrix{Int64}; img_widt
 end
 
 
+"""
+    RenderPixel(pixel_info, scans, msi_data, scan_time_deltas, pixel_time_deltas)
+
+Reconstructs the spectrum for a single pixel by combining intensities from the
+raw MS scans that occurred during the pixel's acquisition time. It uses a
+weighted interpolation scheme based on the relative timing of scans and pixels.
+
+This function handles three cases:
+1.  A single scan falls entirely within the pixel's time window.
+2.  The pixel's time window is covered by two partial scans.
+3.  The pixel's time window covers one or more full scans plus two partial scans.
+
+# Arguments
+- `pixel_info`: A row from the timing matrix containing the pixel's time and scan indices.
+- `scans`: The matrix of scan times.
+- `msi_data`: The `MSIData` object for the source `.mzML` file.
+- `scan_time_deltas`: Pre-calculated time durations for each scan.
+- `pixel_time_deltas`: Pre-calculated time durations for each pixel.
+
+# Returns
+- A tuple `(mz_array, intensity_array)` for the rendered pixel spectrum.
+"""
 function RenderPixel(pixel_info, scans, msi_data::MSIData, scan_time_deltas, pixel_time_deltas)
     pixel_time = pixel_info[3]
     first_scan = pixel_info[4]
@@ -408,6 +457,26 @@ function RenderPixel(pixel_info, scans, msi_data::MSIData, scan_time_deltas, pix
     return (mz_array, new_intensity)
 end
 
+"""
+    ConvertMzmlToImzml(source_file, target_ibd_file, timing_matrix, scans)
+
+Orchestrates the conversion of spectra from a `.mzML` file into a binary `.ibd`
+file. It iterates through each pixel defined in the `timing_matrix`, calls
+`RenderPixel` to reconstruct the pixel's spectrum, and writes the resulting
+m/z and intensity arrays to the `.ibd` file in little-endian byte order.
+
+# Arguments
+- `source_file`: Path to the source `.mzML` file.
+- `target_ibd_file`: Path for the output `.ibd` binary file.
+- `timing_matrix`: The output from `MatchAcquireTime`, mapping pixels to scans.
+- `scans`: The matrix of scan times from `GetMzmlScanTime`.
+
+# Returns
+- A tuple `(binary_meta_vec, coords_vec, (width, height))` containing:
+    - A vector of `BinaryMetadata` for each spectrum.
+    - A vector of `(x, y)` coordinate tuples.
+    - A tuple of the final image dimensions.
+"""
 function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing_matrix::Matrix{Int64}, scans::Matrix{Int64})
     if size(timing_matrix, 1) == 0
         # Create an empty .ibd file if there's nothing to process
@@ -489,6 +558,23 @@ function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing
     return binary_meta_vec, coords_vec, (width, height)
 end
 
+"""
+    ExportImzml(target_file, binary_meta, coords, dims)
+
+Generates the `.imzML` metadata file. This XML file contains all the necessary
+metadata to interpret the corresponding `.ibd` binary file, including references
+to external data offsets, image dimensions, and CV parameters describing the
+experiment and data format.
+
+# Arguments
+- `target_file`: The path for the output `.imzML` file.
+- `binary_meta`: A vector of `BinaryMetadata` structs with offset and length info.
+- `coords`: A vector of `(x, y)` coordinates for each spectrum.
+- `dims`: A tuple `(width, height)` of the final image dimensions.
+
+# Returns
+- `true` on success, `false` on failure.
+"""
 function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, coords::Vector{Tuple{Int, Int}}, dims::Tuple{Int, Int})
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
     

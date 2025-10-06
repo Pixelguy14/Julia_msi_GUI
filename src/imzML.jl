@@ -1,3 +1,4 @@
+# src/imzML.jl
 using Images, Statistics, CairoMakie, DataFrames, Printf, ColorSchemes, StatsBase
 
 # --- Extracted from imzML.jl ---
@@ -171,7 +172,10 @@ function load_imzml_lazy(file_path::String; cache_size=100)
         int_config_idx = findfirst(a -> a.Axis == 2, axis)
         mz_format = axis[mz_config_idx].Format
         intensity_format = axis[int_config_idx].Format
+        mz_is_compressed = axis[mz_config_idx].Packed
+        int_is_compressed = axis[int_config_idx].Packed
         println("DEBUG: m/z format: $mz_format, Intensity format: $intensity_format")
+        println("DEBUG: m/z compressed: $mz_is_compressed, Intensity compressed: $int_is_compressed")
 
         # --- NEW PARSING LOGIC based on the old, working code ---
         println("DEBUG: Learning file structure from first spectrum...")
@@ -212,8 +216,8 @@ function load_imzml_lazy(file_path::String; cache_size=100)
             end
 
             # Create modern SpectrumAsset objects
-            mz_asset = SpectrumAsset(mz_format, false, mz_offset, nPoints, :mz)
-            int_asset = SpectrumAsset(intensity_format, false, int_offset, nPoints, :intensity)
+            mz_asset = SpectrumAsset(mz_format, mz_is_compressed, mz_offset, nPoints, :mz)
+            int_asset = SpectrumAsset(intensity_format, int_is_compressed, int_offset, nPoints, :intensity)
             
             spectra_metadata[k] = SpectrumMetadata(x, y, "", mz_asset, int_asset)
             
@@ -449,6 +453,21 @@ end
 #
 # ============================================================================
 
+"""
+    get_outlier_thres(img, prob=0.98)
+
+Calculates dynamic intensity range bounds for an image based on a cumulative
+probability histogram. This function replicates an R algorithm to find an
+intensity threshold that corresponds to a given cumulative probability, which
+is used to exclude outliers before normalization.
+
+# Arguments
+- `img`: The input image matrix.
+- `prob`: The cumulative probability threshold (default: 0.98) for outlier detection.
+
+# Returns
+- A tuple `(low, high)` representing the calculated lower and upper intensity bounds.
+"""
 function get_outlier_thres(img, prob=0.98)
     # DO NOT filter zeros. Use all pixel values like R does.
     int_values = vec(img)
@@ -493,6 +512,21 @@ function get_outlier_thres(img, prob=0.98)
     return (low, actual_threshold)
 end
 
+"""
+    set_pixel_depth(img, bounds, depth)
+
+Quantizes the intensity values of an image into a specified number of bins
+(`depth`) within a given intensity range (`bounds`). Pixels outside the bounds
+are clipped.
+
+# Arguments
+- `img`: The input image matrix.
+- `bounds`: A tuple `(min, max)` specifying the intensity range for quantization.
+- `depth`: The number of quantization levels (bins).
+
+# Returns
+- A `Matrix{UInt8}` with pixel values quantized to the specified depth.
+"""
 function set_pixel_depth(img, bounds, depth)
     min_val, max_val = bounds
     bins = depth - 1
@@ -595,6 +629,19 @@ function quantize_intensity(slice::AbstractMatrix{<:Real}, levels::Integer=256)
     return image
 end
 
+"""
+    median_filter(img)
+
+Applies a 3x3 median filter to the input image. This is a simple noise
+reduction technique that replaces each pixel's value with the median value of
+its 3x3 neighborhood.
+
+# Arguments
+- `img`: The input image matrix.
+
+# Returns
+- A new matrix containing the filtered image.
+"""
 function median_filter(img)
     # 3x3 median filter implementation
     return mapwindow(median, img, (3, 3))
@@ -685,6 +732,28 @@ function display_statistics(slices, names, masses)
     return all_dfs
 end
 
+"""
+    plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dpi=150, global_bounds=nothing)
+
+Generates and saves a grid of image slice plots. Each row corresponds to a
+file and each column to a mass, creating a comprehensive overview.
+
+# Arguments
+- `slices`: A 2D array of image slice matrices (`n_files` x `n_masses`).
+- `names`: A vector of file names, used for titling rows.
+- `masses`: A vector of m/z values, used for titling columns.
+- `output_dir`: The directory where the output plots will be saved.
+
+# Keyword Arguments
+- `stage_name`: A string used to name the output files (e.g., "raw", "normalized").
+- `bins`: The number of color levels in the heatmap palette.
+- `dpi`: The resolution for the saved image files.
+- `global_bounds`: A vector of `(min, max)` tuples, one for each mass, to ensure a consistent
+  color scale across all files for a given mass. If `nothing`, bounds are calculated automatically.
+
+# Returns
+- The generated `Figure` object from Makie.
+"""
 function plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dpi=150, global_bounds=nothing)
     n_files, n_masses = size(slices)
     
