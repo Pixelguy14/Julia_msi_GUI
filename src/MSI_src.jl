@@ -1,7 +1,7 @@
 module MSI_src
 
 # Export the public API
-export OpenMSIData, GetSpectrum, IterateSpectra, ImportMzmlFile, load_slices, plot_slices, plot_slice, get_total_spectrum, get_average_spectrum, LoadMzml, LoadSpectra
+export OpenMSIData, GetSpectrum, IterateSpectra, ImportMzmlFile, load_slices, plot_slices, plot_slice, get_total_spectrum, get_average_spectrum, LoadMzml, LoadSpectra, precompute_analytics
 
 # Include all source files directly into the main module
 include("MSIData.jl")

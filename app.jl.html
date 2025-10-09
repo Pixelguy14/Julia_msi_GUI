@@ -14,9 +14,11 @@
       <!-- Left DIV -->
       <div id="intDivStyle" class="st-col col-12 st-module">
         <h6>Search for the imzML or mzML file in your system</h6>
-        <q-btn id="btnStyle" icon="search" class="q-ma-sm" v-on:click="btnSearch=true"
-          label="Select your imzML or mzML file"></q-btn>
-        <p id="lblFullRoute">full route: {{full_route}}</p>
+        <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="full_route" readonly label="Select your imzML or mzML file" v-on:click="btnSearch=true">
+            <template v-slot:append>
+                <q-icon name="search" v:onclick="btnSearch=true" class="cursor-pointer" />
+            </template>
+        </q-input>
         <!-- Variable Manipulation -->
         <div class="row">
           <div class="st-col col-4 col-sm q-ma-sm">
@@ -106,6 +108,8 @@
           </q-btn>
           <q-btn id="btnStyle" icon="zoom_out_map" class="q-ma-sm on-right" v-on:click="compareBtn=true" padding="sm"
             label="Compare"></q-btn>
+          <q-btn id="btnStyle" class="q-ma-sm" :disable="btnMetadataDisable"
+            v-on:click="showMetadataBtn=true" label="Show Metadata"></q-btn>
         </div>
         <p>{{msg}}</p>
 
@@ -381,6 +385,31 @@
       <q-card-actions align="right">
         <q-btn flat label="Done" style="color:#009f90" v-close-popup />
       </q-card-actions>
+    </q-card>
+  </q-dialog>
+
+  <q-dialog v-model="showMetadataDialog" full-width full-height>
+    <q-card>
+        <q-card-section>
+            <div class="text-h6">Dataset Summary</div>
+        </q-card-section>
+
+        <q-card-section class="q-pt-none">
+            <q-list bordered separator>
+                <q-item v-for="row in metadata_rows" :key="row.parameter">
+                    <q-item-section>
+                        <q-item-label>{{ row.parameter }}</q-item-label>
+                    </q-item-section>
+                    <q-item-section side>
+                        <q-item-label caption>{{ row.value }}</q-item-label>
+                    </q-item-section>
+                </q-item>
+            </q-list>
+        </q-card-section>
+
+        <q-card-actions align="right">
+            <q-btn flat label="Close" style="color:#009f90" v-close-popup />
+        </q-card-actions>
     </q-card>
   </q-dialog>
 

@@ -18,7 +18,7 @@ using Base.Filesystem: mv # To rename files in the system
 using Printf # Required for @sprintf macro in colorbar generation
 
 # Bring MSIData into App module's scope
-using .MSI_src: MSIData, OpenMSIData, GetSpectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ
+using .MSI_src: MSIData, OpenMSIData, GetSpectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics
 
 include("./julia_imzML_visual.jl")
 
@@ -119,6 +119,13 @@ include("./julia_imzML_visual.jl")
 
     # Centralized MSIData object
     @out msi_data::Union{MSIData, Nothing} = nothing
+
+    # Metadata table variables
+    @in showMetadataDialog = false
+    @in showMetadataBtn = false
+    @out metadata_columns = []
+    @out metadata_rows = []
+    @out btnMetadataDisable = true
 
     # Saves the route where imzML and mzML files are located
     @out full_route=""
@@ -291,31 +298,48 @@ include("./julia_imzML_visual.jl")
                 sTime = time()
                 msi_data = OpenMSIData(full_route)
                 
+                # --- Pre-compute analytics for performance ---
+                precompute_analytics(msi_data)
+
+                # --- Prepare metadata for display ---
+                if msi_data.spectrum_stats_df !== nothing
+                    df = msi_data.spectrum_stats_df
+                    
+                    # Define columns for the key-value summary table
+                    metadata_columns = [
+                        Dict("name" => "parameter", "label" => "Parameter", "field" => "parameter", "align" => "left"),
+                        Dict("name" => "value", "label" => "Value", "field" => "value", "align" => "left"),
+                    ]
+
+                    # Calculate summary statistics
+                    summary_stats = [
+                        Dict("parameter" => "File Name", "value" => basename(full_route)),
+                        Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
+                        Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
+                        Dict("parameter" => "Global Min m/z", "value" => @sprintf("%.4f", msi_data.global_min_mz)),
+                        Dict("parameter" => "Global Max m/z", "value" => @sprintf("%.4f", msi_data.global_max_mz)),
+                        Dict("parameter" => "Mean TIC", "value" => @sprintf("%.2e", mean(df.TIC))),
+                        Dict("parameter" => "Mean BPI", "value" => @sprintf("%.2e", mean(df.BPI))),
+                        Dict("parameter" => "Mean # Points", "value" => @sprintf("%.1f", mean(df.NumPoints))),
+                    ]
+                    
+                    metadata_rows = summary_stats
+                    btnMetadataDisable = false
+                end
+
                 w, h = msi_data.image_dims
                 imgWidth, imgHeight = w > 0 ? (w, h) : (500, 500)
 
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
-                # msg = "File loaded in $(eTime) seconds. Calculating total spectrum..."
-                msg = "File loaded in $(eTime) seconds."
+                msg = "File loaded and indexed in $(eTime) seconds."
 
                 # Enable UI controls
                 btnStartDisable = !(msi_data.source isa ImzMLSource)
                 btnPlotDisable = false
                 btnSpectraDisable = false
                 SpectraEnabled = true
-                """
-                # --- Automatically generate and display the sum spectrum plot ---
-                progressSpectraPlot = true
-                sTime = time()
-
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data)
                 
-                selectedTab = "tab2"
-                fTime = time()
-                eTime = round(fTime - sTime, digits=3)
-                msg = "Total spectrum plot loaded in $(eTime) seconds."
-                """
             catch e
                 msi_data = nothing
                 msg = "Error loading file: $e"
@@ -323,6 +347,7 @@ include("./julia_imzML_visual.jl")
                 btnStartDisable = true
                 btnSpectraDisable = true
                 SpectraEnabled = false
+                btnMetadataDisable = true
                 @error "File loading failed" exception=(e, catch_backtrace())
             finally
                 # This block will always run at the end of the async task
@@ -334,6 +359,10 @@ include("./julia_imzML_visual.jl")
                 progressSpectraPlot = false
             end
         end
+    end
+
+    @onbutton showMetadataBtn begin
+        showMetadataDialog = true
     end
     
     @onbutton mainProcess @time begin
@@ -355,7 +384,8 @@ include("./julia_imzML_visual.jl")
                     msg = "Creating image for m/z=$(Nmass) Tol=$(Tol). Please be patient."
                     try
                         # Use the new get_mz_slice with the centralized MSIData object
-                        slice = get_mz_slice(msi_data, Nmass, Tol)
+                        println("get_mz_slice time:")
+                        slice = @time get_mz_slice(msi_data, Nmass, Tol)
                         fig = CairoMakie.Figure(size=(150, 250)) # Container
                         timestamp = string(time_ns())
 
@@ -364,12 +394,14 @@ include("./julia_imzML_visual.jl")
                                 msg = "Incorrect TrIQ values, please adjust accordingly and try again."
                                 warning_msg = true
                             else
-                                sliceTriq = TrIQ(slice, colorLevel, triqProb)
+                                println("TrIQ time:")
+                                sliceTriq = @time TrIQ(slice, colorLevel, triqProb)
                                 if MFilterEnabled
                                     sliceTriq = round.(UInt8, median_filter(sliceTriq))
                                 end
                                 sliceTriq = reverse(sliceTriq, dims=2)
-                                save_bitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"), sliceTriq, ViridisPalette)
+                                println("save_bitmap time:")
+                                @time save_bitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"), sliceTriq, ViridisPalette)
 
                                 imgIntT = "/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
                                 plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
@@ -377,7 +409,8 @@ include("./julia_imzML_visual.jl")
                                 msgtriq = "TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
 
                                 colorbar_path = joinpath("public", "colorbar_TrIQ_$(text_nmass).png")
-                                generate_colorbar_image(slice, colorLevel, colorbar_path, use_triq=true, triq_prob=triqProb)
+                                println("generate_colorbar_image time:")
+                                @time generate_colorbar_image(slice, colorLevel, colorbar_path, use_triq=true, triq_prob=triqProb)
                                 colorbarT = "/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
                                 current_col_triq = "colorbar_TrIQ_$(text_nmass).png"
 
@@ -390,12 +423,14 @@ include("./julia_imzML_visual.jl")
                                 selectedTab = "tab1"
                             end
                         else # If we don't use TrIQ
-                            sliceQuant = quantize_intensity(slice, colorLevel)
+                            println("quantize_intensity time:")
+                            sliceQuant = @time quantize_intensity(slice, colorLevel)
                             if MFilterEnabled
                                 sliceQuant = round.(UInt8, median_filter(sliceQuant))
                             end
                             sliceQuant = reverse(sliceQuant, dims=2)
-                            save_bitmap(joinpath("public", "MSI_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
+                            println("save_bitmap time:")
+                            @time save_bitmap(joinpath("public", "MSI_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
 
                             imgInt = "/MSI_$(text_nmass).bmp?t=$(timestamp)"
                             plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
@@ -403,7 +438,8 @@ include("./julia_imzML_visual.jl")
                             msgimg = "Image with the Nmass of $(replace(text_nmass, "_" => "."))"
 
                             colorbar_path = joinpath("public", "colorbar_MSI_$(text_nmass).png")
-                            generate_colorbar_image(slice, colorLevel, colorbar_path)
+                            println("generate_colorbar_image time:")
+                            @time generate_colorbar_image(slice, colorLevel, colorbar_path)
                             colorbar = "/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
                             current_col_msi = "colorbar_MSI_$(text_nmass).png"
 

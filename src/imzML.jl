@@ -268,8 +268,7 @@ end
     find_mass(mz_array, intensity_array, target_mass, tolerance)
 
 Finds the intensity of the most intense peak within a mass tolerance window.
-This modernized version is more robust than a simple binary search as it
-correctly handles multiple peaks within the tolerance window.
+This optimized version uses binary search for efficiency.
 
 # Returns
 - The intensity (`Float64`) of the peak if found, otherwise `0.0`.
@@ -278,20 +277,22 @@ function find_mass(mz_array, intensity_array, target_mass, tolerance)
     lower_bound = target_mass - tolerance
     upper_bound = target_mass + tolerance
 
-    max_intensity = 0.0
-    found = false
+    # Use binary search to find the start and end of the m/z window
+    start_idx = searchsortedfirst(mz_array, lower_bound)
+    end_idx = searchsortedlast(mz_array, upper_bound)
 
-    # Iterate through the spectrum to find the highest intensity peak in the window
-    for i in eachindex(mz_array)
-        if lower_bound <= mz_array[i] <= upper_bound
-            if intensity_array[i] > max_intensity
-                max_intensity = intensity_array[i]
-                found = true
-            end
-        end
+    # If the window is empty, return 0.0
+    if start_idx > end_idx
+        return 0.0
     end
 
-    return found ? max_intensity : 0.0
+    # Find the maximum intensity within the identified window, optimized with @inbounds and @simd
+    max_intensity = intensity_array[start_idx]
+    @inbounds @simd for i in (start_idx + 1):end_idx
+        max_intensity = max(max_intensity, intensity_array[i])
+    end
+    
+    return max_intensity
 end
 
 """
@@ -362,22 +363,48 @@ This is a performant function that iterates through spectra once.
 """
 function get_mz_slice(data::MSIData, mass::Real, tolerance::Real)
     width, height = data.image_dims
-    slice_matrix = zeros(Float64, height, width) # Note: height, width for (y,x) indexing
+    slice_matrix = zeros(Float64, height, width)
 
-    _iterate_spectra_fast(data) do spec_idx, mz_array, intensity_array
-        meta = data.spectra_metadata[spec_idx]
-        
-        intensity = find_mass(mz_array, intensity_array, mass, tolerance)
-        
-        if intensity > 0.0
-            # Populate the matrix using (y, x) indexing
-            if 1 <= meta.x <= width && 1 <= meta.y <= height
-                slice_matrix[meta.y, meta.x] = intensity
+    # INTELLIGENT LOADING: Ensure analytics are computed for filtering.
+    if data.spectrum_stats_df === nothing || !hasproperty(data.spectrum_stats_df, :MinMZ)
+        println("Per-spectrum metadata not found. Running one-time analytics computation...")
+        precompute_analytics(data)
+    end
+
+    println("Using high-performance sequential iterator...")
+    target_min = mass - tolerance
+    target_max = mass + tolerance
+    stats_df = data.spectrum_stats_df
+
+    # 1. Find all candidate spectra first for efficient filtering
+    candidate_indices = Set{Int}()
+    for i in 1:length(data.spectra_metadata)
+        spec_min_mz = stats_df.MinMZ[i]
+        spec_max_mz = stats_df.MaxMZ[i]
+        if target_max >= spec_min_mz && target_min <= spec_max_mz
+            push!(candidate_indices, i)
+        end
+    end
+
+    println("Found $(length(candidate_indices)) candidate spectra (filtered from $(length(data.spectra_metadata)))")
+
+    # 2. Iterate using the optimized, low-allocation iterator
+    results_count = 0
+    _iterate_spectra_fast(data) do idx, mz_array, intensity_array
+        # Process only the spectra that are candidates
+        if idx in candidate_indices
+            intensity = find_mass(mz_array, intensity_array, mass, tolerance)
+            if intensity > 0.0
+                meta = data.spectra_metadata[idx]
+                if 1 <= meta.x <= width && 1 <= meta.y <= height
+                    slice_matrix[meta.y, meta.x] = intensity
+                    results_count += 1
+                end
             end
         end
     end
     
-    # The original function had a NaN replacement, which is good practice to keep.
+    println("Populated $results_count pixels with intensity data")
     replace!(slice_matrix, NaN => 0.0)
     return slice_matrix
 end

@@ -6,7 +6,7 @@ including caching and iteration logic, for handling large mzML and imzML dataset
 efficiently.
 """
 
-using Base64, Libz, Serialization, Printf # For reading binary data
+using Base64, Libz, Serialization, Printf, DataFrames, Base.Threads # For reading binary data
 
 # Abstract type for different data sources (e.g., mzML, imzML)
 # This allows dispatching to the correct binary reading logic.
@@ -46,8 +46,9 @@ Contains metadata for a single binary data array (m/z or intensity) within a spe
 - `format`: The data type of the elements (e.g., `Float32`, `Int64`).
 - `is_compressed`: A boolean flag indicating if the data is compressed (e.g., with zlib).
 - `offset`: The byte offset of the data within the file (`.ibd` for imzML, `.mzML` for mzML).
-- `encoded_length`: The length of the data. For mzML, this is the Base64 encoded length.
-  For imzML, this is the number of elements in the array.
+- `encoded_length`: The length of the data. For uncompressed imzML, this is the number of 
+  elements in the array. For compressed imzML, it is the number of bytes of the compressed 
+  data. For mzML, this is the length of the Base64 encoded string.
 - `axis_type`: A symbol (`:mz` or `:intensity`) indicating the type of data.
 """
 struct SpectrumAsset
@@ -96,9 +97,13 @@ efficient repeated access to spectra.
 - `spectra_metadata`: A vector of `SpectrumMetadata` for all spectra in the file.
 - `image_dims`: A tuple `(width, height)` of the spatial dimensions (for imzML).
 - `coordinate_map`: A matrix mapping `(x, y)` coordinates to a linear spectrum index (for imzML).
-- `cache`: A dictionary holding cached spectra.
-- `cache_order`: A vector tracking the usage order for the LRU cache.
+- `cache`: A dictionary holding cached spectra, mapping index to `(mz, intensity)`.
+- `cache_order`: A vector of indices tracking usage for the LRU cache policy.
 - `cache_size`: The maximum number of spectra to store in the cache.
+- `cache_lock`: A `ReentrantLock` to ensure thread-safe access to the cache.
+- `global_min_mz`: Cached global minimum m/z value across all spectra.
+- `global_max_mz`: Cached global maximum m/z value across all spectra.
+- `spectrum_stats_df`: A `DataFrame` containing pre-computed per-spectrum analytics (e.g., TIC, BPI).
 """
 mutable struct MSIData
     source::MSDataSource
@@ -106,13 +111,21 @@ mutable struct MSIData
     image_dims::Tuple{Int, Int} # (width, height) for imaging data
     coordinate_map::Union{Matrix{Int}, Nothing} # Maps (x,y) to linear index for imzML
 
-    # LRU Cache implementation
+    # LRU Cache for GetSpectrum
     cache::Dict{Int, Tuple{Vector, Vector}}
     cache_order::Vector{Int} # Stores indices, with most recently used at the end
     cache_size::Int # Max number of spectra in cache
+    cache_lock::ReentrantLock # To make cache access thread-safe
+
+    # Pre-computed analytics/metadata
+    global_min_mz::Union{Float64, Nothing}
+    global_max_mz::Union{Float64, Nothing}
+    spectrum_stats_df::Union{DataFrame, Nothing}
 
     function MSIData(source, metadata, dims, coordinate_map, cache_size)
-        obj = new(source, metadata, dims, coordinate_map, Dict(), [], cache_size)
+        obj = new(source, metadata, dims, coordinate_map, 
+                  Dict(), [], cache_size, ReentrantLock(),
+                  nothing, nothing, nothing) # Initialize new fields to nothing
         
         # Ensure file handles are closed when the object is garbage collected
         finalizer(obj) do o
@@ -132,15 +145,18 @@ end
 """
     read_binary_vector(io::IO, asset::SpectrumAsset)
 
-Reads and decodes a single binary data vector (like m/z or intensity array)
+Reads and decodes a single binary data vector (e.g., m/z or intensity array)
 from a `.mzML` file. The data is expected to be Base64-encoded and may be
 compressed.
 
 This internal function handles:
-1. Reading the raw Base64 string.
-2. Decoding from Base64.
-3. Decompressing the data if `asset.is_compressed` is true.
-4. Converting the byte order from network (big-endian) to host order.
+1. Reading the raw Base64 string from the file at the specified offset.
+2. Decoding the Base64 string into bytes.
+3. Decompressing the bytes using zlib if `asset.is_compressed` is true.
+4. Interpreting the resulting bytes as a vector of the specified format.
+
+Note: Byte order conversion (e.g., from little-endian to host) is not performed
+by this function and is assumed to be handled by the caller if necessary.
 
 # Arguments
 - `io`: The IO stream of the `.mzML` file.
@@ -221,46 +237,75 @@ end
 """
     GetSpectrum(data::MSIData, index::Int)
 
-Retrieves a single spectrum by its index, utilizing a cache for performance.
+Retrieves a single spectrum by its index, utilizing a thread-safe LRU cache for performance.
 
+If the spectrum is not in the cache, it is read from disk, and the cache is updated.
 This function is the core of the "Indexed" and "Cache" access patterns.
+
+# Arguments
+- `data`: The `MSIData` object.
+- `index`: The linear index of the spectrum to retrieve.
+
+# Returns
+- A tuple `(mz, intensity)` containing the spectrum's data arrays.
 """
 function GetSpectrum(data::MSIData, index::Int)
     if index < 1 || index > length(data.spectra_metadata)
         error("Spectrum index $index out of bounds.")
     end
 
-    # Phase 1: Check the cache
-    if haskey(data.cache, index)
-        # Cache Hit: Move item to the end of the LRU list and return from cache
-        filter!(x -> x != index, data.cache_order)
-        push!(data.cache_order, index)
-        return data.cache[index]
+    # Phase 1: Check the cache (with lock)
+    lock(data.cache_lock)
+    try
+        if haskey(data.cache, index)
+            # Cache Hit: Move item to the end of the LRU list and return from cache
+            filter!(x -> x != index, data.cache_order)
+            push!(data.cache_order, index)
+            return data.cache[index]
+        end
+    finally
+        unlock(data.cache_lock)
     end
 
-    # Phase 2: Cache Miss - Read from disk
+    # Phase 2: Cache Miss - Read from disk (no lock)
     meta = data.spectra_metadata[index]
     spectrum = read_spectrum_from_disk(data.source, meta)
 
-    # Phase 3: Update cache
-    if data.cache_size > 0
-        if length(data.cache) >= data.cache_size
-            # Evict the least recently used item (at the front of the list)
-            lru_index = popfirst!(data.cache_order)
-            delete!(data.cache, lru_index)
+    # Phase 3: Update cache (with lock) and get final value
+    return lock(data.cache_lock) do
+        if haskey(data.cache, index)
+            # Another thread got here first, use its result
+            return data.cache[index]
         end
-        data.cache[index] = spectrum
-        push!(data.cache_order, index)
-    end
 
-    return spectrum
+        # This thread is first to update cache
+        if data.cache_size > 0
+            if length(data.cache) >= data.cache_size
+                # Evict the least recently used item (at the front of the list)
+                lru_index = popfirst!(data.cache_order)
+                delete!(data.cache, lru_index)
+            end
+            data.cache[index] = spectrum
+            push!(data.cache_order, index)
+        end
+        return spectrum
+    end
 end
 
 """
     GetSpectrum(data::MSIData, x::Int, y::Int)
 
-Retrieves a single spectrum by its (x, y) coordinates for imaging data.
-Utilizes a coordinate map for efficient lookup and then the cache.
+Retrieves a single spectrum by its (x, y) coordinates for imaging data (`.imzML`).
+This method uses the `coordinate_map` for efficient index lookup and then calls
+the indexed `GetSpectrum` method, benefiting from caching.
+
+# Arguments
+- `data`: The `MSIData` object.
+- `x`: The x-coordinate of the spectrum.
+- `y`: The y-coordinate of the spectrum.
+
+# Returns
+- A tuple `(mz, intensity)` containing the spectrum's data arrays.
 """
 function GetSpectrum(data::MSIData, x::Int, y::Int)
     if data.coordinate_map === nothing
@@ -279,32 +324,152 @@ function GetSpectrum(data::MSIData, x::Int, y::Int)
     return GetSpectrum(data, index) # Call the existing method
 end
 
-using Serialization
+"""
+    precompute_analytics(msi_data::MSIData)
 
+Performs a single pass over the entire dataset to pre-compute and cache important
+analytics. This function populates the `global_min_mz`, `global_max_mz`, and
+`spectrum_stats_df` fields of the `MSIData` object.
+
+The computed statistics include:
+- Global minimum and maximum m/z values.
+- Per-spectrum:
+    - Total Ion Count (TIC)
+    - Base Peak Intensity (BPI)
+    - m/z of the base peak
+    - Number of data points
+    - Minimum and maximum m/z
+
+Subsequent calls to functions like `get_total_spectrum` will be much faster
+as they can use this cached data. This function modifies the `MSIData` object in-place
+and is idempotent.
+"""
+function precompute_analytics(msi_data::MSIData)
+    # Idempotency check: If already computed, do nothing.
+    if msi_data.spectrum_stats_df !== nothing && hasproperty(msi_data.spectrum_stats_df, :MinMZ)
+        println("Analytics have already been pre-computed.")
+        return
+    end
+    """
+    meta = msi_data.spectra_metadata[1]
+    println("First spectrum:")
+    println("  mz compressed: $(meta.mz_asset.is_compressed)")
+    println("  int compressed: $(meta.int_asset.is_compressed)")
+    println("  mz encoded_length: $(meta.mz_asset.encoded_length)")
+    println("  int encoded_length: $(meta.int_asset.encoded_length)")
+    
+    println("Pre-computing analytics (single pass)...")
+    """
+    start_time = time_ns()
+
+    num_spectra = length(msi_data.spectra_metadata)
+    
+    # Initialize variables for global stats
+    g_min_mz = Inf
+    g_max_mz = -Inf
+
+    # Initialize vectors for per-spectrum stats
+    tics = Vector{Float64}(undef, num_spectra)
+    bpis = Vector{Float64}(undef, num_spectra)
+    bp_mzs = Vector{Float64}(undef, num_spectra)
+    num_points = Vector{Int}(undef, num_spectra)
+    min_mzs = Vector{Float64}(undef, num_spectra)
+    max_mzs = Vector{Float64}(undef, num_spectra)
+
+    _iterate_spectra_fast(msi_data) do idx, mz, intensity
+        if isempty(mz)
+            tics[idx] = 0.0
+            bpis[idx] = 0.0
+            bp_mzs[idx] = 0.0
+            num_points[idx] = 0
+            min_mzs[idx] = Inf
+            max_mzs[idx] = -Inf
+            return
+        end
+
+        # Update global m/z range
+        local_min, local_max = extrema(mz)
+        g_min_mz = min(g_min_mz, local_min)
+        g_max_mz = max(g_max_mz, local_max)
+        min_mzs[idx] = local_min
+        max_mzs[idx] = local_max
+
+        # Calculate per-spectrum stats
+        tics[idx] = sum(intensity)
+        max_int, max_idx = findmax(intensity)
+        bpis[idx] = max_int
+        bp_mzs[idx] = mz[max_idx]
+        num_points[idx] = length(mz)
+    end
+
+    # Populate the MSIData object
+    msi_data.global_min_mz = g_min_mz
+    msi_data.global_max_mz = g_max_mz
+    msi_data.spectrum_stats_df = DataFrame(
+        SpectrumID = 1:num_spectra,
+        TIC = tics,
+        BPI = bpis,
+        BasePeakMZ = bp_mzs,
+        NumPoints = num_points,
+        MinMZ = min_mzs,
+        MaxMZ = max_mzs
+    )
+    
+    duration = (time_ns() - start_time) / 1e9
+    @printf "Analytics pre-computation complete in %.2f seconds.\n" duration
+    
+    return
+end
+
+"""
+    get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
+
+Internal function to calculate the total spectrum for an `.imzML` file.
+
+It uses a fast, two-pass approach:
+1. The first pass finds the global m/z range across all spectra.
+2. The second pass sums intensities into a pre-defined number of bins.
+
+This function is highly optimized for `.imzML` by leveraging direct binary
+reading and optimized binning logic. It is called by `get_total_spectrum`.
+"""
 function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
     println("Calculating total spectrum for imzML (2-pass method)...")
     total_start_time = time_ns()
 
-    # 1. First Pass: Find the global m/z range
-    pass1_start_time = time_ns()
-    println("  Pass 1: Finding global m/z range...")
-    global_min_mz = Inf
-    global_max_mz = -Inf
-    _iterate_spectra_fast(msi_data) do idx, mz, _
-        if !isempty(mz)
-            local_min, local_max = extrema(mz)
-            global_min_mz = min(global_min_mz, local_min)
-            global_max_mz = max(global_max_mz, local_max)
+    local global_min_mz, global_max_mz
+
+    if msi_data.global_min_mz !== nothing
+        println("  Using pre-computed m/z range.")
+        global_min_mz = msi_data.global_min_mz
+        global_max_mz = msi_data.global_max_mz
+    else
+        # 1. First Pass: Find the global m/z range by reading the fast .ibd file
+        pass1_start_time = time_ns()
+        println("  Pass 1: Finding global m/z range...")
+        g_min_mz = Inf
+        g_max_mz = -Inf
+        _iterate_spectra_fast(msi_data) do idx, mz, _
+            if !isempty(mz)
+                local_min, local_max = extrema(mz)
+                g_min_mz = min(g_min_mz, local_min)
+                g_max_mz = max(g_max_mz, local_max)
+            end
         end
+        pass1_duration = (time_ns() - pass1_start_time) / 1e9
+        if !isfinite(g_min_mz)
+            @warn "Could not determine a valid m/z range for imzML. All spectra might be empty."
+            return (Float64[], Float64[])
+        end
+        
+        # Use and cache the result
+        global_min_mz = g_min_mz
+        global_max_mz = g_max_mz
+        msi_data.global_min_mz = global_min_mz
+        msi_data.global_max_mz = global_max_mz
+        println("  Global m/z range found and cached: [$(global_min_mz), $(global_max_mz)]")
+        @printf "  (Pass 1 took %.2f seconds)\n" pass1_duration
     end
-    pass1_duration = (time_ns() - pass1_start_time) / 1e9
-
-    if !isfinite(global_min_mz)
-        @warn "Could not determine a valid m/z range for imzML. All spectra might be empty."
-        return (Float64[], Float64[])
-    end
-    println("  Global m/z range found: [$(global_min_mz), $(global_max_mz)]")
-
     # 2. Define Bins and precompute constants
     mz_bins = range(global_min_mz, stop=global_max_mz, length=num_bins)
     intensity_sum = zeros(Float64, num_bins)
@@ -343,86 +508,106 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
     pass2_duration = (time_ns() - pass2_start_time) / 1e9
 
     total_duration = (time_ns() - total_start_time) / 1e9
-    println("\n--- imzML Profiling ---")
-    @printf "  Pass 1 (I/O only):        %.2f seconds\n" pass1_duration
+    println("\n--- imzML Profiling (Post-Optimization) ---")
     @printf "  Pass 2 (I/O + Binning):   %.2f seconds\n" pass2_duration
-    @printf "  Est. Binning Overhead:    %.2f seconds\n" (pass2_duration - pass1_duration)
     @printf "  Total Function Time:      %.2f seconds\n" total_duration
-    println("-------------------------\n")
+    println("----------------------------------------\n")
 
     println("Total spectrum calculation complete for imzML.")
     return (collect(mz_bins), intensity_sum)
 end
 
+"""
+    get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000)
+
+Internal function to calculate the total spectrum for an `.mzML` file.
+
+It uses a two-pass approach analogous to the `imzML` implementation:
+1. The first pass finds the global m/z range by iterating through all spectra.
+2. The second pass sums intensities into a pre-defined number of bins.
+
+This function is called by `get_total_spectrum`.
+"""
 function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000)
-    println("Calculating total spectrum for mzML (optimized single-pass method)...")
+    println("Calculating total spectrum for mzML (2-pass method)...")
     total_start_time = time_ns()
-    num_spectra = length(msi_data.spectra_metadata)
-    if num_spectra == 0
-        return (Float64[], Float64[])
-    end
 
-    temp_path, temp_io = mktemp()
-    try
-        # --- Pass 1: Read from source, find m/z range, and write decoded spectra to temp file ---
+    local global_min_mz, global_max_mz
+
+    if msi_data.global_min_mz !== nothing
+        println("  Using pre-computed m/z range.")
+        global_min_mz = msi_data.global_min_mz
+        global_max_mz = msi_data.global_max_mz
+    else
+        # --- Pass 1: Find m/z range and cache it ---
         pass1_start_time = time_ns()
-        println("  Pass 1: Caching decoded spectra and finding global m/z range...")
-        global_min_mz = Inf
-        global_max_mz = -Inf
-
+        println("  Pass 1: Finding global m/z range...")
+        g_min_mz = Inf
+        g_max_mz = -Inf
         _iterate_spectra_fast(msi_data) do idx, mz, intensity
             if !isempty(mz)
                 local_min, local_max = extrema(mz)
-                global_min_mz = min(global_min_mz, local_min)
-                global_max_mz = max(global_max_mz, local_max)
+                g_min_mz = min(g_min_mz, local_min)
+                g_max_mz = max(g_max_mz, local_max)
             end
-            Serialization.serialize(temp_io, (mz, intensity))
         end
-
-        flush(temp_io)
         pass1_duration = (time_ns() - pass1_start_time) / 1e9
 
-        if !isfinite(global_min_mz)
+        if !isfinite(g_min_mz)
             @warn "Could not determine a valid m/z range for mzML. All spectra might be empty."
             return (Float64[], Float64[])
         end
-        println("  Global m/z range found: [$(global_min_mz), $(global_max_mz)]")
 
-        # --- Pass 2: Read from fast temp file and bin intensities ---
-        pass2_start_time = time_ns()
-        println("  Pass 2: Reading from cache and summing intensities into $num_bins bins...")
-        seekstart(temp_io)
-        mz_bins = range(global_min_mz, stop=global_max_mz, length=num_bins)
-        intensity_sum = zeros(Float64, num_bins)
-        bin_step = step(mz_bins)
+        # Use and cache the result
+        global_min_mz = g_min_mz
+        global_max_mz = g_max_mz
+        msi_data.global_min_mz = global_min_mz
+        msi_data.global_max_mz = global_max_mz
 
-        while !eof(temp_io)
-            mz, intensity = Serialization.deserialize(temp_io)::Tuple{AbstractVector, AbstractVector}
-            if isempty(mz)
-                continue
-            end
-            for i in eachindex(mz)
-                bin_index = clamp(round(Int, (mz[i] - global_min_mz) / bin_step) + 1, 1, num_bins)
+        println("  Global m/z range found and cached: [$(global_min_mz), $(global_max_mz)]")
+        @printf "  (Pass 1 took %.2f seconds)\n" pass1_duration
+    end
+
+    # --- Pass 2: Bin intensities ---
+    pass2_start_time = time_ns()
+    println("  Pass 2: Summing intensities into $num_bins bins...")
+    
+    mz_bins = range(global_min_mz, stop=global_max_mz, length=num_bins)
+    intensity_sum = zeros(Float64, num_bins)
+    bin_step = step(mz_bins)
+    inv_bin_step = 1.0 / bin_step  # Precompute reciprocal
+    min_mz = global_min_mz
+
+    _iterate_spectra_fast(msi_data) do idx, mz, intensity
+        if isempty(mz)
+            return
+        end
+        
+        @inbounds for i in eachindex(mz)
+            # Calculate raw bin index
+            raw_index = (mz[i] - min_mz) * inv_bin_step + 1.0
+            bin_index = trunc(Int, raw_index)
+            
+            # Manual bounds checking
+            if 1 <= bin_index <= num_bins
                 intensity_sum[bin_index] += intensity[i]
+            elseif bin_index < 1
+                intensity_sum[1] += intensity[i]
+            else # bin_index > num_bins
+                intensity_sum[num_bins] += intensity[i]
             end
         end
-        pass2_duration = (time_ns() - pass2_start_time) / 1e9
-
-        total_duration = (time_ns() - total_start_time) / 1e9
-        println("\n--- mzML Profiling ---")
-        @printf "  Pass 1 (Read+Decode+Cache): %.2f seconds\n" pass1_duration
-        @printf "  Pass 2 (Read Cache+Bin):    %.2f seconds\n" pass2_duration
-        @printf "  Total Function Time:        %.2f seconds\n" total_duration
-        println("----------------------\n")
-
-        println("Total spectrum calculation complete for mzML.")
-        return (collect(mz_bins), intensity_sum)
-
-    finally
-        close(temp_io)
-        rm(temp_path, force=true)
-        println("  Temporary cache file removed.")
     end
+    pass2_duration = (time_ns() - pass2_start_time) / 1e9
+
+    total_duration = (time_ns() - total_start_time) / 1e9
+    println("\n--- mzML Profiling (Post-Optimization) ---")
+    @printf "  Pass 2 (I/O + Binning):   %.2f seconds\n" pass2_duration
+    @printf "  Total Function Time:      %.2f seconds\n" total_duration
+    println("----------------------------------------\n")
+
+    println("Total spectrum calculation complete for mzML.")
+    return (collect(mz_bins), intensity_sum)
 end
 
 """
@@ -443,10 +628,10 @@ function get_total_spectrum(msi_data::MSIData; num_bins::Int=2000)
 end
 
 """
-    get_average_spectrum(msi_data::MSIData; num_bins::Int=20000) -> Tuple{Vector{Float64}, Vector{Float64}}
+    get_average_spectrum(msi_data::MSIData; num_bins::Int=2000) -> Tuple{Vector{Float64}, Vector{Float64}}
 
 Calculates the average of all spectra in the dataset by binning.
-This is effectively the total ion chromatogram (TIC) divided by the number of spectra.
+This is effectively the total spectrum divided by the number of spectra.
 
 Returns a tuple containing two vectors: the binned m/z axis and the averaged intensities.
 """
@@ -481,8 +666,9 @@ end
 """
     IterateSpectra(data::MSIData)
 
-Returns an iterator that yields each spectrum, processing the file sequentially
-with minimal memory overhead. This iterator supports caching via `GetSpectrum`.
+Returns an iterator that yields each spectrum, processing the file sequentially.
+This iterator is useful for processing all spectra in a loop and benefits from
+the caching implemented in `GetSpectrum`.
 
 This function is the core of the "Event-driven" access pattern.
 """
@@ -524,49 +710,168 @@ end
 # --- High-performance Internal Iterator --- #
 
 """
-    _iterate_spectra_fast_impl(f::Function, data::MSIData, source::ImzMLSource)
+    read_compressed_array(io::IO, asset::SpectrumAsset, format::Type)
 
-Internal implementation of the fast iterator for `.imzML` files. It reads
-data directly from the `.ibd` file stream and reuses pre-allocated buffers
-to minimize memory allocations and overhead, making it ideal for bulk processing tasks.
+Reads a single data array (m/z or intensity) from an `.ibd` file stream,
+handling both compressed and uncompressed data.
+
+- If `asset.is_compressed` is true, it reads the compressed bytes, inflates
+  them using zlib, and reinterprets the result as a vector of the given `format`.
+- If false, it reads the uncompressed data directly into a vector.
+
+# Arguments
+- `io`: The IO stream of the `.ibd` file.
+- `asset`: The `SpectrumAsset` for the array.
+- `format`: The data type of the elements in the array.
+
+# Returns
+- A `Vector` containing the data.
 """
-function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::ImzMLSource)
-    # Optimized implementation: allocates arrays per spectrum and uses an efficient I/O pattern.
+function read_compressed_array(io::IO, asset::SpectrumAsset, format::Type)
+    seek(io, asset.offset)
+    
+    if asset.is_compressed
+        # Read compressed bytes
+        compressed_bytes = read(io, asset.encoded_length)
+        
+        local decompressed_bytes
+        try
+            decompressed_bytes = Libz.inflate(compressed_bytes)
+        catch e
+            @error "ZLIB DECOMPRESSION FAILED. This is likely due to an incorrect offset or corrupt data in the .ibd file."
+            @error "Asset offset: $(asset.offset), Encoded length: $(asset.encoded_length)"
+            # Print first 16 bytes to stderr for diagnosis
+            bytes_to_print = min(16, length(compressed_bytes))
+            @error "First $bytes_to_print bytes of the data chunk we tried to decompress:"
+            println(stderr, view(compressed_bytes, 1:bytes_to_print))
+            rethrow(e)
+        end
+        
+        # Use an IOBuffer to safely read the data, avoiding reinterpret errors
+        # if the decompressed size is not a perfect multiple of the element size.
+        bytes_io = IOBuffer(decompressed_bytes)
+        n_elements = bytes_io.size ÷ sizeof(format)
+        array = Array{format}(undef, n_elements)
+        read!(bytes_io, array)
+        return array
+    else
+        # Read uncompressed data directly
+        # For uncompressed imzML, encoded_length is the number of elements
+        array = Vector{format}(undef, asset.encoded_length)
+        read!(io, array)
+        return array
+    end
+end
+
+"""
+    _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSource)
+
+A highly optimized iterator for uncompressed `.imzML` data.
+
+It pre-allocates large buffers for m/z and intensity arrays and reuses them
+for each spectrum by creating views. This minimizes memory allocations and
+is significantly faster for bulk processing than reading spectra one by one.
+
+# Arguments
+- `f`: A function to execute for each spectrum, with the signature `f(index, mz_view, int_view)`.
+- `data`: The `MSIData` object.
+- `source`: The `ImzMLSource`.
+"""
+function _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSource)
+    # Optimized path for uncompressed data using buffer reuse
+    max_points = maximum(meta -> meta.mz_asset.encoded_length, data.spectra_metadata)
+    mz_buffer = Vector{source.mz_format}(undef, max_points)
+    int_buffer = Vector{source.intensity_format}(undef, max_points)
+
     for i in 1:length(data.spectra_metadata)
         meta = data.spectra_metadata[i]
         nPoints = meta.mz_asset.encoded_length
 
         if nPoints == 0
+            f(i, view(mz_buffer, 0:-1), view(int_buffer, 0:-1))
+            continue
+        end
+
+        mz_view = view(mz_buffer, 1:nPoints)
+        int_view = view(int_buffer, 1:nPoints)
+
+        if meta.mz_asset.offset < meta.int_asset.offset
+            seek(source.ibd_handle, meta.mz_asset.offset)
+            read!(source.ibd_handle, mz_view)
+            read!(source.ibd_handle, int_view)
+        else
+            seek(source.ibd_handle, meta.int_asset.offset)
+            read!(source.ibd_handle, int_view)
+            read!(source.ibd_handle, mz_view)
+        end
+
+        mz_view .= ltoh.(mz_view)
+        int_view .= ltoh.(int_view)
+        f(i, mz_view, int_view)
+    end
+end
+
+"""
+    _iterate_compressed_fast(f::Function, data::MSIData, source::ImzMLSource)
+
+An iterator for `.imzML` datasets that contain compressed spectra.
+
+This function iterates through each spectrum and reads its data individually,
+decompressing it on the fly if necessary. Because the size of decompressed
+data is not known in advance, this path cannot use the buffer-reuse optimization
+and will be slower and allocate more memory than `_iterate_uncompressed_fast`.
+
+# Arguments
+- `f`: A function to execute for each spectrum, with the signature `f(index, mz_array, int_array)`.
+- `data`: The `MSIData` object.
+- `source`: The `ImzMLSource`.
+"""
+function _iterate_compressed_fast(f::Function, data::MSIData, source::ImzMLSource)
+    # Path for datasets containing at least one compressed spectrum.
+    # This path reads and decompresses each spectrum individually.
+    for i in 1:length(data.spectra_metadata)
+        meta = data.spectra_metadata[i]
+        
+        if meta.mz_asset.encoded_length == 0 && meta.int_asset.encoded_length == 0
             f(i, source.mz_format[], source.intensity_format[])
             continue
         end
 
-        # Allocate fresh arrays for each spectrum.
-        mz = Vector{source.mz_format}(undef, nPoints)
-        intensity = Vector{source.intensity_format}(undef, nPoints)
+        # Read and decompress each array
+        mz_array = read_compressed_array(source.ibd_handle, meta.mz_asset, source.mz_format)
+        intensity_array = read_compressed_array(source.ibd_handle, meta.int_asset, source.intensity_format)
+        
+        mz_array .= ltoh.(mz_array)
+        intensity_array .= ltoh.(intensity_array)
+        
+        f(i, mz_array, intensity_array)
+    end
+end
 
-        # --- I/O OPTIMIZATION: Seek only once per spectrum ---
-        # The mz and intensity data are contiguous, so after reading the first,
-        # we can immediately read the second without a costly second seek.
-        if meta.mz_asset.offset < meta.int_asset.offset
-            # m/z is first, seek to it.
-            seek(source.ibd_handle, meta.mz_asset.offset)
-            # Read m/z, then immediately read intensity.
-            read!(source.ibd_handle, mz)
-            read!(source.ibd_handle, intensity)
-        else
-            # intensity is first, seek to it.
-            seek(source.ibd_handle, meta.int_asset.offset)
-            # Read intensity, then immediately read m/z.
-            read!(source.ibd_handle, intensity)
-            read!(source.ibd_handle, mz)
-        end
+"""
+    _iterate_spectra_fast_impl(f::Function, data::MSIData, source::ImzMLSource)
 
-        # Convert byte order.
-        mz .= ltoh.(mz)
-        intensity .= ltoh.(intensity)
+Internal implementation of the fast iterator for `.imzML` files. It reads
+data directly from the `.ibd` file stream.
 
-        f(i, mz, intensity)
+This function acts as a dispatcher:
+- If any spectrum is compressed, it uses a slower path that decompresses each spectrum individually.
+- If all spectra are uncompressed, it uses a highly optimized path that reuses pre-allocated 
+  buffers to minimize memory allocations and overhead.
+"""
+function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::ImzMLSource)
+    if isempty(data.spectra_metadata)
+        return
+    end
+    
+    # Check if ANY spectra are compressed and dispatch to the appropriate implementation
+    any_compressed = any(meta -> meta.mz_asset.is_compressed || meta.int_asset.is_compressed, 
+                        data.spectra_metadata)
+    
+    if any_compressed
+        _iterate_compressed_fast(f, data, source)
+    else
+        _iterate_uncompressed_fast(f, data, source)
     end
 end
 
