@@ -61,6 +61,8 @@ struct SpectrumAsset
     axis_type::Symbol
 end
 
+@enum SpectrumMode CENTROID=1 PROFILE=2 UNKNOWN=3
+
 """
     SpectrumMetadata
 
@@ -69,6 +71,7 @@ Contains all metadata for a single spectrum, common to both imzML and mzML forma
 # Fields
 - `x`, `y`: The spatial coordinates of the spectrum (for imzML only).
 - `id`: The unique identifier string for the spectrum (for mzML only).
+- `mode`: The spectrum mode (`CENTROID` or `PROFILE`).
 - `mz_asset`: A `SpectrumAsset` for the m/z array.
 - `int_asset`: A `SpectrumAsset` for the intensity array.
 """
@@ -80,6 +83,7 @@ struct SpectrumMetadata
     # For mzML
     id::String
 
+    mode::SpectrumMode
     # Common binary data info
     mz_asset::SpectrumAsset
     int_asset::SpectrumAsset
@@ -345,25 +349,28 @@ as they can use this cached data. This function modifies the `MSIData` object in
 and is idempotent.
 """
 function precompute_analytics(msi_data::MSIData)
-    # Idempotency check: If already computed, do nothing.
+    # Idempotency check
     if msi_data.spectrum_stats_df !== nothing && hasproperty(msi_data.spectrum_stats_df, :MinMZ)
         println("Analytics have already been pre-computed.")
         return
     end
-    """
-    meta = msi_data.spectra_metadata[1]
-    println("First spectrum:")
-    println("  mz compressed: $(meta.mz_asset.is_compressed)")
-    println("  int compressed: $(meta.int_asset.is_compressed)")
-    println("  mz encoded_length: $(meta.mz_asset.encoded_length)")
-    println("  int encoded_length: $(meta.int_asset.encoded_length)")
     
     println("Pre-computing analytics (single pass)...")
-    """
     start_time = time_ns()
 
     num_spectra = length(msi_data.spectra_metadata)
     
+    # DEBUG: Check the first spectrum's metadata
+    if num_spectra > 0
+        first_meta = msi_data.spectra_metadata[1]
+        println("DEBUG First spectrum metadata:")
+        println("  mz_asset: format=$(first_meta.mz_asset.format), compressed=$(first_meta.mz_asset.is_compressed)")
+        println("  mz_asset: offset=$(first_meta.mz_asset.offset), encoded_length=$(first_meta.mz_asset.encoded_length)")
+        println("  int_asset: format=$(first_meta.int_asset.format), compressed=$(first_meta.int_asset.is_compressed)")
+        println("  int_asset: offset=$(first_meta.int_asset.offset), encoded_length=$(first_meta.int_asset.encoded_length)")
+        println("  mode: $(first_meta.mode)")
+    end
+
     # Initialize variables for global stats
     g_min_mz = Inf
     g_max_mz = -Inf
@@ -375,9 +382,21 @@ function precompute_analytics(msi_data::MSIData)
     num_points = Vector{Int}(undef, num_spectra)
     min_mzs = Vector{Float64}(undef, num_spectra)
     max_mzs = Vector{Float64}(undef, num_spectra)
+    modes = Vector{SpectrumMode}(undef, num_spectra)
+    is_compressed = Vector{Bool}(undef, num_spectra)
+
+    # DEBUG: Add counter to see how many spectra have data
+    spectra_with_data = 0
+    empty_spectra = 0
 
     _iterate_spectra_fast(msi_data) do idx, mz, intensity
+        # Store metadata
+        modes[idx] = msi_data.spectra_metadata[idx].mode
+        is_compressed[idx] = msi_data.spectra_metadata[idx].mz_asset.is_compressed || 
+                            msi_data.spectra_metadata[idx].int_asset.is_compressed
+        
         if isempty(mz)
+            empty_spectra += 1
             tics[idx] = 0.0
             bpis[idx] = 0.0
             bp_mzs[idx] = 0.0
@@ -385,6 +404,8 @@ function precompute_analytics(msi_data::MSIData)
             min_mzs[idx] = Inf
             max_mzs[idx] = -Inf
             return
+        else
+            spectra_with_data += 1
         end
 
         # Update global m/z range
@@ -402,6 +423,27 @@ function precompute_analytics(msi_data::MSIData)
         num_points[idx] = length(mz)
     end
 
+    # Add mode statistics
+    centroid_count = count(==(CENTROID), modes)
+    profile_count = count(==(PROFILE), modes)
+    unknown_count = count(==(UNKNOWN), modes)
+    
+    println("DEBUG Mode Statistics:")
+    println("  Centroid spectra: $centroid_count")
+    println("  Profile spectra: $profile_count")
+    println("  Unknown mode: $unknown_count")
+
+    # DEBUG: Print summary
+    println("DEBUG Analytics Summary:")
+    println("  Total spectra: $num_spectra")
+    println("  Spectra with data: $spectra_with_data")
+    println("  Empty spectra: $empty_spectra")
+    println("  Global m/z range: [$g_min_mz, $g_max_mz]")
+    println("  Centroid spectra: $(count(==(CENTROID), modes))")
+    println("  Profile spectra: $(count(==(PROFILE), modes))")
+    println("  Compressed spectra: $(sum(is_compressed))")
+    println("  Average points per spectrum: $(mean(num_points))")
+
     # Populate the MSIData object
     msi_data.global_min_mz = g_min_mz
     msi_data.global_max_mz = g_max_mz
@@ -412,7 +454,9 @@ function precompute_analytics(msi_data::MSIData)
         BasePeakMZ = bp_mzs,
         NumPoints = num_points,
         MinMZ = min_mzs,
-        MaxMZ = max_mzs
+        MaxMZ = max_mzs,
+        Mode = modes,
+        IsCompressed = is_compressed
     )
     
     duration = (time_ns() - start_time) / 1e9
@@ -731,12 +775,15 @@ function read_compressed_array(io::IO, asset::SpectrumAsset, format::Type)
     seek(io, asset.offset)
     
     if asset.is_compressed
-        # Read compressed bytes
+        # Read compressed bytes - use encoded_length as the number of compressed bytes
         compressed_bytes = read(io, asset.encoded_length)
+        
+        println("DEBUG: Decompressing data - offset=$(asset.offset), compressed_bytes=$(length(compressed_bytes))")
         
         local decompressed_bytes
         try
             decompressed_bytes = Libz.inflate(compressed_bytes)
+            println("DEBUG: Decompression successful - decompressed_bytes=$(length(decompressed_bytes))")
         catch e
             @error "ZLIB DECOMPRESSION FAILED. This is likely due to an incorrect offset or corrupt data in the .ibd file."
             @error "Asset offset: $(asset.offset), Encoded length: $(asset.encoded_length)"
@@ -747,8 +794,7 @@ function read_compressed_array(io::IO, asset::SpectrumAsset, format::Type)
             rethrow(e)
         end
         
-        # Use an IOBuffer to safely read the data, avoiding reinterpret errors
-        # if the decompressed size is not a perfect multiple of the element size.
+        # Use an IOBuffer to safely read the data
         bytes_io = IOBuffer(decompressed_bytes)
         n_elements = bytes_io.size ÷ sizeof(format)
         array = Array{format}(undef, n_elements)

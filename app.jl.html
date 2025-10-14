@@ -1,5 +1,4 @@
-<template>
-  <header id="header">
+<header id="header">
     <img src="/css/LABI_logo.png" alt="Labi Logo Icon" id="imgLogo">
     <div>
       <h4>JuliaMSI&nbsp;</h4>
@@ -12,7 +11,7 @@
   <div id="extDivStyle" class="row col-12 q-pa-xl">
     <div class="row col-6">
       <!-- Left DIV -->
-      <div id="intDivStyle" class="st-col col-12 st-module">
+      <div id="intDivStyle-left" class="st-col col-12 st-module">
         <h6>Search for the imzML or mzML file in your system</h6>
         <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="full_route" readonly label="Select your imzML or mzML file" v-on:click="btnSearch=true">
             <template v-slot:append>
@@ -58,7 +57,7 @@
           <!-- Spectra Plot Manipulation -->
           <div class="col-6">
             <div class="st-col col-6 col-sm">
-              <q-btn-dropdown id="btnStyle" class="q-ma-sm" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+              <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
                 label="Generate Spectra" icon="play_arrow">
                 <template v-slot:loading>
                   <q-spinner-hourglass class="on-left" />
@@ -99,22 +98,22 @@
           </div>
         </div>
         <div class="row">
-          <q-btn id="btnStyle" :loading="progress" class="q-ma-sm" :disabled="btnStartDisable" icon="play_arrow"
-            v-on:click="mainProcess=true" padding="lg" label="Main process">
+          <q-btn :loading="progress" class="q-ma-sm btn-style" :disabled="btnStartDisable" icon="play_arrow"
+            v-on:click="mainProcess=true" padding="lg" label="Generate Spectra">
             <template v-slot:loading>
               <q-spinner-hourglass class="on-left" />
               Loading...
             </template>
           </q-btn>
-          <q-btn id="btnStyle" icon="zoom_out_map" class="q-ma-sm on-right" v-on:click="compareBtn=true" padding="sm"
+          <q-btn icon="zoom_out_map" class="q-ma-sm on-right btn-style" v-on:click="compareBtn=true" padding="sm"
             label="Compare"></q-btn>
-          <q-btn id="btnStyle" class="q-ma-sm" :disable="btnMetadataDisable"
+          <q-btn class="q-ma-sm btn-style" :disable="btnMetadataDisable"
             v-on:click="showMetadataBtn=true" label="Show Metadata"></q-btn>
         </div>
         <p>{{msg}}</p>
 
         <div class="row st-col col-12">
-          <q-btn-dropdown id="btnStyle" class="q-ma-sm" :loading="progressPlot" :disable="btnPlotDisable"
+          <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressPlot" :disable="btnPlotDisable"
             label="Generate Plots" icon="play_arrow">
             <template v-slot:loading>
               <q-spinner-hourglass class="on-left" />
@@ -147,7 +146,7 @@
               </q-item>
             </q-list>
           </q-btn-dropdown>
-          <q-btn-dropdown id="btnStyle" icon="search" class="q-ma-sm" :disable="btnOpticalDisable"
+          <q-btn-dropdown icon="search" class="q-ma-sm btn-style" :disable="btnOpticalDisable"
             label="Load your optical image">
             <q-item clickable v-close-popup v-on:click="btnOptical=true">
               <q-item-section>
@@ -169,25 +168,25 @@
     </div>
     <div class="row col-6">
       <!-- Right DIV -->
-      <div id="intDivStyle" class="st-col col-12 col-sm st-module">
-        <st-tabs id="tabHeader" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab" no-arrows></st-tabs>
+      <div id="intDivStyle-right" class="st-col col-12 col-sm st-module">
+        <st-tabs id="tabHeader-main" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab" no-arrows></st-tabs>
         <q-tab-panels v-model="selectedTab">
           <q-tab-panel name="tab0">
             <!-- Content for Tab 0 -->
             <!-- Btn image changer -->
             <h6>Image visualizer</h6>
             <div>
-              <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinus=true"></q-btn>
-              <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlus=true"></q-btn>
+              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinus=true"></q-btn>
+              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlus=true"></q-btn>
             </div>
             <!-- Image manager -->
-            <div id="image-container" class="row st-col col-12">
+            <div id="image-container-normal" class="row st-col col-12">
               <div class="col-10 q-pa-none q-ma-none">
-                <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data"
+                <plotly id="plotImg" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data"
                   @click="data_click"></plotly>
               </div>
               <div class="col-2 q-pa-none q-ma-none">
-                <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
+                <q-img id="colorbar-normal" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
               </div>
             </div>
             <p>{{msgimg}}</p>
@@ -198,17 +197,17 @@
             <!-- Triq Btn image changer -->
             <h6>TrIQ visualizer</h6>
             <div>
-              <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusT=true"></q-btn>
-              <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlusT=true"></q-btn>
+              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusT=true"></q-btn>
+              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusT=true"></q-btn>
             </div>
             <!-- Triq Image manager -->
-            <div id="image-container" class="row st-col col-12">
+            <div id="image-container-triq" class="row st-col col-12">
               <div class="col-10 q-pa-none q-ma-none ">
-                <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT"
+                <plotly id="plotImgT" :data="plotdataImgT" :layout="plotlayoutImgT"
                   class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
               </div>
               <div class="col-2 q-pa-none q-ma-none ">
-                <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
+                <q-img id="colorbar-triq" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
               </div>
             </div>
             <p>{{msgtriq}}</p>
@@ -216,16 +215,16 @@
 
           <q-tab-panel name="tab2">
             <!-- Content for Tab 2 -->
-            <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
+            <plotly id="plotSpectra" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
           </q-tab-panel>
 
           <q-tab-panel name="tab3">
             <!-- Content for Tab 3 -->
-            <plotly id="plotStyle" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
+            <plotly id="plotTopo" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
           </q-tab-panel>
           <q-tab-panel name="tab4">
             <!-- Content for Tab 4 -->
-            <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
+            <plotly id="plot3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
           </q-tab-panel>
         </q-tab-panels>
       </div>
@@ -263,23 +262,23 @@
       <q-card-section class="q-pt-none col-12">
         <div class="row">
           <div class="col-6">
-            <st-tabs id="tabHeader" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab"></st-tabs>
+            <st-tabs id="tabHeaderCompareLeft" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab"></st-tabs>
             <q-tab-panels v-model="selectedTab">
               <q-tab-panel name="tab0">
                 <!-- Content for Tab 0 -->
                 <!-- Btn image changer -->
                 <div>
-                  <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinus=true"></q-btn>
-                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlus=true"></q-btn>
+                  <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinus=true"></q-btn>
+                  <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlus=true"></q-btn>
                 </div>
                 <!-- Image manager -->
-                <div id="image-container" class="row st-col col-12">
+                <div id="image-container-compare-left-normal" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none">
+                    <plotly id="plotImgCompareLeft" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none">
                     </plotly>
                   </div>
                   <div class="col-2">
-                    <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
+                    <q-img id="colorbarCompareLeft" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
                   </div>
                 </div>
                 <p>{{msgimg}}</p>
@@ -289,56 +288,56 @@
                 <!-- Content for Tab 1 -->
                 <!-- Triq Btn image changer -->
                 <div>
-                  <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusT=true"></q-btn>
-                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right" v-on:click="imgPlusT=true"></q-btn>
+                  <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusT=true"></q-btn>
+                  <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusT=true"></q-btn>
                 </div>
                 <!-- Triq Image manager -->
-                <div id="image-container" class="row st-col col-12">
+                <div id="image-container-compare-left-triq" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none">
+                    <plotly id="plotImgTCompareLeft" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none">
                     </plotly>
                   </div>
                   <div class="col-2">
-                    <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
+                    <q-img id="colorbarTCompareLeft" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
                   </div>
                 </div>
                 <p>{{msgtriq}}</p>
               </q-tab-panel>
               <q-tab-panel name="tab2">
                 <!-- Content for Tab 2 -->
-                <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
+                <plotly id="plotSpectraCompareLeft" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
               </q-tab-panel>
               <q-tab-panel name="tab3">
                 <!-- Content for Tab 3 -->
-                <plotly id="plotStyle" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
+                <plotly id="plotTopoCompareLeft" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
               </q-tab-panel>
               <q-tab-panel name="tab4">
                 <!-- Content for Tab 4 -->
-                <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
+                <plotly id="plot3dCompareLeft" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
               </q-tab-panel>
             </q-tab-panels>
           </div>
           <div class="col-6">
-            <st-tabs id="tabHeader" :ids="CompTabIDs" :labels="CompTabLabels" v-model="CompSelectedTab" outside-arrows
+            <st-tabs id="tabHeaderCompareRight" :ids="CompTabIDs" :labels="CompTabLabels" v-model="CompSelectedTab" outside-arrows
               mobile-arrows></st-tabs>
             <q-tab-panels v-model="CompSelectedTab">
               <q-tab-panel name="tab0">
                 <!-- Content for Tab 0 -->
                 <!-- Btn image changer -->
                 <div>
-                  <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusComp=true"></q-btn>
-                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right"
+                  <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusComp=true"></q-btn>
+                  <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
                     v-on:click="imgPlusComp=true"></q-btn>
                 </div>
                 <!-- Image manager -->
-                <div id="image-container" class="row st-col col-12">
+                <div id="image-container-compare-right-normal" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImgComp" :layout="plotlayoutImgComp"
+                    <plotly id="plotImgCompareRight" :data="plotdataImgComp" :layout="plotlayoutImgComp"
                       class="q-pa-none q-ma-none">
                     </plotly>
                   </div>
                   <div class="col-2 q-pa-none q-ma-none ">
-                    <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarComp"></q-img>
+                    <q-img id="colorbarComp" class="q-ma-none q-pa-none" :src="colorbarComp"></q-img>
                   </div>
                 </div>
                 <p>{{msgimgComp}}</p>
@@ -348,34 +347,34 @@
                 <!-- Content for Tab 1 -->
                 <!-- Triq Btn image changer -->
                 <div>
-                  <q-btn id="btnStyle" icon="arrow_back" class="q-my-sm" v-on:click="imgMinusTComp=true"></q-btn>
-                  <q-btn id="btnStyle" icon="arrow_forward" class="q-my-sm on-right"
+                  <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTComp=true"></q-btn>
+                  <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
                     v-on:click="imgPlusTComp=true"></q-btn>
                 </div>
                 <!-- Triq Image manager -->
-                <div id="image-container" class="row st-col col-12">
+                <div id="image-container-compare-right-triq" class="row st-col col-12">
                   <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotStyle" :data="plotdataImgTComp" :layout="plotlayoutImgTComp"
+                    <plotly id="plotImgTCompareRight" :data="plotdataImgTComp" :layout="plotlayoutImgTComp"
                       class="q-pa-none q-ma-none">
                     </plotly>
                   </div>
                   <div class="col-2 q-pa-none q-ma-none ">
-                    <q-img id="colorbar" class="q-ma-none q-pa-none" :src="colorbarTComp"></q-img>
+                    <q-img id="colorbarTComp" class="q-ma-none q-pa-none" :src="colorbarTComp"></q-img>
                   </div>
                 </div>
                 <p>{{msgtriqComp}}</p>
               </q-tab-panel>
               <q-tab-panel name="tab2">
                 <!-- Content for Tab 2 -->
-                <plotly id="plotStyle" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
+                <plotly id="plotSpectraCompareRight" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
               </q-tab-panel>
               <q-tab-panel name="tab3">
                 <!-- Content for Tab 3 -->
-                <plotly id="plotStyle" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
+                <plotly id="plotTopoCompareRight" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
               </q-tab-panel>
               <q-tab-panel name="tab4">
                 <!-- Content for Tab 4 -->
-                <plotly id="plotStyle3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
+                <plotly id="plot3dCompareRight" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
               </q-tab-panel>
             </q-tab-panels>
           </div>
@@ -412,5 +411,3 @@
         </q-card-actions>
     </q-card>
   </q-dialog>
-
-</template>

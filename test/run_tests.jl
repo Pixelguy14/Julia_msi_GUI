@@ -52,15 +52,19 @@ const CONVERSION_TARGET_IMZML = "test/results/converted_mzml.imzML"
 
 # --- Test Case 3: Standard .imzML file ---
 # An existing imzML file (can be the one generated from Case 2).
-const TEST_IMZML_FILE = CONVERSION_TARGET_IMZML # The output from case 2
+# const TEST_IMZML_FILE = CONVERSION_TARGET_IMZML # The output from case 2
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML"
-# const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging_paper_spray/Imaging_paper_spray.imzML"
+# const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging_paper_spray/Imaging_paper_spray.imzML" #profile
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging prueba Roya 1/royaimg.imzML"
+# const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/ltpmsi-chilli.imzML" # centroid aparently?
+# const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_compressed.imzML" # centroid compressed
+const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML" # centroid
 # The m/z value to use for creating an image slice.
 # const MZ_VALUE_FOR_SLICE = 309.06 # BF
 # const MZ_VALUE_FOR_SLICE = 896.0 # HR2MSI
 # const MZ_VALUE_FOR_SLICE = 76.03 # I PS
-const MZ_VALUE_FOR_SLICE = 313 # ROYA
+# const MZ_VALUE_FOR_SLICE = 313 # ROYA
+const MZ_VALUE_FOR_SLICE = 100 # advanced processing
 # const MZ_TOLERANCE = 0.1
 # const MZ_TOLERANCE = 1
 const MZ_TOLERANCE = 0.1
@@ -71,8 +75,8 @@ const COORDS_TO_PLOT = (50, 50) # Example coordinates (X, Y)
 # --- Output Directory ---
 const RESULTS_DIR = "test/results"
 
-test1 = true
-test2 = true 
+test1 = false
+test2 = false 
 test3 = true
 
 # ===================================================================
@@ -133,6 +137,30 @@ function validate_msi_data(filepath::String)
         println()
         return false
     end
+end
+
+function debug_xml_parsing(file_path::String)
+    println("=== DEBUG XML PARSING ===")
+    stream = open(file_path, "r")
+    
+    # Find and print the first spectrum
+    while !eof(stream)
+        line = readline(stream)
+        if occursin("<spectrum", line)
+            println("FOUND FIRST SPECTRUM:")
+            spectrum_xml = line
+            # Read until end of spectrum
+            while !eof(stream) && !occursin("</spectrum>", line)
+                line = readline(stream)
+                spectrum_xml *= line
+            end
+            println("SPECTRUM XML:")
+            println(spectrum_xml)
+            break
+        end
+    end
+    close(stream)
+    println("=== END DEBUG ===")
 end
 
 
@@ -229,16 +257,24 @@ function run_test()
 
         # Also run tests for plotting spectrum and image slice
         if isfile(TEST_IMZML_FILE)
+            debug_xml_parsing(TEST_IMZML_FILE)
+            msi_data = @time OpenMSIData(TEST_IMZML_FILE)
+            precompute_analytics(msi_data)
             # Add spectrum plotting for imzML to match Test Case 1
             try
+                
                 # Get the msi data from the imzml
                 println("Plotting a sample spectrum from $TEST_IMZML_FILE...")
-                msi_data = @time OpenMSIData(TEST_IMZML_FILE)
-                x_coord, y_coord = COORDS_TO_PLOT
+                
+                # Use coordinates from the first spectrum in the metadata
+                first_spectrum_meta = msi_data.spectra_metadata[1]
+                x_coord = first_spectrum_meta.x
+                y_coord = first_spectrum_meta.y
+                
+                println("DIAGNOSTIC_READ: Reading from coordinate_map[$x_coord, $y_coord]. Value is $(msi_data.coordinate_map[x_coord, y_coord]).")
                 
                 # Get the x y coordinate spectrum data
-                mz, intensity = GetSpectrum(msi_data, x_coord, y_coord)
-                
+                mz, intensity = GetSpectrum(msi_data, Int(x_coord), Int(y_coord))
                 # Plot the data
                 fig = Figure(size = (800, 600))
                 ax = Axis(fig[1, 1], xlabel="m/z", ylabel="Intensity", title="Spectrum at ($x_coord, $y_coord) from $(basename(TEST_IMZML_FILE))")
@@ -276,7 +312,7 @@ function run_test()
                 output_path = joinpath(RESULTS_DIR, "test_imzml_average_spectrum.png")
                 save(output_path, fig)
                 println("SUCCESS: Total spectrum plot saved to $output_path")
-                println("No spectrums tested on this try.")
+                # println("No spectrums tested on this try.")
             catch e
                 println("ERROR during spectrum plotting in Test Case 3: $e")
             end
@@ -284,8 +320,13 @@ function run_test()
             # Test the plot_slice function
             try
                 println("Testing plot_slice function on $TEST_IMZML_FILE...")
-                msi_data = @time OpenMSIData(TEST_IMZML_FILE)
-                @time plot_slice(msi_data, MZ_VALUE_FOR_SLICE, MZ_TOLERANCE, RESULTS_DIR, stage_name="test_imzml_single_slice")
+                
+                # Use the base peak m/z from the first spectrum for the slice
+                # Or a more general approach: use the global max intensity m/z
+                # For now, let's use the base peak m/z of the first spectrum
+                slice_mz_value = msi_data.spectrum_stats_df.BasePeakMZ[1]
+                
+                @time plot_slice(msi_data, slice_mz_value, MZ_TOLERANCE, RESULTS_DIR, stage_name="test_imzml_single_slice")
                 # The success message is now inside plot_slice
             catch e
                 println("ERROR during plot_slice test in Test Case 3: $e")

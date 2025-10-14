@@ -1,11 +1,11 @@
-#btnStyle {
-    background: #009f90;
-    color: rgb(229, 236, 246);
+.btn-style {
+    background: #009f90 !important;
+    color: rgb(229, 236, 246) !important;
     transition: background-color 0.3s ease;
 }
 
-#btnStyle:hover {
-    background-color: #007f72;
+.btn-style:hover {
+    background-color: #007f72 !important;
 }
 
 #imgInt {

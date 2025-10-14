@@ -159,6 +159,14 @@ include("./julia_imzML_visual.jl")
     ## Plots
     # Local image to plot
     layoutImg=PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text="",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=14,
+                color="black"
+            )
+        ),
         xaxis=PlotlyBase.attr(
             visible=false,
             scaleanchor="y",
@@ -185,7 +193,14 @@ include("./julia_imzML_visual.jl")
     @out plotlayoutImgTComp=layoutImg
     # Interface Plot Spectrum
     layoutSpectra=PlotlyBase.Layout(
-        title="Spectrum plot",
+        title=PlotlyBase.attr(
+            text="Spectrum plot",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         hovermode="closest",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
@@ -215,7 +230,14 @@ include("./julia_imzML_visual.jl")
 
     # Interface Plot Surface
     layoutContour=PlotlyBase.Layout(
-        title="2D Topographic map",
+        title=PlotlyBase.attr(
+            text="2D Topographic map",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         xaxis=PlotlyBase.attr(
             visible=false,
             scaleanchor="y"
@@ -226,7 +248,7 @@ include("./julia_imzML_visual.jl")
         margin=attr(l=0,r=0,t=100,b=0,pad=0)
     )
     # Dummy 2D surface plot
-    traceContour=PlotlyBase.scatter(x=Vector{Float64}(), y=Vector{Float64}(), mode="lines")
+    traceContour=PlotlyBase.contour(x=Vector{Float64}(), y=Vector{Float64}(), mode="lines")
     # Create conection to frontend
     @out plotdataC=[traceContour]
     @out plotlayoutC=layoutContour
@@ -234,7 +256,14 @@ include("./julia_imzML_visual.jl")
     # Interface Plot 3d
     # Define the layout for the 3D plot
     layout3D=PlotlyBase.Layout(
-        title="3D Surface plot",
+        title=PlotlyBase.attr(
+            text="3D Surface plot",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         scene=attr(
             xaxis_title="X",
             yaxis_title="Y",
@@ -386,69 +415,107 @@ include("./julia_imzML_visual.jl")
                         # Use the new get_mz_slice with the centralized MSIData object
                         println("get_mz_slice time:")
                         slice = @time get_mz_slice(msi_data, Nmass, Tol)
-                        fig = CairoMakie.Figure(size=(150, 250)) # Container
-                        timestamp = string(time_ns())
 
-                        if triqEnabled # If we have TrIQ
-                            if triqProb < 0.8 || triqProb > 1
-                                msg = "Incorrect TrIQ values, please adjust accordingly and try again."
-                                warning_msg = true
-                            else
-                                println("TrIQ time:")
-                                sliceTriq = @time TrIQ(slice, colorLevel, triqProb)
-                                if MFilterEnabled
-                                    sliceTriq = round.(UInt8, median_filter(sliceTriq))
-                                end
-                                sliceTriq = reverse(sliceTriq, dims=2)
-                                println("save_bitmap time:")
-                                @time save_bitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"), sliceTriq, ViridisPalette)
-
+                        # Failsafe check for empty slice
+                        if all(iszero, slice)
+                            msg = "No intensity data found for m/z = $Nmass with tolerance = $Tol. The resulting image is black. Please consider using a larger tolerance."
+                            warning_msg = true
+                            
+                            # Generate a black image but skip the colorbar that would crash
+                            timestamp = string(time_ns())
+                            text_nmass = replace(string(Nmass), "." => "_")
+                            sliceQuant = zeros(UInt8, size(slice))
+                            
+                            if triqEnabled
+                                @time save_bitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
                                 imgIntT = "/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
                                 plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
                                 current_triq = "TrIQ_$(text_nmass).bmp"
-                                msgtriq = "TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
-
-                                colorbar_path = joinpath("public", "colorbar_TrIQ_$(text_nmass).png")
-                                println("generate_colorbar_image time:")
-                                @time generate_colorbar_image(slice, colorLevel, colorbar_path, use_triq=true, triq_prob=triqProb)
-                                colorbarT = "/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
-                                current_col_triq = "colorbar_TrIQ_$(text_nmass).png"
-
+                                msgtriq = "TrIQ image with the Nmass of $(replace(text_nmass, "_" => ".")) (No data)"
+                                colorbarT = "" # Clear colorbar
+                                current_col_triq = ""
                                 triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
-                                col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")), lt=natural)
-
-                                fTime = time()
-                                eTime = round(fTime - sTime, digits=3)
-                                msg = "The TrIQ image has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
                                 selectedTab = "tab1"
+                            else
+                                @time save_bitmap(joinpath("public", "MSI_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
+                                imgInt = "/MSI_$(text_nmass).bmp?t=$(timestamp)"
+                                plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+                                current_msi = "MSI_$(text_nmass).bmp"
+                                msgimg = "Image with the Nmass of $(replace(text_nmass, "_" => ".")) (No data)"
+                                colorbar = "" # Clear colorbar
+                                current_col_msi = ""
+                                msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
+                                selectedTab = "tab0"
                             end
-                        else # If we don't use TrIQ
-                            println("quantize_intensity time:")
-                            sliceQuant = @time quantize_intensity(slice, colorLevel)
-                            if MFilterEnabled
-                                sliceQuant = round.(UInt8, median_filter(sliceQuant))
-                            end
-                            sliceQuant = reverse(sliceQuant, dims=2)
-                            println("save_bitmap time:")
-                            @time save_bitmap(joinpath("public", "MSI_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
-
-                            imgInt = "/MSI_$(text_nmass).bmp?t=$(timestamp)"
-                            plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
-                            current_msi = "MSI_$(text_nmass).bmp"
-                            msgimg = "Image with the Nmass of $(replace(text_nmass, "_" => "."))"
-
-                            colorbar_path = joinpath("public", "colorbar_MSI_$(text_nmass).png")
-                            println("generate_colorbar_image time:")
-                            @time generate_colorbar_image(slice, colorLevel, colorbar_path)
-                            colorbar = "/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
-                            current_col_msi = "colorbar_MSI_$(text_nmass).png"
-
-                            msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
-                            col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")), lt=natural)
-                            selectedTab = "tab0"
                             fTime = time()
                             eTime = round(fTime - sTime, digits=3)
-                            msg = "The image has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
+                            # The warning message is already set above
+                        else
+                            # Original path for when data is found
+                            fig = CairoMakie.Figure(size=(150, 250)) # Container
+                            timestamp = string(time_ns())
+
+                            if triqEnabled # If we have TrIQ
+                                if triqProb < 0.8 || triqProb > 1
+                                    msg = "Incorrect TrIQ values, please adjust accordingly and try again."
+                                    warning_msg = true
+                                else
+                                    println("TrIQ time:")
+                                    sliceTriq = @time TrIQ(slice, colorLevel, triqProb)
+                                    if MFilterEnabled
+                                        sliceTriq = round.(UInt8, median_filter(sliceTriq))
+                                    end
+
+                                    println("save_bitmap time:")
+                                    @time save_bitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"), sliceTriq, ViridisPalette)
+
+                                    imgIntT = "/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
+                                    plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
+                                    current_triq = "TrIQ_$(text_nmass).bmp"
+                                    msgtriq = "TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
+
+                                    colorbar_path = joinpath("public", "colorbar_TrIQ_$(text_nmass).png")
+                                    println("generate_colorbar_image time:")
+                                    @time generate_colorbar_image(slice, colorLevel, colorbar_path, use_triq=true, triq_prob=triqProb)
+                                    colorbarT = "/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
+                                    current_col_triq = "colorbar_TrIQ_$(text_nmass).png"
+
+                                    triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
+                                    col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")), lt=natural)
+
+                                    fTime = time()
+                                    eTime = round(fTime - sTime, digits=3)
+                                    msg = "The TrIQ image has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
+                                    selectedTab = "tab1"
+                                end
+                            else # If we don't use TrIQ
+                                println("quantize_intensity time:")
+                                sliceQuant = @time quantize_intensity(slice, colorLevel)
+                                if MFilterEnabled
+                                    sliceQuant = round.(UInt8, median_filter(sliceQuant))
+                                end
+
+                                println("save_bitmap time:")
+                                @time save_bitmap(joinpath("public", "MSI_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
+
+                                imgInt = "/MSI_$(text_nmass).bmp?t=$(timestamp)"
+                                plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
+                                current_msi = "MSI_$(text_nmass).bmp"
+                                msgimg = "Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+
+                                colorbar_path = joinpath("public", "colorbar_MSI_$(text_nmass).png")
+                                println("generate_colorbar_image time:")
+                                @time generate_colorbar_image(slice, colorLevel, colorbar_path)
+                                colorbar = "/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
+                                current_col_msi = "colorbar_MSI_$(text_nmass).png"
+
+                                msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
+                                col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")), lt=natural)
+                                selectedTab = "tab0"
+                                fTime = time()
+                                eTime = round(fTime - sTime, digits=3)
+                                msg = "The image has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
+                            end
                         end
                     catch e
                         msg = "There was an error creating the image: $e"
@@ -624,6 +691,7 @@ include("./julia_imzML_visual.jl")
         else
             traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImg=[traceImg]
+            plotlayoutImg=layoutImg
             msgimg=""
         end
     end
@@ -651,6 +719,7 @@ include("./julia_imzML_visual.jl")
         else
             traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImg=[traceImg]
+            plotlayoutImg=layoutImg
             msgimg=""
         end
     end
@@ -679,6 +748,7 @@ include("./julia_imzML_visual.jl")
         else
             traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgT=[traceImg]
+            plotlayoutImgT=layoutImg
             msgtriq=""
         end
     end
@@ -706,6 +776,7 @@ include("./julia_imzML_visual.jl")
         else
             traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgT=[traceImg]
+            plotlayoutImgT=layoutImg
             msgtriq=""
         end
     end
@@ -735,6 +806,7 @@ include("./julia_imzML_visual.jl")
         else
             traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgComp=[traceImg]
+            plotlayoutImgComp=layoutImg
             msgimgComp=""
         end
     end
@@ -763,6 +835,7 @@ include("./julia_imzML_visual.jl")
         else
             traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgComp=[traceImg]
+            plotlayoutImgComp=layoutImg
             msgimgComp=""
         end
     end
@@ -791,6 +864,7 @@ include("./julia_imzML_visual.jl")
         else
             traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgTComp=[traceImg]
+            plotlayoutImgTComp=layoutImg
             msgtriqComp=""
         end
     end
@@ -819,6 +893,7 @@ include("./julia_imzML_visual.jl")
         else
             traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
             plotdataImgTComp=[traceImg]
+            plotlayoutImgTComp=layoutImg
             msgtriqComp=""
         end
     end
@@ -1026,9 +1101,20 @@ include("./julia_imzML_visual.jl")
     @onchange data_click begin
         if selectedTab == "tab1" || selectedTab == "tab0"
             # This is for the image heatmaps
-            cursor_data = data_click["cursor"]
-            x = Int32(round(cursor_data["x"]))
-            y = Int32(round(cursor_data["y"])) # y is negative in the UI
+            cursor_data = get(data_click, "cursor", nothing)
+            if cursor_data === nothing
+                return
+            end
+
+            x_val = get(cursor_data, "x", nothing)
+            y_val = get(cursor_data, "y", nothing)
+
+            if x_val === nothing || y_val === nothing
+                return # Do nothing if coordinates are not provided by the event
+            end
+
+            x = Int32(round(x_val))
+            y = Int32(round(y_val)) # y is negative in the UI
 
             # Update the reactive coordinates, which will trigger the crosshair update
             xCoord = clamp(x, 1, imgWidth)
@@ -1107,3 +1193,40 @@ end
 # Register a new route and the page that will be loaded on access
 @page("/", "app.jl.html")
 end
+
+#=
+function __init__()
+    @async begin
+        println("Pre-compiling functions at startup...")
+        
+        # Create a dummy MSIData object to be used for pre-compilation
+        dummy_source = ImzMLSource("dummy.ibd", Float32, Float32)
+        dummy_meta = MSI_src.SpectrumMetadata(0,0,"",MSI_src.UNKNOWN, MSI_src.SpectrumAsset(Float32,false,0,0,:mz), MSI_src.SpectrumAsset(Float32,false,0,0,:intensity))
+        dummy_msi_data = MSIData(dummy_source, [dummy_meta], (1,1), zeros(Int,1,1), 0)
+
+        # Pre-compile functions from btnSearch
+        try OpenMSIData("dummy.imzML") catch end
+        try precompute_analytics(dummy_msi_data) catch end
+
+        # Pre-compile functions from mainProcess
+        try get_mz_slice(dummy_msi_data, 1.0, 1.0) catch end
+        try TrIQ(zeros(10,10), 256, 0.98) catch end
+        try quantize_intensity(zeros(10,10), 256) catch end
+        
+        dummy_bmp_path = joinpath("public", "dummy.bmp")
+        dummy_png_path = joinpath("public", "dummy.png")
+        try 
+            save_bitmap(dummy_bmp_path, zeros(UInt8, 10, 10), ViridisPalette)
+            loadImgPlot("/dummy.bmp")
+            generate_colorbar_image(zeros(10,10), 256, dummy_png_path)
+        catch e
+            @warn "Pre-compilation step failed (this is expected if dummy files can't be created/read)"
+        finally
+            rm(dummy_bmp_path, force=true)
+            rm(dummy_png_path, force=true)
+        end
+
+        println("Pre-compilation finished.")
+    end
+end
+=#

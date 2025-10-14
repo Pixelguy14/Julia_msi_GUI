@@ -26,6 +26,26 @@ function decrement_image(current_image, image_list)
 end
 
 ## Plot Image functions
+# Downsample an image matrix to a maximum dimension while preserving aspect ratio
+function downsample_image(img_matrix, max_dim::Int)
+    h, w = size(img_matrix)
+    if h <= max_dim && w <= max_dim
+        return img_matrix # No downsampling needed
+    end
+
+    aspect_ratio = w / h
+    if w > h
+        new_w = max_dim
+        new_h = round(Int, max_dim / aspect_ratio)
+    else
+        new_h = max_dim
+        new_w = round(Int, max_dim * aspect_ratio)
+    end
+
+    # imresize from Images.jl is perfect for this
+    return imresize(img_matrix, (new_h, new_w))
+end
+
 # loadImgPlot recieves the local directory of the image as a string,
 # returns the layout and data for the heatmap plotly plot
 # this function loads the image into a plot
@@ -46,6 +66,14 @@ function loadImgPlot(interfaceImg::String)
 
     # Create the layout
     layout=PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text="",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=14,
+                color="black"
+            )
+        ),
         xaxis=PlotlyBase.attr(
             visible=false,
             scaleanchor="y",
@@ -64,6 +92,7 @@ function loadImgPlot(interfaceImg::String)
         x=X,
         y=-Y,
         name="",
+        hoverinfo="x+y",
         showlegend=false,
         colorscale="Viridis",
         showscale=false,
@@ -110,6 +139,14 @@ function loadImgPlot(interfaceImg::String, overlayImg::String, imgTrans::Float64
 
     # Create the layout with overlay image
     layoutImg = PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text="",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=14,
+                color="black"
+            )
+        ),
         images = [attr(
             source = "$(overlayImg)?t=$(timestamp)",
             xref = "x",
@@ -140,6 +177,7 @@ function loadImgPlot(interfaceImg::String, overlayImg::String, imgTrans::Float64
         x = X,
         y = -Y,
         name = "",
+        hoverinfo = "x+y",
         showlegend = false,
         colorscale = "Viridis",
         showscale = false
@@ -168,6 +206,10 @@ function loadContourPlot(interfaceImg::String)
     sigma=3.0
     kernel=Kernel.gaussian(sigma)
     elevation_smoothed=imfilter(elevation, kernel)
+
+    # --- DOWNSAMPLING FOR PERFORMANCE ---
+    elevation_smoothed = downsample_image(elevation_smoothed, 512)
+    # ---
     
     # Create the X, Y meshgrid coordinates
     x=1:size(elevation_smoothed, 2)
@@ -182,7 +224,14 @@ function loadContourPlot(interfaceImg::String)
     tickT = log_tick_formatter(collect(tickV))
                 
     layout=PlotlyBase.Layout(
-        title="2D topographic map of $cleaned_img",
+        title=PlotlyBase.attr(
+            text="2D topographic map of $cleaned_img (downsampled)",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         xaxis=PlotlyBase.attr(
             visible=false,
             scaleanchor="y"
@@ -227,6 +276,10 @@ function loadSurfacePlot(interfaceImg::String)
     sigma=3.0
     kernel=Kernel.gaussian(sigma)
     elevation_smoothed=imfilter(elevation, kernel)
+
+    # --- DOWNSAMPLING FOR PERFORMANCE ---
+    elevation_smoothed = downsample_image(elevation_smoothed, 256)
+    # ---
     
     # Create the X, Y meshgrid coordinates 
     x=1:size(elevation_smoothed, 2) 
@@ -247,7 +300,14 @@ function loadSurfacePlot(interfaceImg::String)
     aspect_ratio=attr(x=1, y=length(y) / length(x), z=0.5)
     # Define the layout for the 3D plot
     layout3D=PlotlyBase.Layout(
-        title="3D surface plot of $cleaned_img",
+        title=PlotlyBase.attr(
+            text="3D surface plot of $cleaned_img (downsampled)",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         scene=attr(
             xaxis_nticks=x_nticks,
             yaxis_nticks=y_nticks,
@@ -377,8 +437,9 @@ function generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, 
     # 3. Create and save the colorbar image
     fig = Figure(size=(150, 250))
     Colorbar(fig[1, 1], 
-        colormap=cgrad(:viridis, bins),
-        limits=(min_val, max_val),
+        colormap=cgrad(:viridis, bins, categorical=true),
+        # limits=(min_val, max_val),
+        limits=(levels[1], levels[end]),
         label=(scale == 1 ? "Intensity" : "Intensity ×10^$(round(Int, 3 * exponent))"),
         ticks=(tick_positions, tick_labels),
         labelsize=20,
@@ -393,7 +454,14 @@ end
 # its values in the spectrum plot
 function meanSpectrumPlot(data::MSIData)
     layout = PlotlyBase.Layout(
-        title="Average Spectrum Plot",
+        title=PlotlyBase.attr(
+            text="Average Spectrum Plot",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         hovermode="closest",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
@@ -434,7 +502,7 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
         x = clamp(xCoord, 1, imgWidth)
         y = clamp(yCoord, 1, imgHeight)
         
-        mz, intensity = GetSpectrum(data, x, y)
+        mz, intensity = GetSpectrum(data, Int(x), Int(y))
         plot_title = "Spectrum at ($x, $y)"
     else
         # For non-imaging data, treat xCoord as the spectrum index
@@ -445,7 +513,14 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     end
 
     layout = PlotlyBase.Layout(
-        title=plot_title,
+        title=PlotlyBase.attr(
+            text=plot_title,
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         hovermode="closest",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
@@ -472,7 +547,14 @@ end
 
 function sumSpectrumPlot(data::MSIData)
     layout = PlotlyBase.Layout(
-        title="Total Spectrum Plot",
+        title=PlotlyBase.attr(
+            text="Total Spectrum Plot",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         hovermode="closest",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
