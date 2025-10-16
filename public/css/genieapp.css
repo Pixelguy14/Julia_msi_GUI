@@ -45,6 +45,51 @@
     color: #009f90;
 }
 
+#intDivStyle-left {
+    border-radius: 10px;
+    padding: 10px;
+}
+
+/* Tab styling to match your theme */
+.q-tabs {
+    background-color: transparent !important;
+}
+
+.q-tab {
+    color: #7f8389 !important;
+    font-weight: 500;
+}
+
+.q-tab--active {
+    color: #009f90 !important;
+    background-color: rgba(0, 159, 144, 0.1) !important;
+    border-radius: 5px;
+}
+
+.q-tabs[active-color="primary"] .q-tab--active {
+    color: #009f90 !important;
+}
+
+/* Indicator color to match your primary color */
+.q-tab__indicator {
+    background-color: #009f90 !important;
+}
+
+/* Dense tabs adjustment */
+.q-tabs--dense .q-tab {
+    padding: 8px 12px;
+    font-size: 0.9rem;
+}
+
+#intDivStyle-left .q-tab-panels {
+    height: 670px; /* Set this to accommodate your tallest content */
+}
+
+#intDivStyle-left .q-tab-panel {
+    height: 100%;
+    overflow-y: auto; /* Add scroll if content overflows */
+}
+
 *{
     font-family: 'Roboto', 'Lato', sans-serif;
 }

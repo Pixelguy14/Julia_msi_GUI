@@ -2,168 +2,200 @@
     <img src="/css/LABI_logo.png" alt="Labi Logo Icon" id="imgLogo">
     <div>
       <h4>JuliaMSI&nbsp;</h4>
-      <h6>Please make sure the ibd, the mzML and the imzML files are located in the same directory and have the same
-        name.</h6>
-      <h6>It may take a while to generate the image and the plot, please be patient.</h6>
-      <h6>To generate the contour or surface plots, you have to select the desired image first using the interface.</h6>
     </div>
   </header>
   <div id="extDivStyle" class="row col-12 q-pa-xl">
     <div class="row col-6">
       <!-- Left DIV -->
       <div id="intDivStyle-left" class="st-col col-12 st-module">
-        <h6>Search for the imzML or mzML file in your system</h6>
-        <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="full_route" readonly label="Select your imzML or mzML file" v-on:click="btnSearch=true">
-            <template v-slot:append>
-                <q-icon name="search" v:onclick="btnSearch=true" class="cursor-pointer" />
-            </template>
-        </q-input>
-        <!-- Variable Manipulation -->
-        <div class="row">
-          <div class="st-col col-4 col-sm q-ma-sm">
-            <q-input standout="custom-standout" id="textNmass" step="0.001" v-model="Nmass"
-              label="Mass-to-charge ratio of interest" type="number"
-              :rules="[ val => !!val || '* Required', val => val >= 0.0 || 'Need positive mass values']"></q-input>
-          </div>
-          <div class="st-col col-4 col-sm q-ma-sm">
-            <q-input standout="custom-standout" id="textTol" step="0.005" v-model="Tol"
-              label="Mass-to-charge ratio tolerance" type="number"
-              :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
-          </div>
-          <div class="st-col col-4 col-sm q-ma-sm">
-            <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color levels"
-              type="number"
-              :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
-          </div>
-        </div>
-        <div class="row">
-          <!-- Triq Variable Manipulation and filters-->
-          <div class="col-6">
-            <div class="st-col col-6 col-sm q-ma-sm">
-              <q-toggle id="btnEnableMFilter" v-on:click="MFilterEnabled" v-model="MFilterEnabled" color="green"
-                label="Add Median Filter"></q-toggle>
-              <q-toggle id="btnEnableTriq" v-on:click="triqEnabled" v-model="triqEnabled" color="blue"
-                label="Add Threshold Intensity Quantization (TrIQ)"></q-toggle>
-            </div>
+        <q-tabs v-model="left_tab" dense class="text-grey" indicator-color="primary" align="justify">
+          <q-tab name="generator" label="Slice Generator"></q-tab>
+          <q-tab name="converter" label="Converter"></q-tab>
+        </q-tabs>
+        <q-separator></q-separator>
+        <q-tab-panels v-model="left_tab" animated>
+          <q-tab-panel name="generator">
+            <div class="text-h6">imzML & mzML Data Processor</div>
+            <p>Please make sure the ibd and imzML file are located in the same directory and have the same name.
+              <br>It may take a while to generate the image and the plot, please be patient.
+              <br>To generate the contour or surface plots, you have to select the desired image first using the interface.</p>
+            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="full_route" readonly label="Select your imzML or mzML file" v-on:click="btnSearch=true">
+                <template v-slot:append>
+                    <q-icon name="search" v:onclick="btnSearch=true" class="cursor-pointer" />
+                </template>
+            </q-input>
+            <!-- Variable Manipulation -->
             <div class="row">
-              <div class="st-col col-4 col-sm-4 q-ma-sm">
-                <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb"
-                  label="TrIQ probability" type="number" :rules="[
-                        val => triqEnabled ? ( '* Required', val >= 0.8 &amp;&amp; val <= 1 || 'Needs to be in range between 0.8 and 1') : true
-                        ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
+              <div class="st-col col-4 col-sm q-ma-sm">
+                <q-input standout="custom-standout" id="textNmass" step="0.001" v-model="Nmass"
+                  label="Mass-to-charge ratio of interest" type="number"
+                  :rules="[ val => !!val || '* Required', val => val >= 0.0 || 'Need positive mass values']"></q-input>
+              </div>
+              <div class="st-col col-4 col-sm q-ma-sm">
+                <q-input standout="custom-standout" id="textTol" step="0.005" v-model="Tol"
+                  label="Mass-to-charge ratio tolerance" type="number"
+                  :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
+              </div>
+              <div class="st-col col-4 col-sm q-ma-sm">
+                <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color levels"
+                  type="number"
+                  :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
               </div>
             </div>
-          </div>
-          <!-- Spectra Plot Manipulation -->
-          <div class="col-6">
-            <div class="st-col col-6 col-sm">
-              <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
-                label="Generate Spectra" icon="play_arrow">
+            <div class="row">
+              <!-- Triq Variable Manipulation and filters-->
+              <div class="col-6">
+                <div class="st-col col-6 col-sm q-ma-sm">
+                  <q-toggle id="btnEnableMFilter" v-on:click="MFilterEnabled" v-model="MFilterEnabled" color="green"
+                    label="Add Median Filter"></q-toggle>
+                  <q-toggle id="btnEnableTriq" v-on:click="triqEnabled" v-model="triqEnabled" color="blue"
+                    label="Add Threshold Intensity Quantization (TrIQ)"></q-toggle>
+                </div>
+                <div class="row">
+                  <div class="st-col col-4 col-sm-4 q-ma-sm">
+                    <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb"
+                      label="TrIQ probability" type="number" :rules="[
+                            val => triqEnabled ? ( '* Required', val >= 0.8 &amp;&amp; val <= 1 || 'Needs to be in range between 0.8 and 1') : true
+                            ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
+                  </div>
+                </div>
+              </div>
+              <!-- Spectra Plot Manipulation -->
+              <div class="col-6">
+                <div class="st-col col-6 col-sm">
+                  <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+                    label="Generate Spectra" icon="play_arrow">
+                    <template v-slot:loading>
+                      <q-spinner-hourglass class="on-left" />
+                      Loading plot
+                    </template>
+    
+                    <q-list>
+                      <q-item clickable v-close-popup v-on:click="createMeanPlot=true">
+                        <q-item-section>
+                          <q-item-label>Mean spectrum plot</q-item-label>
+                        </q-item-section>
+                      </q-item>
+                      <q-item clickable v-close-popup v-on:click="createSumPlot=true">
+                        <q-item-section>
+                          <q-item-label>Sum Spectrum plot</q-item-label>
+                        </q-item-section>
+                      </q-item>
+                      <q-item clickable v-close-popup v-on:click="createXYPlot=true">
+                        <q-item-section>
+                          <q-item-label>Spectrum plot (X,Y)</q-item-label>
+                        </q-item-section>
+                      </q-item>
+                    </q-list>
+                  </q-btn-dropdown>
+                </div>
+                <div class="row col-6">
+                  <div class="st-col col-4 col-sm-4 q-ma-sm">
+                    <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord" type="number" :rules="[
+                            val => SpectraEnabled ? ( '* Required', val >= 0|| 'Needs to be bigger than 0') : true
+                            ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
+                  </div>
+                  <div class="st-col col-4 col-sm-4 q-ma-sm">
+                    <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord" type="number" :rules="[
+                            val => SpectraEnabled ? ( '* Required', val <= 0|| 'Needs to be lower than 0') : true
+                            ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="row">
+              <q-btn :loading="progress" class="q-ma-sm btn-style" :disabled="btnStartDisable" icon="play_arrow"
+                v-on:click="mainProcess=true" padding="lg" label="Generate Slice">
+                <template v-slot:loading>
+                  <q-spinner-hourglass class="on-left" />
+                  Loading...
+                </template>
+              </q-btn>
+              <q-btn icon="zoom_out_map" class="q-ma-sm on-right btn-style" v-on:click="compareBtn=true" padding="sm"
+                label="Compare"></q-btn>
+              <q-btn class="q-ma-sm btn-style" :disable="btnMetadataDisable"
+                v-on:click="showMetadataBtn=true" label="Show Metadata"></q-btn>
+            </div>
+            <p>{{msg}}</p>
+    
+            <div class="row st-col col-12">
+              <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressPlot" :disable="btnPlotDisable"
+                label="Generate Plots" icon="play_arrow">
                 <template v-slot:loading>
                   <q-spinner-hourglass class="on-left" />
                   Loading plot
                 </template>
-
+    
                 <q-list>
-                  <q-item clickable v-close-popup v-on:click="createMeanPlot=true">
+                  <q-item clickable v-close-popup v-on:click="imageCPlot=true">
                     <q-item-section>
-                      <q-item-label>Mean spectrum plot</q-item-label>
+                      <q-item-label>Image topography Plot</q-item-label>
                     </q-item-section>
                   </q-item>
-                  <q-item clickable v-close-popup v-on:click="createSumPlot=true">
+    
+                  <q-item clickable v-close-popup v-on:click="triqCPlot=true">
                     <q-item-section>
-                      <q-item-label>Sum Spectrum plot</q-item-label>
+                      <q-item-label>TrIQ topography Plot</q-item-label>
                     </q-item-section>
                   </q-item>
-                  <q-item clickable v-close-popup v-on:click="createXYPlot=true">
+    
+                  <q-item clickable v-close-popup v-on:click="image3dPlot=true">
                     <q-item-section>
-                      <q-item-label>Spectrum plot (X,Y)</q-item-label>
+                      <q-item-label>Image surface Plot</q-item-label>
+                    </q-item-section>
+                  </q-item>
+    
+                  <q-item clickable v-close-popup v-on:click="triq3dPlot=true">
+                    <q-item-section>
+                      <q-item-label>TrIQ Surface Plot</q-item-label>
                     </q-item-section>
                   </q-item>
                 </q-list>
               </q-btn-dropdown>
-            </div>
-            <div class="row col-6">
-              <div class="st-col col-4 col-sm-4 q-ma-sm">
-                <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord" type="number" :rules="[
-                        val => SpectraEnabled ? ( '* Required', val >= 0|| 'Needs to be bigger than 0') : true
-                        ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
+              <q-btn-dropdown icon="search" class="q-ma-sm btn-style" :disable="btnOpticalDisable"
+                label="Load your optical image">
+                <q-item clickable v-close-popup v-on:click="btnOptical=true">
+                  <q-item-section>
+                    <q-item-label>Over normal image</q-item-label>
+                  </q-item-section>
+                </q-item>
+                <q-item clickable v-close-popup v-on:click="btnOpticalT=true">
+                  <q-item-section>
+                    <q-item-label>Over TrIQ image</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </q-btn-dropdown>
+              <div class="q-mx-sm">
+                <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
+                <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
               </div>
-              <div class="st-col col-4 col-sm-4 q-ma-sm">
-                <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord" type="number" :rules="[
-                        val => SpectraEnabled ? ( '* Required', val <= 0|| 'Needs to be lower than 0') : true
-                        ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
-              </div>
             </div>
-          </div>
-        </div>
-        <div class="row">
-          <q-btn :loading="progress" class="q-ma-sm btn-style" :disabled="btnStartDisable" icon="play_arrow"
-            v-on:click="mainProcess=true" padding="lg" label="Generate Spectra">
-            <template v-slot:loading>
-              <q-spinner-hourglass class="on-left" />
-              Loading...
-            </template>
-          </q-btn>
-          <q-btn icon="zoom_out_map" class="q-ma-sm on-right btn-style" v-on:click="compareBtn=true" padding="sm"
-            label="Compare"></q-btn>
-          <q-btn class="q-ma-sm btn-style" :disable="btnMetadataDisable"
-            v-on:click="showMetadataBtn=true" label="Show Metadata"></q-btn>
-        </div>
-        <p>{{msg}}</p>
+          </q-tab-panel>
+          <q-tab-panel name="converter">
+            <div class="text-h6">mzML to imzML Converter</div>
+            <p>Select the .mzML file and the corresponding .txt synchronization file to convert them into an .imzML/.ibd pair.</p>
+            
+            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="mzml_full_route" readonly label="Select your .mzML file" v-on:click="btnSearchMzml=true">
+                <template v-slot:append>
+                    <q-icon name="search" v:onclick="btnSearchMzml=true" class="cursor-pointer" />
+                </template>
+            </q-input>
 
-        <div class="row st-col col-12">
-          <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressPlot" :disable="btnPlotDisable"
-            label="Generate Plots" icon="play_arrow">
-            <template v-slot:loading>
-              <q-spinner-hourglass class="on-left" />
-              Loading plot
-            </template>
+            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="sync_full_route" readonly label="Select your .txt sync file" v-on:click="btnSearchSync=true">
+                <template v-slot:append>
+                    <q-icon name="search" v:onclick="btnSearchSync=true" class="cursor-pointer" />
+                </template>
+            </q-input>
 
-            <q-list>
-              <q-item clickable v-close-popup v-on:click="imageCPlot=true">
-                <q-item-section>
-                  <q-item-label>Image topography Plot</q-item-label>
-                </q-item-section>
-              </q-item>
-
-              <q-item clickable v-close-popup v-on:click="triqCPlot=true">
-                <q-item-section>
-                  <q-item-label>TrIQ topography Plot</q-item-label>
-                </q-item-section>
-              </q-item>
-
-              <q-item clickable v-close-popup v-on:click="image3dPlot=true">
-                <q-item-section>
-                  <q-item-label>Image surface Plot</q-item-label>
-                </q-item-section>
-              </q-item>
-
-              <q-item clickable v-close-popup v-on:click="triq3dPlot=true">
-                <q-item-section>
-                  <q-item-label>TrIQ Surface Plot</q-item-label>
-                </q-item-section>
-              </q-item>
-            </q-list>
-          </q-btn-dropdown>
-          <q-btn-dropdown icon="search" class="q-ma-sm btn-style" :disable="btnOpticalDisable"
-            label="Load your optical image">
-            <q-item clickable v-close-popup v-on:click="btnOptical=true">
-              <q-item-section>
-                <q-item-label>Over normal image</q-item-label>
-              </q-item-section>
-            </q-item>
-            <q-item clickable v-close-popup v-on:click="btnOpticalT=true">
-              <q-item-section>
-                <q-item-label>Over TrIQ image</q-item-label>
-              </q-item-section>
-            </q-item>
-          </q-btn-dropdown>
-          <div class="q-mx-sm">
-            <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
-            <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
-          </div>
-        </div>
+            <q-btn :loading="progress_conversion" class="q-ma-sm btn-style" :disabled="btnConvertDisable" icon="swap_horiz" v-on:click="convert_process=true" padding="lg" label="Convert File">
+                <template v-slot:loading>
+                    <q-spinner-hourglass class="on-left" />
+                    Converting...
+                </template>
+            </q-btn>
+            <p>{{msg_conversion}}</p>
+          </q-tab-panel>
+        </q-tab-panels>
       </div>
     </div>
     <div class="row col-6">

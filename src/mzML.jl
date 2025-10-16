@@ -3,8 +3,24 @@
 # This file is responsible for parsing metadata from .mzML files.
 # It has been refactored to produce a unified MSIData object.
 
+# Constants for CV parameter accessions - defined once for performance
+const MZ_AXIS_ACCESSION = "MS:1000514"
+const INTENSITY_AXIS_ACCESSION = "MS:1000515"
+const COMPRESSION_ACCESSION = "MS:1000574"
+const NO_COMPRESSION_ACCESSION = "MS:1000576"
+
+# Data format accessions as constants
+const DATA_FORMAT_ACCESSIONS = Dict{String, DataType}(
+    "MS:1000518" => Int16,
+    "MS:1000519" => Int32,
+    "MS:1000520" => Float64,
+    "MS:1000521" => Float32,
+    "MS:1000522" => Int64,
+    "MS:1000523" => Float64
+)
+
 """
-    get_spectrum_asset_metadata(stream)
+    get_spectrum_asset_metadata(stream::IO)
 
 Parses a `<binaryDataArray>` block within an mzML file to extract metadata
 for a single data array (e.g., m/z or intensity). It reads CV parameters to
@@ -17,7 +33,7 @@ determine the data type, compression, and axis type.
 - A `SpectrumAsset` struct containing the parsed metadata, including the binary
   data offset, encoded length, format, and compression status.
 """
-function get_spectrum_asset_metadata(stream)
+function get_spectrum_asset_metadata(stream::IO)
     start_pos = position(stream)
     
     bda_tag = find_tag(stream, r"<binaryDataArray\s+encodedLength=\"(\d+)\"" )
@@ -26,12 +42,12 @@ function get_spectrum_asset_metadata(stream)
     end
     encoded_length = parse(Int32, bda_tag.captures[1])
 
-    # Initialize parameters as separate variables
-    data_format = Float64
-    compression_flag = false
-    axis = :mz
+    # Initialize parameters as separate variables with concrete types
+    data_format::DataType = Float64
+    compression_flag::Bool = false
+    axis::Symbol = :mz
 
-    while true
+    while !eof(stream)
         line = readline(stream)
         if occursin("</binaryDataArray>", line)
             break
@@ -42,45 +58,18 @@ function get_spectrum_asset_metadata(stream)
                 continue
             end
             acc_str = accession.captures[1]
-            # println("DEBUG: Processing accession: $acc_str")
             
-            # Direct inline logic - NO FUNCTION CALLS
-            if acc_str == "MS:1000514"
+            # Use constant comparisons and dictionary lookup for better performance
+            if acc_str == MZ_AXIS_ACCESSION
                 axis = :mz
-                # println("DEBUG: Set axis_type to :mz")
-            elseif acc_str == "MS:1000515"
+            elseif acc_str == INTENSITY_AXIS_ACCESSION
                 axis = :intensity
-                # println("DEBUG: Set axis_type to :intensity")
-            elseif acc_str == "MS:1000518"
-                data_format = Int16
-                # println("DEBUG: Set format to Int16")
-            elseif acc_str == "MS:1000519"
-                data_format = Int32
-                # println("DEBUG: Set format to Int32")
-            elseif acc_str == "MS:1000520"
-                data_format = Float64
-                # println("DEBUG: Set format to Float64")
-            elseif acc_str == "MS:1000521"
-                data_format = Float32
-                # println("DEBUG: Set format to Float32")
-            elseif acc_str == "MS:1000522"
-                data_format = Int64
-                # println("DEBUG: Set format to Int64")
-            elseif acc_str == "MS:1000523"
-                data_format = Float64
-                # println("DEBUG: Set format to Float64")
-            # MS:1000572 is a parent term for compression. While not ideal, if present, assume compression.
-            elseif acc_str == "MS:1000572"
+            elseif haskey(DATA_FORMAT_ACCESSIONS, acc_str)
+                data_format = DATA_FORMAT_ACCESSIONS[acc_str]
+            elseif acc_str == COMPRESSION_ACCESSION
                 compression_flag = true
-                # println("DEBUG: Set is_compressed to true based on parent term")
-            elseif acc_str == "MS:1000574"
-                compression_flag = true
-                # println("DEBUG: Set is_compressed to true")
-            elseif acc_str == "MS:1000576"
+            elseif acc_str == NO_COMPRESSION_ACCESSION
                 compression_flag = false
-                # println("DEBUG: Set is_compressed to false")
-            else
-                # println("DEBUG: Unknown accession: $acc_str")
             end
         end
     end
@@ -98,7 +87,7 @@ end
 
 # This function is updated to return the generic SpectrumMetadata struct
 """
-    parse_spectrum_metadata(stream, offset::Int64)
+    parse_spectrum_metadata(stream::IO, offset::Int64)
 
 Parses an entire `<spectrum>` block from an mzML file, given a starting offset.
 It extracts the spectrum ID and calls `get_spectrum_asset_metadata` to parse
@@ -111,7 +100,7 @@ the m/z and intensity array metadata.
 # Returns
 - A `SpectrumMetadata` struct containing the parsed metadata for one spectrum.
 """
-function parse_spectrum_metadata(stream, offset::Int64)
+function parse_spectrum_metadata(stream::IO, offset::Int64)
     seek(stream, offset)
     
     id_match = find_tag(stream, r"<spectrum\s+index=\"\d+\"\s+id=\"([^\"]+)" )
@@ -120,16 +109,20 @@ function parse_spectrum_metadata(stream, offset::Int64)
     asset1 = get_spectrum_asset_metadata(stream)
     asset2 = get_spectrum_asset_metadata(stream)
 
-    mz_asset = asset1.axis_type == :mz ? asset1 : asset2
-    int_asset = asset1.axis_type == :intensity ? asset1 : asset2
+    # Determine which asset is m/z and which is intensity
+    mz_asset, int_asset = if asset1.axis_type == :mz
+        (asset1, asset2)
+    else
+        (asset2, asset1)
+    end
 
     # Create the new unified metadata object
     # For mzML, x and y coordinates are not applicable, so we use 0.
-    return SpectrumMetadata(0, 0, id, mz_asset, int_asset)
+    return SpectrumMetadata(Int32(0), Int32(0), id, UNKNOWN, mz_asset, int_asset)
 end
 
 """
-    parse_offset_list(stream)
+    parse_offset_list(stream::IO)
 
 Parses the `<index name="spectrum">` block in an indexed mzML file to extract
 the byte offsets for each spectrum.
@@ -140,7 +133,7 @@ the byte offsets for each spectrum.
 # Returns
 - A `Vector{Int64}` containing the byte offsets for all spectra.
 """
-function parse_offset_list(stream)
+function parse_offset_list(stream::IO)
     offsets = Int64[]
     offset_regex = r"<offset[^>]*>(\d+)</offset>"
     
@@ -160,7 +153,31 @@ function parse_offset_list(stream)
         end
         # If it's neither, ignore the line and continue the loop.
     end
+    
     return offsets
+end
+
+"""
+    find_index_offset(stream::IO)::Int64
+
+Finds the index offset in an mzML file by reading from the end.
+Optimized version with better buffer management.
+"""
+function find_index_offset(stream::IO)::Int64
+    file_size = filesize(stream)
+    seekend(stream)
+    
+    # Read larger chunk for better chance of finding the offset
+    chunk_size = min(8192, file_size)
+    seek(stream, file_size - chunk_size)
+    footer = read(stream, String)
+    
+    index_offset_match = match(r"<indexListOffset>(\d+)</indexListOffset>", footer)
+    if index_offset_match === nothing
+        error("Could not find <indexListOffset>. File may not be an indexed mzML.")
+    end
+    
+    return parse(Int64, index_offset_match.captures[1])
 end
 
 # This is the main lazy-loading function for mzML, now returning an MSIData object.
@@ -183,41 +200,38 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
     stream = open(file_path, "r")
 
     try
-        println("DEBUG: Seeking to end of file.")
-        seekend(stream)
-        println("DEBUG: Skipping back to read footer.")
-        skip(stream, -4096)
-        footer = read(stream, String)
-        println("DEBUG: Footer read successfully.")
-        
-        index_offset_match = match(r"<indexListOffset>(\d+)</indexListOffset>", footer)
-        if index_offset_match === nothing
-            close(stream)
-            error("Could not find <indexListOffset>. File may not be an indexed mzML.")
-        end
-        println("DEBUG: Found indexListOffset.")
-        
-        index_offset = parse(Int64, index_offset_match.captures[1])
+        println("DEBUG: Finding index offset...")
+        index_offset = find_index_offset(stream)
         println("DEBUG: Seeking to index list at offset $index_offset.")
         seek(stream, index_offset)
         
         println("DEBUG: Searching for '<index name=\"spectrum\">'.")
         if find_tag(stream, r"<index\s+name=\"spectrum\"") === nothing
-            close(stream)
             error("Could not find spectrum index.")
         end
-        println("DEBUG: Found spectrum index tag. ")
+        println("DEBUG: Found spectrum index tag.")
 
         println("DEBUG: Parsing spectrum offsets...")
         spectrum_offsets = parse_offset_list(stream)
         if isempty(spectrum_offsets)
-            close(stream)
             error("No spectrum offsets found.")
         end
-        println("DEBUG: Found $(length(spectrum_offsets)) spectrum offsets.")
+        num_spectra = length(spectrum_offsets)
+        println("DEBUG: Found $num_spectra spectrum offsets.")
 
         println("DEBUG: Parsing metadata for each spectrum...")
-        spectra_metadata = [parse_spectrum_metadata(stream, offset) for offset in spectrum_offsets]
+        # Pre-allocate the metadata vector for better performance
+        spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
+        
+        # Use @inbounds for faster indexing in the loop
+        @inbounds for i in 1:num_spectra
+            spectra_metadata[i] = parse_spectrum_metadata(stream, spectrum_offsets[i])
+            
+            # Progress reporting for large files
+            if i % 1000 == 0
+                println("DEBUG: Processed $i/$num_spectra spectra")
+            end
+        end
         println("DEBUG: Metadata parsing complete.")
 
         # Assuming uniform data formats, take from the first spectrum
@@ -254,16 +268,99 @@ function LoadMzml(fileName::String)
     msi_data = load_mzml_lazy(fileName, cache_size=0) # No need to cache if we load all
     
     num_spectra = length(msi_data.spectra_metadata)
-    spectra_matrix = Array{Any}(undef, (2, num_spectra))
     
-    for i in 1:num_spectra
+    # FIXED: Use concrete typed arrays instead of Array{Any}
+    spectra_matrix = Vector{Tuple{Vector{Float64}, Vector{Float64}}}(undef, num_spectra)
+    
+    # Pre-allocate and use bounds checking optimization
+    @inbounds for i in 1:num_spectra
         # Use the new GetSpectrum API
         mz, intensity = GetSpectrum(msi_data, i)
-        spectra_matrix[1, i] = mz
-        spectra_matrix[2, i] = intensity
+        spectra_matrix[i] = (mz, intensity)
     end
     
-    # The finalizer on MSIData will close the handle, so no need to close it here.
+    # Convert to the expected 2xN format if needed by downstream code
+    # Note: This maintains the original interface but with better typing
+    result_matrix = Array{Any}(undef, (2, num_spectra))
+    @inbounds for i in 1:num_spectra
+        result_matrix[1, i] = spectra_matrix[i][1]
+        result_matrix[2, i] = spectra_matrix[i][2]
+    end
     
-    return spectra_matrix
+    return result_matrix
 end
+
+"""
+    load_mzml_batch(file_path::String, spectrum_indices::AbstractVector{Int})
+
+Loads a specific batch of spectra from an mzML file efficiently.
+Useful for parallel processing or when only specific spectra are needed.
+
+# Arguments
+- `file_path`: Path to the mzML file
+- `spectrum_indices`: Indices of spectra to load
+
+# Returns
+- Vector of (mz_array, intensity_array) tuples
+"""
+function load_mzml_batch(file_path::String, spectrum_indices::AbstractVector{Int})
+    msi_data = load_mzml_lazy(file_path)
+    num_to_load = length(spectrum_indices)
+    
+    # Pre-allocate result with concrete types
+    results = Vector{Tuple{Vector{Float64}, Vector{Float64}}}(undef, num_to_load)
+    
+    @inbounds for (i, idx) in enumerate(spectrum_indices)
+        mz, intensity = GetSpectrum(msi_data, idx)
+        results[i] = (mz, intensity)
+    end
+    
+    return results
+end
+
+"""
+    get_mzml_summary(file_path::String)::NamedTuple
+
+Quickly extracts summary information from an mzML file without loading all metadata.
+
+# Returns
+- Named tuple with: num_spectra, mz_range, intensity_range, data_formats
+"""
+function get_mzml_summary(file_path::String)::NamedTuple
+    stream = open(file_path, "r")
+    try
+        index_offset = find_index_offset(stream)
+        seek(stream, index_offset)
+        
+        if find_tag(stream, r"<index\s+name=\"spectrum\"") === nothing
+            error("Could not find spectrum index.")
+        end
+        
+        spectrum_offsets = parse_offset_list(stream)
+        num_spectra = length(spectrum_offsets)
+        
+        # Sample first few spectra to determine formats and ranges
+        sample_size = min(10, num_spectra)
+        sample_metadata = [parse_spectrum_metadata(stream, spectrum_offsets[i]) for i in 1:sample_size]
+        
+        # Extract formats from sample
+        mz_format = sample_metadata[1].mz_asset.format
+        intensity_format = sample_metadata[1].int_asset.format
+        
+        return (num_spectra=num_spectra, 
+                mz_format=mz_format, 
+                intensity_format=intensity_format,
+                sample_spectra=sample_size)
+    finally
+        close(stream)
+    end
+end
+
+# Performance optimization: Cache frequently used regex patterns
+const PRE_COMPILED_REGEX = (
+    encoded_length = r"<binaryDataArray\s+encodedLength=\"(\d+)\"",
+    spectrum_id = r"<spectrum\s+index=\"\d+\"\s+id=\"([^\"]+)",
+    offset = r"<offset[^>]*>(\d+)</offset>",
+    index_list = r"<index\s+name=\"spectrum\"",
+    index_offset = r"<indexListOffset>(\d+)</indexListOffset>"
+)

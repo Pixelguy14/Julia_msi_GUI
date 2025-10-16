@@ -107,19 +107,12 @@ function GetMzmlScanTime_linebyline(fileName::String)
         end
     end
     
-    sort!(times, by = x -> x[1])
-
-    if !isempty(times)
-        first_time = times[1][2]
-        for i in eachindex(times)
-            times[i] = (times[i][1], times[i][2] - first_time)
-        end
+    result = Matrix{Int64}(undef, length(times), 2)
+    for (i, t) in enumerate(times)
+        result[i, 1] = t[1]
+        result[i, 2] = t[2]
     end
-    
-    if isempty(times)
-        return Matrix{Int64}(undef, 0, 2)
-    end
-    return permutedims(hcat(collect.(times)...))
+    return result
 end
 
 """
@@ -209,10 +202,12 @@ function GetMzmlScanTime(fileName::String)
         end
     end
     
-    if isempty(times)
-        return Matrix{Int64}(undef, 0, 2)
+    result = Matrix{Int64}(undef, length(times), 2)
+    for (i, t) in enumerate(times)
+        result[i, 1] = t[1]
+        result[i, 2] = t[2]
     end
-    return permutedims(hcat(collect.(times)...))
+    return result
 end
 
 """
@@ -399,14 +394,27 @@ This function handles three cases:
 # Returns
 - A tuple `(mz_array, intensity_array)` for the rendered pixel spectrum.
 """
-function RenderPixel(pixel_info, scans, msi_data::MSIData, scan_time_deltas, pixel_time_deltas)
+function RenderPixel(
+    pixel_info::AbstractVector{Int64}, 
+    scans::AbstractMatrix{Int64}, 
+    msi_data::MSIData, 
+    scan_time_deltas::AbstractVector{Int64}, 
+    pixel_time_deltas::AbstractVector{Int64}
+)
     pixel_time = pixel_info[3]
     first_scan = pixel_info[4]
     last_scan = pixel_info[5]
     num_actions = last_scan - first_scan
 
-    # Get reference m/z array from the first scan involved
+    # Get reference m/z array from the first scan involved.
+    # This call remains type-unstable, but its impact is now isolated and only paid once.
     mz_array, _ = GetSpectrum(msi_data, first_scan)
+    
+    # If the first spectrum was empty, we can't do anything else.
+    if isempty(mz_array)
+        return (mz_array, Float32[])
+    end
+    
     new_intensity = zeros(Float32, length(mz_array))
 
     # SAFETY: Ensure we have valid scan indices
@@ -415,40 +423,46 @@ function RenderPixel(pixel_info, scans, msi_data::MSIData, scan_time_deltas, pix
     end
 
     if num_actions == 0 # Single scan contributes to the pixel
-        _, intensity = GetSpectrum(msi_data, first_scan)
-        # SAFETY: Ensure positive scaling
-        scale = max(pixel_time_deltas[first_scan] / scan_time_deltas[first_scan], 0.0f0)
-        new_intensity .= intensity .* scale
+        process_spectrum(msi_data, first_scan) do _, intensity
+            # SAFETY: Ensure positive scaling
+            scale = max(pixel_time_deltas[first_scan] / scan_time_deltas[first_scan], 0.0f0)
+            new_intensity .= intensity .* scale
+        end
 
     elseif num_actions == 1 # Two partial scans contribute
         # First partial scan
-        _, intensity1 = GetSpectrum(msi_data, first_scan)
-        scale1 = max((scans[last_scan, 2] - pixel_time) / scan_time_deltas[first_scan], 0.0f0)
-        new_intensity .+= intensity1 .* scale1
+        process_spectrum(msi_data, first_scan) do _, intensity1
+            scale1 = max((scans[last_scan, 2] - pixel_time) / scan_time_deltas[first_scan], 0.0f0)
+            new_intensity .+= intensity1 .* scale1
+        end
 
         # Second partial scan
-        _, intensity2 = GetSpectrum(msi_data, last_scan)
-        next_pixel_time = pixel_time + pixel_time_deltas[first_scan]
-        scale2 = max((next_pixel_time - scans[last_scan, 2]) / scan_time_deltas[last_scan], 0.0f0)
-        new_intensity .+= intensity2 .* scale2
+        process_spectrum(msi_data, last_scan) do _, intensity2
+            next_pixel_time = pixel_time + pixel_time_deltas[first_scan]
+            scale2 = max((next_pixel_time - scans[last_scan, 2]) / scan_time_deltas[last_scan], 0.0f0)
+            new_intensity .+= intensity2 .* scale2
+        end
 
     elseif num_actions > 1 # Multiple scans contribute
         # First partial scan
-        _, intensity1 = GetSpectrum(msi_data, first_scan)
-        scale1 = max((scans[first_scan + 1, 2] - pixel_time) / scan_time_deltas[first_scan], 0.0f0)
-        new_intensity .+= intensity1 .* scale1
+        process_spectrum(msi_data, first_scan) do _, intensity1
+            scale1 = max((scans[first_scan + 1, 2] - pixel_time) / scan_time_deltas[first_scan], 0.0f0)
+            new_intensity .+= intensity1 .* scale1
+        end
 
         # Full scans in the middle
         for i in (first_scan + 1):(last_scan - 1)
-            _, intensity_middle = GetSpectrum(msi_data, i)
-            new_intensity .+= intensity_middle
+            process_spectrum(msi_data, i) do _, intensity_middle
+                new_intensity .+= intensity_middle
+            end
         end
 
         # Last partial scan
-        _, intensity2 = GetSpectrum(msi_data, last_scan)
-        next_pixel_time = pixel_time + pixel_time_deltas[first_scan]
-        scale2 = max((next_pixel_time - scans[last_scan, 2]) / scan_time_deltas[last_scan], 0.0f0)
-        new_intensity .+= intensity2 .* scale2
+        process_spectrum(msi_data, last_scan) do _, intensity2
+            next_pixel_time = pixel_time + pixel_time_deltas[first_scan]
+            scale2 = max((next_pixel_time - scans[last_scan, 2]) / scan_time_deltas[last_scan], 0.0f0)
+            new_intensity .+= intensity2 .* scale2
+        end
     end
 
     # FINAL SAFETY: Clamp any negative values to zero

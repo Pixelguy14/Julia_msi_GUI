@@ -329,6 +329,42 @@ function GetSpectrum(data::MSIData, x::Int, y::Int)
 end
 
 """
+    process_spectrum(f::Function, data::MSIData, index::Int)
+
+A "function barrier" helper for safely processing a single spectrum.
+
+This function retrieves a spectrum and then immediately calls the provided function `f`
+with the resulting `(mz, intensity)` arrays. This pattern is crucial for performance.
+While `GetSpectrum` itself is type-unstable (because the array data types are not
+known at compile time), calling `f` with the result allows Julia's compiler to
+generate specialized, fast code for `f` based on the *concrete* types it receives.
+
+Use this function when you need to perform performance-critical operations on a
+single spectrum. Your logic should be inside the function passed to this helper.
+```
+"""
+function process_spectrum(f::Function, data::MSIData, index::Int)
+    # This call is type-unstable.
+    mz, intensity = GetSpectrum(data, index)
+    
+    # By immediately calling `f`, we create a "function barrier".
+    # Julia will compile a specialized version of `f` for the
+    # concrete types of `mz` and `intensity`.
+    return f(mz, intensity)
+end
+
+"""
+    process_spectrum(f::Function, data::MSIData, x::Int, y::Int)
+
+A coordinate-based version of the "function barrier" helper. See `process_spectrum`
+for details on the performance pattern.
+"""
+function process_spectrum(f::Function, data::MSIData, x::Int, y::Int)
+    mz, intensity = GetSpectrum(data, x, y)
+    return f(mz, intensity)
+end
+
+"""
     precompute_analytics(msi_data::MSIData)
 
 Performs a single pass over the entire dataset to pre-compute and cache important
@@ -680,15 +716,11 @@ This is effectively the total spectrum divided by the number of spectra.
 Returns a tuple containing two vectors: the binned m/z axis and the averaged intensities.
 """
 function get_average_spectrum(msi_data::MSIData; num_bins::Int=2000)
-    # This function uses the exact same logic as get_total_spectrum...
     mz_bins, intensity_sum = get_total_spectrum(msi_data, num_bins=num_bins)
 
     if isempty(intensity_sum)
         return (mz_bins, intensity_sum)
     end
-
-    # ...with one final step: dividing by the number of spectra to get the average.
-    println("Averaging spectrum...")
     num_spectra = length(msi_data.spectra_metadata)
     average_intensity = intensity_sum ./ num_spectra
     

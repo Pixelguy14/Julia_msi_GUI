@@ -111,9 +111,10 @@ function validate_msi_data(filepath::String)
         println("Testing indices: $test_indices")
         for idx in test_indices
             print("Fetching spectrum #$idx... ")
-            mz, intensity = @time GetSpectrum(msi_data, idx)
-            @assert length(mz) == length(intensity) "Spectrum $idx: mz/intensity length mismatch. Got $(length(mz)) mz values and $(length(intensity)) intensity values."
-            println("OK, $(length(mz)) points.")
+            @time process_spectrum(msi_data, idx) do mz, intensity
+                @assert length(mz) == length(intensity) "Spectrum $idx: mz/intensity length mismatch. Got $(length(mz)) mz values and $(length(intensity)) intensity values."
+                println("OK, $(length(mz)) points.")
+            end
         end
         
         # 4. Test iteration
@@ -180,18 +181,17 @@ function run_test()
         # Also run original plotting test to ensure visualization still works
         if isfile(TEST_MZML_FILE)
             try
-                # Get the msi data from the mzml
                 println("Plotting a sample spectrum from $TEST_MZML_FILE...")
                 msi_data = @time OpenMSIData(TEST_MZML_FILE)
-                mz, intensity = GetSpectrum(msi_data, SPECTRUM_TO_PLOT)
-                
-                fig = Figure(size = (800, 600))
-                ax = Axis(fig[1, 1], xlabel="m/z", ylabel="Intensity", title="Spectrum #$SPECTRUM_TO_PLOT from $(basename(TEST_MZML_FILE))")
-                lines!(ax, mz, intensity)
-                
-                output_path = joinpath(RESULTS_DIR, "test_mzml_spectrum.png")
-                save(output_path, fig)
-                println("SUCCESS: Spectrum plot saved to $output_path")
+                process_spectrum(msi_data, SPECTRUM_TO_PLOT) do mz, intensity
+                    fig = Figure(size = (800, 600))
+                    ax = Axis(fig[1, 1], xlabel="m/z", ylabel="Intensity", title="Spectrum #$SPECTRUM_TO_PLOT from $(basename(TEST_MZML_FILE))")
+                    lines!(ax, mz, intensity)
+                    
+                    output_path = joinpath(RESULTS_DIR, "test_mzml_spectrum.png")
+                    save(output_path, fig)
+                    println("SUCCESS: Spectrum plot saved to $output_path")
+                end
                 # Get the summed spectrum data
                 mz, intensity = get_total_spectrum(msi_data)
 
@@ -273,17 +273,18 @@ function run_test()
                 
                 println("DIAGNOSTIC_READ: Reading from coordinate_map[$x_coord, $y_coord]. Value is $(msi_data.coordinate_map[x_coord, y_coord]).")
                 
-                # Get the x y coordinate spectrum data
-                mz, intensity = GetSpectrum(msi_data, Int(x_coord), Int(y_coord))
-                # Plot the data
-                fig = Figure(size = (800, 600))
-                ax = Axis(fig[1, 1], xlabel="m/z", ylabel="Intensity", title="Spectrum at ($x_coord, $y_coord) from $(basename(TEST_IMZML_FILE))")
-                lines!(ax, mz, intensity)
-                
-                # Saving the output
-                output_path = joinpath(RESULTS_DIR, "test_imzml_spectrum.png")
-                save(output_path, fig)
-                println("SUCCESS: Spectrum plot saved to $output_path")
+                # Get the x y coordinate spectrum data and plot it using the function barrier
+                process_spectrum(msi_data, Int(x_coord), Int(y_coord)) do mz, intensity
+                    # Plot the data
+                    fig = Figure(size = (800, 600))
+                    ax = Axis(fig[1, 1], xlabel="m/z", ylabel="Intensity", title="Spectrum at ($x_coord, $y_coord) from $(basename(TEST_IMZML_FILE))")
+                    lines!(ax, mz, intensity)
+                    
+                    # Saving the output
+                    output_path = joinpath(RESULTS_DIR, "test_imzml_spectrum.png")
+                    save(output_path, fig)
+                    println("SUCCESS: Spectrum plot saved to $output_path")
+                end
 
                 # Get the summed spectrum data
                 mz, intensity = get_total_spectrum(msi_data)

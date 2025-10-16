@@ -502,13 +502,21 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
         x = clamp(xCoord, 1, imgWidth)
         y = clamp(yCoord, 1, imgHeight)
         
-        mz, intensity = GetSpectrum(data, Int(x), Int(y))
+        # mz, intensity = GetSpectrum(data, Int(x), Int(y))
+        process_spectrum(data, Int(x), Int(y)) do recieved_mz, recieved_intensity
+            mz = recieved_mz
+            intensity = recieved_intensity
+        end
         plot_title = "Spectrum at ($x, $y)"
     else
         # For non-imaging data, treat xCoord as the spectrum index
         index = clamp(xCoord, 1, length(data.spectra_metadata))
         
-        mz, intensity = GetSpectrum(data, index)
+        # mz, intensity = GetSpectrum(data, index)
+        process_spectrum(data, index)  do recieved_mz, recieved_intensity
+            mz = recieved_mz
+            intensity = recieved_intensity
+        end
         plot_title = "Spectrum #$index"
     end
 

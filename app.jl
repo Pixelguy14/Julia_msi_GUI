@@ -18,7 +18,7 @@ using Base.Filesystem: mv # To rename files in the system
 using Printf # Required for @sprintf macro in colorbar generation
 
 # Bring MSIData into App module's scope
-using .MSI_src: MSIData, OpenMSIData, GetSpectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics
+using .MSI_src: MSIData, OpenMSIData, #=GetSpectrum,=# process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile
 
 include("./julia_imzML_visual.jl")
 
@@ -129,6 +129,17 @@ include("./julia_imzML_visual.jl")
 
     # Saves the route where imzML and mzML files are located
     @out full_route=""
+
+    # == Converter Tab Variables ==
+    @in left_tab = "generator"
+    @out mzml_full_route = ""
+    @out sync_full_route = ""
+    @in btnSearchMzml = false
+    @in btnSearchSync = false
+    @in convert_process = false
+    @out progress_conversion = false
+    @out msg_conversion = ""
+    @out btnConvertDisable = true
 
 
     # For the creation of images with a more specific mass charge
@@ -392,6 +403,69 @@ include("./julia_imzML_visual.jl")
 
     @onbutton showMetadataBtn begin
         showMetadataDialog = true
+    end
+
+    @onchange btnSearchMzml, btnSearchSync begin
+        if btnSearchMzml
+            picked_route = pick_file(; filterlist="mzML,mzml")
+            if !isempty(picked_route)
+                mzml_full_route = picked_route
+            end
+            btnSearchMzml = false # Reset the button
+        end
+
+        if btnSearchSync
+            picked_route = pick_file(; filterlist="txt")
+            if !isempty(picked_route)
+                sync_full_route = picked_route
+            end
+            btnSearchSync = false # Reset the button
+        end
+
+        # Enable button only if both files are selected
+        btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
+    end
+
+    @onbutton convert_process begin
+        if isempty(mzml_full_route) || isempty(sync_full_route)
+            msg_conversion = "Please select both an .mzML file and a .txt sync file."
+            warning_msg = true
+            return
+        end
+
+        progress_conversion = true
+        btnConvertDisable = true
+        msg_conversion = "Starting conversion process..."
+
+        @async begin
+            try
+                sTime = time()
+                target_imzml = replace(mzml_full_route, r"\.(mzml|mzML)$" => ".imzML")
+                
+                msg_conversion = "Converting $(basename(mzml_full_route)) to $(basename(target_imzml))... This may take a while."
+
+                success = ImportMzmlFile(mzml_full_route, sync_full_route, target_imzml)
+
+                fTime = time()
+                eTime = round(fTime - sTime, digits=3)
+
+                if success
+                    msg_conversion = "Conversion successful in $(eTime) seconds. Output file: $(basename(target_imzml))"
+                else
+                    msg_conversion = "Conversion failed after $(eTime) seconds. Check console for errors."
+                    warning_msg = true
+                end
+
+            catch e
+                msg_conversion = "An error occurred during conversion: $e"
+                warning_msg = true
+                @error "Conversion failed" exception=(e, catch_backtrace())
+            finally
+                progress_conversion = false
+                # Re-enable button if files are still selected
+                btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
+            end
+        end
     end
     
     @onbutton mainProcess @time begin
