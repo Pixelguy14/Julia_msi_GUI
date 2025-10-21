@@ -794,6 +794,84 @@ end
 
 
 """
+    get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, tolerance::Real)
+
+Extracts multiple image slices for a given list of m/z values in a single pass.
+This is a highly performant function that iterates through the full dataset only once.
+
+# Returns
+- A `Dict{Real, Matrix{Float64}}` mapping each mass to its intensity slice matrix.
+"""
+function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, tolerance::Real)
+    width, height = data.image_dims
+    
+    # 1. Initialize a dictionary to hold the output slice matrices
+    slice_dict = Dict{Real, Matrix{Float64}}()
+    for mass in masses
+        slice_dict[mass] = zeros(Float64, height, width)
+    end
+
+    # 2. Ensure analytics are computed for filtering.
+    if data.spectrum_stats_df === nothing || !hasproperty(data.spectrum_stats_df, :MinMZ)
+        println("Per-spectrum metadata not found. Running one-time analytics computation...")
+        precompute_analytics(data)
+    end
+
+    println("Filtering candidate spectra for $(length(masses)) m/z values...")
+    stats_df = data.spectrum_stats_df
+    candidate_indices = Set{Int}()
+
+    # 3. Find all spectra that could contain *any* of the requested masses.
+    for mass in masses
+        target_min = mass - tolerance
+        target_max = mass + tolerance
+        for i in 1:length(data.spectra_metadata)
+            # If already a candidate, no need to check again
+            if i in candidate_indices
+                continue
+            end
+            spec_min_mz = stats_df.MinMZ[i]
+            spec_max_mz = stats_df.MaxMZ[i]
+            if target_max >= spec_min_mz && target_min <= spec_max_mz
+                push!(candidate_indices, i)
+            end
+        end
+    end
+
+    println("Found $(length(candidate_indices)) total candidate spectra.")
+
+    # 4. Iterate through the data a single time using the optimized iterator.
+    _iterate_spectra_fast(data) do idx, mz_array, intensity_array
+        # Process only the spectra that are candidates
+        if idx in candidate_indices
+            meta = data.spectra_metadata[idx]
+            # For this single spectrum, check all masses of interest
+            for mass in masses
+                # Check if this spectrum's range actually covers the current mass
+                # This is a finer-grained check than the initial filtering
+                if !isempty(mz_array) && (mass + tolerance) >= first(mz_array) && (mass - tolerance) <= last(mz_array)
+                    intensity = find_mass(mz_array, intensity_array, mass, tolerance)
+                    if intensity > 0.0
+                        if 1 <= meta.x <= width && 1 <= meta.y <= height
+                            slice_dict[mass][meta.y, meta.x] = intensity
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    # 5. Clean up and return
+    for mass in masses
+        replace!(slice_dict[mass], NaN => 0.0)
+    end
+    
+    println("Finished generating $(length(masses)) slices in a single pass.")
+    return slice_dict
+end
+
+
+"""
     plot_slice(msi_data::MSIData, mass::Float64, tolerance::Float64, output_dir::String; stage_name="slice", bins=256)
 
 Generates and saves a plot of a single image slice for a given m/z value.

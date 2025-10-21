@@ -1,9 +1,6 @@
 public/*
 public/css/imgOver.png
 !public/css/
-!public/masks/
-public/masks/*
-!public/masks/static.txt
 log/*
 R_original_scripts/
 test/results/

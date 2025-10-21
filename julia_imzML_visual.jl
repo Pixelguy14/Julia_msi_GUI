@@ -452,10 +452,11 @@ end
 # returns the layout and data for the surface plotly plot
 # this function loads the spectra data and makes a mean to display
 # its values in the spectrum plot
-function meanSpectrumPlot(data::MSIData)
+function meanSpectrumPlot(data::MSIData, dataset_name::String="")
+    title_text = isempty(dataset_name) ? "Average Spectrum Plot" : "Average Spectrum for: $dataset_name"
     layout = PlotlyBase.Layout(
         title=PlotlyBase.attr(
-            text="Average Spectrum Plot",
+            text=title_text,
             font=PlotlyBase.attr(
                 family="Roboto, Lato, sans-serif",
                 size=18,
@@ -480,9 +481,9 @@ function meanSpectrumPlot(data::MSIData)
 
     if isempty(xSpectraMz)
         @warn "Average spectrum is empty."
-        trace = PlotlyBase.stem(x=Float64[], y=Float64[])
+        trace = PlotlyBase.scatter(x=Float64[], y=Float64[])
     else
-        trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x",hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        trace = PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x",hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
     end
 
 
@@ -491,7 +492,7 @@ function meanSpectrumPlot(data::MSIData)
     return plotdata, plotlayout, xSpectraMz, ySpectraMz
 end
 
-function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, imgHeight::Int)
+function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, imgHeight::Int, dataset_name::String="")
     local mz::AbstractVector, intensity::AbstractVector
     local plot_title::String
 
@@ -502,23 +503,23 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
         x = clamp(xCoord, 1, imgWidth)
         y = clamp(yCoord, 1, imgHeight)
         
-        # mz, intensity = GetSpectrum(data, Int(x), Int(y))
         process_spectrum(data, Int(x), Int(y)) do recieved_mz, recieved_intensity
             mz = recieved_mz
             intensity = recieved_intensity
         end
-        plot_title = "Spectrum at ($x, $y)"
+        base_title = "Spectrum at ($x, $y)"
     else
         # For non-imaging data, treat xCoord as the spectrum index
         index = clamp(xCoord, 1, length(data.spectra_metadata))
         
-        # mz, intensity = GetSpectrum(data, index)
         process_spectrum(data, index)  do recieved_mz, recieved_intensity
             mz = recieved_mz
             intensity = recieved_intensity
         end
-        plot_title = "Spectrum #$index"
+        base_title = "Spectrum #$index"
     end
+
+    plot_title = isempty(dataset_name) ? base_title : "$base_title for: $dataset_name"
 
     layout = PlotlyBase.Layout(
         title=PlotlyBase.attr(
@@ -545,7 +546,7 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     # Downsample for plotting performance
     mz_down, int_down = MSI_src.downsample_spectrum(mz, intensity)
 
-    trace = PlotlyBase.stem(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    trace = PlotlyBase.scatter(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
     
     plotdata = [trace]
     plotlayout = layout
@@ -553,10 +554,11 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     return plotdata, plotlayout, mz, intensity
 end
 
-function sumSpectrumPlot(data::MSIData)
+function sumSpectrumPlot(data::MSIData, dataset_name::String="")
+    title_text = isempty(dataset_name) ? "Total Spectrum Plot" : "Total Spectrum for: $dataset_name"
     layout = PlotlyBase.Layout(
         title=PlotlyBase.attr(
-            text="Total Spectrum Plot",
+            text=title_text,
             font=PlotlyBase.attr(
                 family="Roboto, Lato, sans-serif",
                 size=18,
@@ -581,12 +583,47 @@ function sumSpectrumPlot(data::MSIData)
 
     if isempty(xSpectraMz)
         @warn "Total spectrum is empty."
-        trace = PlotlyBase.stem(x=Float64[], y=Float64[])
+        trace = PlotlyBase.scatter(x=Float64[], y=Float64[])
     else
-        trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x",hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        trace = PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x",hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
     end
 
     plotdata = [trace]
     plotlayout = layout
     return plotdata, plotlayout, xSpectraMz, ySpectraMz
+end
+
+function warmup_init()
+    @async begin
+        println("Pre-compiling functions at startup...")
+        
+        # Create a dummy MSIData object to be used for pre-compilation
+        # dummy_source = ImzMLSource("dummy.ibd", Float32, Float32)
+        # dummy_meta = MSI_src.SpectrumMetadata(0,0,"",MSI_src.UNKNOWN, MSI_src.SpectrumAsset(Float32,false,0,0,:mz), MSI_src.SpectrumAsset(Float32,false,0,0,:intensity))
+        # dummy_msi_data = MSIData(dummy_source, [dummy_meta], (1,1), zeros(Int,1,1), 0)
+
+        # Pre-compile functions from btnSearch
+        # try OpenMSIData("dummy.imzML") catch end
+        # try precompute_analytics(dummy_msi_data) catch end
+
+        # Pre-compile functions from mainProcess
+        # try get_mz_slice(dummy_msi_data, 1.0, 1.0) catch end
+        try TrIQ(zeros(10,10), 256, 0.98) catch end
+        try quantize_intensity(zeros(10,10), 256) catch end
+        
+        dummy_bmp_path = joinpath("public", "dummy.bmp")
+        dummy_png_path = joinpath("public", "dummy.png")
+        try 
+            save_bitmap(dummy_bmp_path, zeros(UInt8, 10, 10), ViridisPalette)
+            loadImgPlot("/dummy.bmp")
+            generate_colorbar_image(zeros(10,10), 256, dummy_png_path)
+        catch e
+            @warn "Pre-compilation step failed (this is expected if dummy files can't be created/read)"
+        finally
+            rm(dummy_bmp_path, force=true)
+            rm(dummy_png_path, force=true)
+        end
+
+        println("Pre-compilation finished.")
+    end
 end

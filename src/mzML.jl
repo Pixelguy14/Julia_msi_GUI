@@ -103,8 +103,36 @@ the m/z and intensity array metadata.
 function parse_spectrum_metadata(stream::IO, offset::Int64)
     seek(stream, offset)
     
-    id_match = find_tag(stream, r"<spectrum\s+index=\"\d+\"\s+id=\"([^\"]+)" )
+    # Read the whole spectrum block to parse mode
+    spectrum_start_pos = position(stream)
+    line = ""
+    spectrum_buffer = IOBuffer()
+    while !eof(stream)
+        line = readline(stream)
+        write(spectrum_buffer, line)
+        if occursin("</spectrum>", line)
+            break
+        end
+    end
+    spectrum_xml = String(take!(spectrum_buffer))
+    seek(stream, spectrum_start_pos) # Reset for other parsing
+
+    id_match = match(r"<spectrum\s+index=\"\d+\"\s+id=\"([^\"]+)", spectrum_xml)
     id = id_match === nothing ? "" : id_match.captures[1]
+
+    # Determine mode from the XML block
+    mode = UNKNOWN
+    if occursin("MS:1000127", spectrum_xml)
+        mode = CENTROID
+    elseif occursin("MS:1000128", spectrum_xml)
+        mode = PROFILE
+    end
+
+    # Find where the binary data list starts to parse assets
+    binary_list_match = findfirst("<binaryDataArrayList", spectrum_xml)
+    if binary_list_match !== nothing
+        seek(stream, spectrum_start_pos + binary_list_match.start - 1)
+    end
 
     asset1 = get_spectrum_asset_metadata(stream)
     asset2 = get_spectrum_asset_metadata(stream)
@@ -118,7 +146,7 @@ function parse_spectrum_metadata(stream::IO, offset::Int64)
 
     # Create the new unified metadata object
     # For mzML, x and y coordinates are not applicable, so we use 0.
-    return SpectrumMetadata(Int32(0), Int32(0), id, UNKNOWN, mz_asset, int_asset)
+    return SpectrumMetadata(Int32(0), Int32(0), id, mode, mz_asset, int_asset)
 end
 
 """

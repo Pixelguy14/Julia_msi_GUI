@@ -497,13 +497,18 @@ function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing
         open(target_ibd_file, "w") do ibd_stream
             write(ibd_stream, zeros(UInt8, 16)) # UUID placeholder
         end
-        return BinaryMetadata[], Tuple{Int, Int}[], (0, 0)
+        return BinaryMetadata[], Tuple{Int, Int}[], (0, 0), UNKNOWN
     end
     
     width = maximum(timing_matrix[:, 1])
     height = maximum(timing_matrix[:, 2])
 
     msi_data = OpenMSIData(source_file)
+
+    source_mode = UNKNOWN
+    if !isempty(msi_data.spectra_metadata)
+        source_mode = msi_data.spectra_metadata[1].mode
+    end
 
     scan_time_deltas = zeros(Int64, size(scans, 1))
     if size(scans, 1) > 1
@@ -553,7 +558,7 @@ function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing
             # Write m/z array
             mz_offset = position(ibd_stream)
             for val in mz
-                write(ibd_stream, htol(Float64(val)))
+                write(ibd_stream, htol(Float32(val)))
             end
             mz_length = position(ibd_stream) - mz_offset
 
@@ -569,7 +574,7 @@ function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing
     end
 
     @info "Found and processed $empty_pixel_count empty pixels out of $(size(timing_matrix, 1)) total."
-    return binary_meta_vec, coords_vec, (width, height)
+    return binary_meta_vec, coords_vec, (width, height), source_mode
 end
 
 """
@@ -589,7 +594,7 @@ experiment and data format.
 # Returns
 - `true` on success, `false` on failure.
 """
-function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, coords::Vector{Tuple{Int, Int}}, dims::Tuple{Int, Int})
+function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, coords::Vector{Tuple{Int, Int}}, dims::Tuple{Int, Int}, mode::SpectrumMode)
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
     
     if isempty(binary_meta)
@@ -604,8 +609,7 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
         open(target_file, "w") do imzml_stream
             # XML Header
             write(imzml_stream, """<?xml version="1.0" encoding="ISO-8859-1"?>
-<indexedmzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0_idx.xsd">
-  <mzML version="1.1" id="$(splitext(basename(target_file))[1])">
+<mzML xmlns="http://psi.hupo.org/ms/mzml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.0.xsd" version="1.1" id="$(splitext(basename(target_file))[1])">
 """)
 
             # CV List, File Description, etc. (static parts)
@@ -627,13 +631,11 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
     <referenceableParamGroup id="mzArray">
       <cvParam cvRef="MS" accession="MS:1000576" name="no compression"/>
       <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
-      <cvParam cvRef="IMS" accession="IMS:1000101" name="external data" value="true"/>
-      <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float"/>
+      <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float"/>
     </referenceableParamGroup>
     <referenceableParamGroup id="intensityArray">
       <cvParam cvRef="MS" accession="MS:1000576" name="no compression"/>
       <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" unitCvRef="MS" unitAccession="MS:1000131" unitName="number of counts"/>
-      <cvParam cvRef="IMS" accession="IMS:1000101" name="external data" value="true"/>
       <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float"/>
     </referenceableParamGroup>
   </referenceableParamGroupList>
@@ -699,13 +701,20 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
                 push!(spectrum_offsets, spectrum_start)
 
                 # Calculate number of points from byte length
-                mz_points = meta.mz_length ÷ sizeof(Float64)
+                mz_points = meta.mz_length ÷ sizeof(Float32)
                 int_points = meta.int_length ÷ sizeof(Float32)
 
                 write(imzml_stream, """      <spectrum id="Scan=$(i)" defaultArrayLength="$(mz_points)" index="$(i-1)">
         <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="1"/>
-        <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum"/>
-        <scanList count="1">
+""")
+                if mode == CENTROID
+                    write(imzml_stream, """        <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum"/>
+""")
+                else
+                    write(imzml_stream, """        <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum"/>
+""")
+                end
+                write(imzml_stream, """        <scanList count="1">
           <scan instrumentConfigurationRef="instrument1">
             <cvParam cvRef="IMS" accession="IMS:1000050" name="position x" value="$(x)"/>
             <cvParam cvRef="IMS" accession="IMS:1000051" name="position y" value="$(y)"/>
@@ -714,16 +723,14 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
         <binaryDataArrayList count="2">
           <binaryDataArray encodedLength="0">
             <referenceableParamGroupRef ref="mzArray"/>
-            <cvParam cvRef="IMS" accession="IMS:1000102" name="external offset" value="$(meta.mz_offset)"/>
             <cvParam cvRef="IMS" accession="IMS:1000103" name="external array length" value="$(mz_points)"/>
-            <cvParam cvRef="IMS" accession="IMS:1000104" name="external encoded length" value="$(meta.mz_length)"/>
+            <cvParam cvRef="IMS" accession="IMS:1000102" name="external offset" value="$(meta.mz_offset)"/>
             <binary/>
           </binaryDataArray>
           <binaryDataArray encodedLength="0">
             <referenceableParamGroupRef ref="intensityArray"/>
-            <cvParam cvRef="IMS" accession="IMS:1000102" name="external offset" value="$(meta.int_offset)"/>
             <cvParam cvRef="IMS" accession="IMS:1000103" name="external array length" value="$(int_points)"/>
-            <cvParam cvRef="IMS" accession="IMS:1000104" name="external encoded length" value="$(meta.int_length)"/>
+            <cvParam cvRef="IMS" accession="IMS:1000102" name="external offset" value="$(meta.int_offset)"/>
             <binary/>
           </binaryDataArray>
         </binaryDataArrayList>
@@ -734,19 +741,6 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
             write(imzml_stream, """    </spectrumList>
   </run>
 </mzML>
-""")
-            # Index List
-            index_list_start = position(imzml_stream)
-            write(imzml_stream, """  <indexList count="1">
-    <index name="spectrum">
-""")
-            for (i, offset) in enumerate(spectrum_offsets)
-                write(imzml_stream, "      <offset idRef=\"Scan=$(i)\">$offset</offset>\n")
-            end
-            write(imzml_stream, """    </index>
-  </indexList>
-  <indexListOffset>$index_list_start</indexListOffset>
-</indexedmzML>
 """)
         end
 
@@ -784,13 +778,13 @@ function ImportMzmlFile(source_file::String, sync_file::String, target_file::Str
 
     println("Step 3: Converting spectra and writing .ibd file...")
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
-    binary_meta, coords, (width, height) = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans)
+    binary_meta, coords, (width, height), source_mode = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans)
 
     # Flip image vertically to match R script output
     flipped_coords = [(x, height - y + 1) for (x, y) in coords]
 
     println("Step 4: Exporting .imzML metadata file...")
-    success = ExportImzml(target_file, binary_meta, flipped_coords, (width, height))
+    success = ExportImzml(target_file, binary_meta, flipped_coords, (width, height), source_mode)
 
     if success
         println("Conversion successful: $target_file")

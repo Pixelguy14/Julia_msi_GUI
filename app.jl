@@ -16,11 +16,160 @@ using NativeFileDialog # Opens the file explorer depending on the OS
 using StipplePlotly
 using Base.Filesystem: mv # To rename files in the system
 using Printf # Required for @sprintf macro in colorbar generation
+using JSON
+using Dates
 
 # Bring MSIData into App module's scope
-using .MSI_src: MSIData, OpenMSIData, #=GetSpectrum,=# process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile
+using .MSI_src: MSIData, OpenMSIData, #=GetSpectrum,=# process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile
 
 include("./julia_imzML_visual.jl")
+
+function load_registry(registry_path)
+    if isfile(registry_path)
+        try
+            return JSON.parsefile(registry_path, dicttype=Dict{String, Any})
+        catch e
+            @error "Failed to parse registry.json: $e"
+            return Dict{String, Any}()
+        end
+    end
+    return Dict{String, Any}()
+end
+
+function extract_metadata(msi_data::MSIData, source_path::String)
+    df = msi_data.spectrum_stats_df
+    if df === nothing
+        # This can happen if precompute_analytics hasn't been run
+        # We can still return basic info
+        return Dict(
+            "summary" => [
+                Dict("parameter" => "File Name", "value" => basename(source_path)),
+                Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
+                Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
+            ],
+            "global_min_mz" => nothing,
+            "global_max_mz" => nothing
+        )
+    end
+
+    summary_stats = [
+        Dict("parameter" => "File Name", "value" => basename(source_path)),
+        Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
+        Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
+        Dict("parameter" => "Global Min m/z", "value" => @sprintf("%.4f", msi_data.global_min_mz)),
+        Dict("parameter" => "Global Max m/z", "value" => @sprintf("%.4f", msi_data.global_max_mz)),
+        Dict("parameter" => "Mean TIC", "value" => @sprintf("%.2e", mean(df.TIC))),
+        Dict("parameter" => "Mean BPI", "value" => @sprintf("%.2e", mean(df.BPI))),
+        Dict("parameter" => "Mean # Points", "value" => @sprintf("%.1f", mean(df.NumPoints))),
+    ]
+
+    if hasproperty(df, :Mode)
+        centroid_count = count(==(MSI_src.CENTROID), df.Mode)
+        profile_count = count(==(MSI_src.PROFILE), df.Mode)
+        unknown_count = count(==(MSI_src.UNKNOWN), df.Mode)
+        
+        push!(summary_stats, Dict("parameter" => "Centroid Spectra", "value" => string(centroid_count)))
+        push!(summary_stats, Dict("parameter" => "Profile Spectra", "value" => string(profile_count)))
+        if unknown_count > 0
+            push!(summary_stats, Dict("parameter" => "Unknown Mode Spectra", "value" => string(unknown_count)))
+        end
+    end
+
+    return Dict(
+        "summary" => summary_stats,
+        "global_min_mz" => msi_data.global_min_mz,
+        "global_max_mz" => msi_data.global_max_mz
+    )
+end
+
+function update_registry(registry_path, dataset_name, source_path, metadata=nothing, is_imzML=false)
+    registry = load_registry(registry_path)
+    entry = Dict{String, Any}( # Explicitly type the dictionary to allow mixed value types
+        "source_path" => source_path, 
+        "processed_date" => string(now()),
+        "is_imzML" => is_imzML
+    )
+    if metadata !== nothing
+        entry["metadata"] = metadata
+    end
+    registry[dataset_name] = entry
+    
+    try
+        open(registry_path, "w") do f
+            JSON.print(f, registry, 4)
+        end
+    catch e
+        @error "Failed to write to registry.json: $e"
+    end
+end
+
+function process_file_safely(file_path, masses, params, progress_message_ref, overall_progress_ref)
+    local_msi_data = nothing
+    dataset_name = replace(basename(file_path), r"\.imzML$"i => "")
+    output_dir = joinpath("public", dataset_name)
+    println("Processing: $dataset_name -> $output_dir")
+    
+    try
+        # --- Load Data ---
+        progress_message_ref = "Loading: $(basename(file_path))"
+        local_msi_data = OpenMSIData(file_path)
+        if !(local_msi_data.source isa ImzMLSource)
+            @warn "Skipping non-imzML file: $(basename(file_path))"
+            return (false, "Skipped: Not an imzML file")
+        end
+
+        # --- Generate Slices (this will call precompute_analytics if needed) ---
+        progress_message_ref = "Generating $(length(masses)) slices for $(dataset_name)..."
+        slice_dict = get_multiple_mz_slices(local_msi_data, masses, params.tolerance)
+
+        # --- Extract metadata *after* it has been computed ---
+        metadata = extract_metadata(local_msi_data, file_path)
+
+        # --- Save Slices ---
+        mkpath(output_dir)  # Ensure output directory exists
+        
+        for (mass_idx, mass) in enumerate(masses)
+            progress_message_ref = "File $(params.fileIdx)/$(params.nFiles): Saving slice for m/z=$mass"
+            
+            slice = slice_dict[mass]
+            text_nmass = replace(string(mass), "." => "_")
+            bitmap_filename = params.triqE ? "TrIQ_$(text_nmass).bmp" : "MSI_$(text_nmass).bmp"
+            colorbar_filename = params.triqE ? "colorbar_TrIQ_$(text_nmass).png" : "colorbar_MSI_$(text_nmass).png"
+
+            if all(iszero, slice)
+                sliceQuant = zeros(UInt8, size(slice))
+                @warn "No intensity data for m/z = $mass in $(dataset_name)"
+            else
+                sliceQuant = params.triqE ? TrIQ(slice, params.colorL, params.triqP) : quantize_intensity(slice, params.colorL)
+                if params.medianF
+                    sliceQuant = round.(UInt8, median_filter(sliceQuant))
+                end
+            end
+
+            save_bitmap(joinpath(output_dir, bitmap_filename), sliceQuant, ViridisPalette)
+            if !all(iszero, slice)
+                generate_colorbar_image(slice, params.colorL, joinpath(output_dir, colorbar_filename); use_triq=params.triqE, triq_prob=params.triqP)
+            end
+        end
+        
+        is_imzML = local_msi_data.source isa ImzMLSource
+        update_registry(params.registry, dataset_name, file_path, metadata, is_imzML)
+        return (true, "")
+
+    catch e
+        @error "File processing failed" file=file_path exception=(e, catch_backtrace())
+        return (false, "File: $(basename(file_path)) - $(sprint(showerror, e))")
+    finally
+        if local_msi_data !== nothing
+            # Cleanup
+        end
+        local_msi_data = nothing
+        GC.gc(true)
+        if Sys.islinux()
+            ccall(:malloc_trim, Int32, (Int32,), 0)
+        end
+    end
+end
 
 @genietools
 
@@ -36,7 +185,7 @@ include("./julia_imzML_visual.jl")
     ## Interface non Variables
     @out btnStartDisable=true
     @out btnPlotDisable=false
-    @out btnSpectraDisable=true
+    @out btnSpectraDisable=false
     # Loading animations
     @in progress=false
     @in progressPlot=false
@@ -52,13 +201,16 @@ include("./julia_imzML_visual.jl")
     ## Interface Variables
     @in file_route=""
     @in file_name=""
-    @in Nmass=0.0
+    @in Nmass="0.0"
     @in Tol=0.1
     @in triqProb=0.98
     @in colorLevel=20
 
     ## Interface Buttons
     @in btnSearch=false # To search for files in your device
+    @in btnAddBatch = false
+    @in clear_batch_btn = false
+    @out batch_file_count = 0
     @in mainProcess=false # To generate images
     @in compareBtn=false # To open dialog
     @in createMeanPlot=false # To generate mean spectrum plot
@@ -74,18 +226,25 @@ include("./julia_imzML_visual.jl")
     @in imgPlusT=false
     @in imgMinusT=false
     # Image change comparative buttons
-    @in imgPlusComp=false
-    @in imgMinusComp=false
-    @in imgPlusTComp=false
-    @in imgMinusTComp=false
+    @in imgPlusCompLeft=false
+    @in imgMinusCompLeft=false
+    @in imgPlusTCompLeft=false
+    @in imgMinusTCompLeft=false
+    @in imgPlusCompRight=false
+    @in imgMinusCompRight=false
+    @in imgPlusTCompRight=false
+    @in imgMinusTCompRight=false
 
     ## Tabulation variables
     @out tabIDs=["tab0","tab1","tab2","tab3","tab4"]
     @out tabLabels=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
     @in selectedTab="tab0"
-    @out CompTabIDs=["tab0","tab1","tab2","tab3","tab4"]
-    @out CompTabLabels=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
-    @in CompSelectedTab="tab0"
+    @out CompTabIDsLeft=["tab0","tab1","tab2","tab3","tab4"]
+    @out CompTabLabelsLeft=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
+    @in CompSelectedTabLeft="tab0"
+    @out CompTabIDsRight=["tab0","tab1","tab2","tab3","tab4"]
+    @out CompTabLabelsRight=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
+    @in CompSelectedTabRight="tab0"
 
     # Interface Images
     @out imgInt="/.bmp" # image Interface
@@ -93,10 +252,14 @@ include("./julia_imzML_visual.jl")
     @out colorbar="/.png"
     @out colorbarT="/.png"
     # Interface controlling for the comparative view
-    @out imgIntComp="/.bmp" # image Interface
-    @out imgIntTComp="/.bmp" # image Interface TrIQ
-    @out colorbarComp="/.png"
-    @out colorbarTComp="/.png"
+    @out imgIntCompLeft="/.bmp"
+    @out imgIntTCompLeft="/.bmp"
+    @out colorbarCompLeft="/.png"
+    @out colorbarTCompLeft="/.png"
+    @out imgIntCompRight="/.bmp"
+    @out imgIntTCompRight="/.bmp"
+    @out colorbarCompRight="/.png"
+    @out colorbarTCompRight="/.png"
     @out imgWidth=0
     @out imgHeight=0
 
@@ -114,8 +277,10 @@ include("./julia_imzML_visual.jl")
     @out msgimg=""
     @out msgtriq=""
     # Reiteration of the messages under the image to know which spectra is being visualized
-    @out msgimgComp=""
-    @out msgtriqComp=""
+    @out msgimgCompLeft=""
+    @out msgtriqCompLeft=""
+    @out msgimgCompRight=""
+    @out msgtriqCompRight=""
 
     # Centralized MSIData object
     @out msi_data::Union{MSIData, Nothing} = nothing
@@ -125,7 +290,8 @@ include("./julia_imzML_visual.jl")
     @in showMetadataBtn = false
     @out metadata_columns = []
     @out metadata_rows = []
-    @out btnMetadataDisable = true
+    @out btnMetadataDisable = false
+    @in selected_folder_metadata = ""
 
     # Saves the route where imzML and mzML files are located
     @out full_route=""
@@ -140,6 +306,25 @@ include("./julia_imzML_visual.jl")
     @out progress_conversion = false
     @out msg_conversion = ""
     @out btnConvertDisable = true
+
+    # == Batch Summary Dialog ==
+    @in showBatchSummary = false
+    @out batch_summary = ""
+
+    # == Batch Processing & Registry Variables ==
+    @private registry_init_done = false
+    @in selected_files = String[]
+    @out available_folders = String[]
+    @out image_available_folders = String[]
+    @out registry_path = joinpath("public", "registry.json")
+    # Progress reporting
+    @out overall_progress = 0.0
+    @out progress_message = ""
+
+    # == Folder-based UI State ==
+    @in selected_folder_main = ""
+    @in selected_folder_compare_left = ""
+    @in selected_folder_compare_right = ""
 
 
     # For the creation of images with a more specific mass charge
@@ -157,10 +342,14 @@ include("./julia_imzML_visual.jl")
     @out current_triq=""
     @out current_col_triq=""
     # We reiterate the process to display in the comparative view
-    @out current_msiComp=""
-    @out current_col_msiComp=""
-    @out current_triqComp=""
-    @out current_col_triqComp=""
+    @out current_msiCompLeft=""
+    @out current_col_msiCompLeft=""
+    @out current_triqCompLeft=""
+    @out current_col_triqCompLeft=""
+    @out current_msiCompRight=""
+    @out current_col_msiCompRight=""
+    @out current_triqCompRight=""
+    @out current_col_triqCompRight=""
 
     ## Time measurement variables
     @out sTime=time()
@@ -193,15 +382,19 @@ include("./julia_imzML_visual.jl")
     @out plotdataImg=[traceImg]
     @out plotlayoutImg=layoutImg
     # For the image in the comparative view
-    @out plotdataImgComp=[traceImg]
-    @out plotlayoutImgComp=layoutImg
+    @out plotdataImgCompLeft=[traceImg]
+    @out plotlayoutImgCompLeft=layoutImg
+    @out plotdataImgCompRight=[traceImg]
+    @out plotlayoutImgCompRight=layoutImg
 
     # For triq image 
     @out plotdataImgT=[traceImg]
     @out plotlayoutImgT=layoutImg
     # For the triq image in the comparative view
-    @out plotdataImgTComp=[traceImg]
-    @out plotlayoutImgTComp=layoutImg
+    @out plotdataImgTCompLeft=[traceImg]
+    @out plotlayoutImgTCompLeft=layoutImg
+    @out plotdataImgTCompRight=[traceImg]
+    @out plotlayoutImgTCompRight=layoutImg
     # Interface Plot Spectrum
     layoutSpectra=PlotlyBase.Layout(
         title=PlotlyBase.attr(
@@ -225,7 +418,7 @@ include("./julia_imzML_visual.jl")
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
     # Dummy 2D scatter plot
-    traceSpectra=PlotlyBase.stem(x=Vector{Float64}(), y=Vector{Float64}(),marker=attr(size=1, color="blue", opacity=0.1))
+    traceSpectra=PlotlyBase.scatter(x=Vector{Float64}(), y=Vector{Float64}(),marker=attr(size=1, color="blue", opacity=0.1))
     # Create conection to frontend
     @out plotdata=[traceSpectra]
     @out plotlayout=layoutSpectra
@@ -307,82 +500,108 @@ include("./julia_imzML_visual.jl")
     # Reactive handlers watch a variable and execute a block of code when its value changes
     # The onbutton handler will set the variable to false after the block is executed
 
+    # This handler correctly uses pick_file and loads the selected file
+    # as the active dataset for the UI.
     @onbutton btnSearch @time begin
-        # This part is synchronous and blocking, which is unavoidable
         picked_route = pick_file(; filterlist="imzML,imzml,mzML,mzml")
-        
         if isempty(picked_route)
-            msg = "No file selected."
-            warning_msg = true
             return
         end
 
-        # UI updates immediately
         progress = true
         msg = "Opening file: $(basename(picked_route))..."
-        
+
         @async begin
             try
-                # --- Normalize file extension and path ---
-                if endswith(picked_route, "imzml")
-                    full_route = replace(picked_route, r"\.imzml$"i => ".imzML")
-                    mv(picked_route, full_route, force=true)
-                elseif endswith(picked_route, "mzml")
-                    full_route = replace(picked_route, r"\.mzml$"i => ".mzML")
-                    mv(picked_route, full_route, force=true)
-                else
-                    full_route = picked_route
-                end
+                dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML))$"i => "")
+                registry = load_registry(registry_path)
+                existing_entry = get(registry, dataset_name, nothing)
 
-                # --- Load data using the new MSIData library ---
-                sTime = time()
-                msi_data = OpenMSIData(full_route)
-                
-                # --- Pre-compute analytics for performance ---
-                precompute_analytics(msi_data)
-
-                # --- Prepare metadata for display ---
-                if msi_data.spectrum_stats_df !== nothing
-                    df = msi_data.spectrum_stats_df
+                # --- Fast Load Path ---
+                is_same_file = (existing_entry !== nothing && existing_entry["source_path"] == picked_route)
+                if is_same_file && !isempty(get(existing_entry, "metadata", Dict()))
+                    msg = "Fast loading pre-processed file: $(dataset_name)"
+                    println(msg)
                     
-                    # Define columns for the key-value summary table
-                    metadata_columns = [
-                        Dict("name" => "parameter", "label" => "Parameter", "field" => "parameter", "align" => "left"),
-                        Dict("name" => "value", "label" => "Value", "field" => "value", "align" => "left"),
-                    ]
-
-                    # Calculate summary statistics
-                    summary_stats = [
-                        Dict("parameter" => "File Name", "value" => basename(full_route)),
-                        Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
-                        Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
-                        Dict("parameter" => "Global Min m/z", "value" => @sprintf("%.4f", msi_data.global_min_mz)),
-                        Dict("parameter" => "Global Max m/z", "value" => @sprintf("%.4f", msi_data.global_max_mz)),
-                        Dict("parameter" => "Mean TIC", "value" => @sprintf("%.2e", mean(df.TIC))),
-                        Dict("parameter" => "Mean BPI", "value" => @sprintf("%.2e", mean(df.BPI))),
-                        Dict("parameter" => "Mean # Points", "value" => @sprintf("%.1f", mean(df.NumPoints))),
-                    ]
+                    full_route = existing_entry["source_path"]
+                    metadata_rows = existing_entry["metadata"]["summary"]
                     
-                    metadata_rows = summary_stats
+                    dims_str = first(filter(r -> r["parameter"] == "Image Dimensions", metadata_rows))["value"]
+                    dims = parse.(Int, split(dims_str, " x "))
+                    imgWidth, imgHeight = dims[1], dims[2]
+
+                    msi_data = nothing # Ensure data is not held in memory
                     btnMetadataDisable = false
+                    btnStartDisable = false
+                    btnPlotDisable = false
+                    btnSpectraDisable = false
+                    SpectraEnabled = true
+                    selected_folder_main = dataset_name
+                    
+                    # Update folder lists in UI
+                    all_folders = sort(collect(keys(registry)), lt=natural)
+                    img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+                    available_folders = deepcopy(all_folders)
+                    image_available_folders = deepcopy(img_folders)
+
+                    msg = "Successfully loaded pre-processed dataset: $(dataset_name)"
+                    progress = false
+                    return
                 end
 
-                w, h = msi_data.image_dims
+                # --- Full Load Path ---
+                msg = "Performing first-time analysis for: $(basename(picked_route))..."
+                local local_full_route
+                if endswith(picked_route, r"imzml"i)
+                    local_full_route = replace(picked_route, r"\.imzml$"i => ".imzML")
+                    if picked_route != local_full_route
+                        mv(picked_route, local_full_route, force=true)
+                    end
+                else
+                    local_full_route = picked_route
+                end
+                full_route = local_full_route
+
+                sTime = time()
+                loaded_data = OpenMSIData(local_full_route)
+                is_imzML = loaded_data.source isa ImzMLSource
+                
+                precompute_analytics(loaded_data)
+                
+                metadata_columns = [
+                    Dict("name" => "parameter", "label" => "Parameter", "field" => "parameter", "align" => "left"),
+                    Dict("name" => "value", "label" => "Value", "field" => "value", "align" => "left"),
+                ]
+                summary_stats = extract_metadata(loaded_data, local_full_route)
+                metadata_rows = summary_stats["summary"]
+                btnMetadataDisable = isempty(metadata_rows)
+
+                w, h = loaded_data.image_dims
                 imgWidth, imgHeight = w > 0 ? (w, h) : (500, 500)
 
-                fTime = time()
-                eTime = round(fTime - sTime, digits=3)
-                msg = "File loaded and indexed in $(eTime) seconds."
+                update_registry(registry_path, dataset_name, local_full_route, summary_stats, is_imzML)
+                
+                # Update folder lists in UI
+                registry = load_registry(registry_path)
+                all_folders = sort(collect(keys(registry)), lt=natural)
+                img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+                available_folders = deepcopy(all_folders)
+                image_available_folders = deepcopy(img_folders)
 
-                # Enable UI controls
-                btnStartDisable = !(msi_data.source isa ImzMLSource)
+                selected_folder_main = dataset_name
+                msi_data = loaded_data
+
+                eTime = round(time() - sTime, digits=3)
+                msg = "Active file loaded in $(eTime) seconds. Dataset '$(dataset_name)' is ready for analysis."
+
+                btnStartDisable = false
                 btnPlotDisable = false
                 btnSpectraDisable = false
                 SpectraEnabled = true
                 
             catch e
                 msi_data = nothing
-                msg = "Error loading file: $e"
+                msg = "Error loading active file: $e"
                 warning_msg = true
                 btnStartDisable = true
                 btnSpectraDisable = true
@@ -390,7 +609,6 @@ include("./julia_imzML_visual.jl")
                 btnMetadataDisable = true
                 @error "File loading failed" exception=(e, catch_backtrace())
             finally
-                # This block will always run at the end of the async task
                 GC.gc()
                 if Sys.islinux()
                     ccall(:malloc_trim, Int32, (Int32,), 0)
@@ -401,8 +619,72 @@ include("./julia_imzML_visual.jl")
         end
     end
 
+    # This new handler correctly adds the file from full_route to the batch list.
+    @onbutton btnAddBatch begin
+        if isempty(full_route) || full_route == "unknown (manually added)"
+            msg = "No active file selected to add to batch."
+            warning_msg = true
+            return
+        end
+
+        if !(full_route in selected_files)
+            push!(selected_files, full_route)
+            selected_files = deepcopy(selected_files) # Force reactivity
+            batch_file_count = length(selected_files)
+            msg = "File added to batch."
+        else
+            msg = "File is already in the batch list."
+            warning_msg = true
+        end
+    end
+
+    @onbutton clear_batch_btn begin
+        selected_files = String[]
+        batch_file_count = 0
+        msg = "Batch cleared"
+    end
+
+    @onchange selected_files begin
+        batch_file_count = length(selected_files)
+    end
+
+    @onchange full_route begin
+        if !isempty(full_route) && !(full_route in selected_files)
+            push!(selected_files, full_route)
+            selected_files = deepcopy(selected_files) # Force reactivity
+            batch_file_count = length(selected_files)
+            msg = "File automatically added to batch"
+        end
+    end
+
     @onbutton showMetadataBtn begin
-        showMetadataDialog = true
+        if !isempty(available_folders)
+            if !isempty(selected_folder_main)
+                selected_folder_metadata = selected_folder_main
+            elseif !isempty(available_folders)
+                selected_folder_metadata = first(available_folders)
+            end
+            showMetadataDialog = true
+        else
+            msg = "No processed datasets available."
+            warning_msg = true
+        end
+    end
+
+    @onchange selected_folder_metadata begin
+        if !isempty(selected_folder_metadata)
+            registry = load_registry(registry_path)
+            dataset_info = get(registry, selected_folder_metadata, nothing)
+
+            if dataset_info !== nothing && haskey(dataset_info, "metadata") && !isempty(get(dataset_info["metadata"], "summary", []))
+                metadata_rows = dataset_info["metadata"]["summary"]
+                btnMetadataDisable = false
+            else
+                metadata_rows = []
+                btnMetadataDisable = true
+                msg = "Metadata not found in registry for $(selected_folder_metadata)."
+            end
+        end
     end
 
     @onchange btnSearchMzml, btnSearchSync begin
@@ -469,172 +751,211 @@ include("./julia_imzML_visual.jl")
     end
     
     @onbutton mainProcess @time begin
-        # UI updates immediately
+        # --- UI State Update ---
         progress = true
         btnStartDisable = true
         btnPlotDisable = true
         btnSpectraDisable = true
+        overall_progress = 0.0
+        progress_message = "Preparing batch process..."
+
+        # --- CAPTURE CURRENT VALUES HERE (NO []) ---
+        current_selected_files = selected_files
+        current_nmass = Nmass
+        current_tol = Tol
+        current_color_level = colorLevel
+        current_triq_enabled = triqEnabled
+        current_triq_prob = triqProb
+        current_mfilter_enabled = MFilterEnabled
+        current_registry_path = registry_path
+
+        println("starting main process with $(length(current_selected_files)) files")
 
         @async begin
+            total_time_start = time()
             try
-                text_nmass = replace(string(Nmass), "." => "_")
-                sTime = time()
-
-                if msi_data === nothing || !(msi_data.source isa ImzMLSource)
-                    msg = "No .imzML file loaded or selected file is not an .imzML. Please select a valid file."
+                # --- 1. Parameter Validation ---
+                if isempty(current_selected_files)
+                    progress_message = "No .imzML files in batch. Please add files first."
                     warning_msg = true
-                elseif Nmass > 0 && Tol > 0 && Tol <= 1 && colorLevel > 1 && colorLevel < 257
-                    msg = "Creating image for m/z=$(Nmass) Tol=$(Tol). Please be patient."
-                    try
-                        # Use the new get_mz_slice with the centralized MSIData object
-                        println("get_mz_slice time:")
-                        slice = @time get_mz_slice(msi_data, Nmass, Tol)
+                    println(progress_message)
+                    return
+                end
 
-                        # Failsafe check for empty slice
-                        if all(iszero, slice)
-                            msg = "No intensity data found for m/z = $Nmass with tolerance = $Tol. The resulting image is black. Please consider using a larger tolerance."
-                            warning_msg = true
-                            
-                            # Generate a black image but skip the colorbar that would crash
-                            timestamp = string(time_ns())
-                            text_nmass = replace(string(Nmass), "." => "_")
-                            sliceQuant = zeros(UInt8, size(slice))
-                            
-                            if triqEnabled
-                                @time save_bitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
-                                imgIntT = "/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
-                                plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
-                                current_triq = "TrIQ_$(text_nmass).bmp"
-                                msgtriq = "TrIQ image with the Nmass of $(replace(text_nmass, "_" => ".")) (No data)"
-                                colorbarT = "" # Clear colorbar
-                                current_col_triq = ""
-                                triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
-                                selectedTab = "tab1"
-                            else
-                                @time save_bitmap(joinpath("public", "MSI_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
-                                imgInt = "/MSI_$(text_nmass).bmp?t=$(timestamp)"
-                                plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
-                                current_msi = "MSI_$(text_nmass).bmp"
-                                msgimg = "Image with the Nmass of $(replace(text_nmass, "_" => ".")) (No data)"
-                                colorbar = "" # Clear colorbar
-                                current_col_msi = ""
-                                msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
-                                selectedTab = "tab0"
-                            end
-                            fTime = time()
-                            eTime = round(fTime - sTime, digits=3)
-                            # The warning message is already set above
-                        else
-                            # Original path for when data is found
-                            fig = CairoMakie.Figure(size=(150, 250)) # Container
-                            timestamp = string(time_ns())
+                println("Nmass value: '$current_nmass'")
+                println("Type of current_nmass: $(typeof(current_nmass))")
 
-                            if triqEnabled # If we have TrIQ
-                                if triqProb < 0.8 || triqProb > 1
-                                    msg = "Incorrect TrIQ values, please adjust accordingly and try again."
-                                    warning_msg = true
-                                else
-                                    println("TrIQ time:")
-                                    sliceTriq = @time TrIQ(slice, colorLevel, triqProb)
-                                    if MFilterEnabled
-                                        sliceTriq = round.(UInt8, median_filter(sliceTriq))
-                                    end
+                masses_str = split(current_nmass, ',', keepempty=false)
+                println("Parsed masses strings: $masses_str")
 
-                                    println("save_bitmap time:")
-                                    @time save_bitmap(joinpath("public", "TrIQ_$(text_nmass).bmp"), sliceTriq, ViridisPalette)
+                masses = Float64[] 
+                try
+                    masses = [parse(Float64, strip(m)) for m in masses_str]
+                    println("Parsed masses: $masses")
+                catch e
+                    progress_message = "Invalid m/z value(s). Please provide a comma-separated list of numbers. Error: $e"
+                    warning_msg = true
+                    println(progress_message)
+                    return
+                end
 
-                                    imgIntT = "/TrIQ_$(text_nmass).bmp?t=$(timestamp)"
-                                    plotdataImgT, plotlayoutImgT, imgWidth, imgHeight = loadImgPlot(imgIntT)
-                                    current_triq = "TrIQ_$(text_nmass).bmp"
-                                    msgtriq = "TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
+                println("Masses array: $masses, type: $(typeof(masses))")
 
-                                    colorbar_path = joinpath("public", "colorbar_TrIQ_$(text_nmass).png")
-                                    println("generate_colorbar_image time:")
-                                    @time generate_colorbar_image(slice, colorLevel, colorbar_path, use_triq=true, triq_prob=triqProb)
-                                    colorbarT = "/colorbar_TrIQ_$(text_nmass).png?t=$(timestamp)"
-                                    current_col_triq = "colorbar_TrIQ_$(text_nmass).png"
+                if !(masses isa AbstractArray) || isempty(masses)
+                    progress_message = "No valid m/z values found. Please provide comma-separated positive numbers."
+                    warning_msg = true
+                    println(progress_message)
+                    return
+                end
 
-                                    triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
-                                    col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")), lt=natural)
+                # Check other parameters
+                if !(0 < current_tol <= 1)
+                    progress_message = "Tolerance must be between 0 and 1."
+                    warning_msg = true
+                    println(progress_message)
+                    return
+                end
 
-                                    fTime = time()
-                                    eTime = round(fTime - sTime, digits=3)
-                                    msg = "The TrIQ image has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
-                                    selectedTab = "tab1"
-                                end
-                            else # If we don't use TrIQ
-                                println("quantize_intensity time:")
-                                sliceQuant = @time quantize_intensity(slice, colorLevel)
-                                if MFilterEnabled
-                                    sliceQuant = round.(UInt8, median_filter(sliceQuant))
-                                end
+                if !(1 < current_color_level < 257)
+                    progress_message = "Color levels must be between 2 and 256."
+                    warning_msg = true
+                    println(progress_message)
+                    return
+                end
 
-                                println("save_bitmap time:")
-                                @time save_bitmap(joinpath("public", "MSI_$(text_nmass).bmp"), sliceQuant, ViridisPalette)
+                println("entering batch processing loop with masses: $masses")
+                
+                # --- 2. Batch Processing Loop ---
+                num_files = length(current_selected_files)
+                total_steps = num_files
+                current_step = 0
+                errors = Dict("load_errors" => String[], "slice_errors" => String[], "io_errors" => String[])
+                newly_created_folders = String[]
 
-                                imgInt = "/MSI_$(text_nmass).bmp?t=$(timestamp)"
-                                plotdataImg, plotlayoutImg, imgWidth, imgHeight = loadImgPlot(imgInt)
-                                current_msi = "MSI_$(text_nmass).bmp"
-                                msgimg = "Image with the Nmass of $(replace(text_nmass, "_" => "."))"
+                for (file_idx, file_path) in enumerate(current_selected_files)
+                    # Update progress for current file
+                    progress_message = "Processing file $file_idx/$num_files: $(basename(file_path))"
+                    overall_progress = current_step / total_steps
+                    
+                    # Create parameters for this specific file
+                    all_params = (
+                        tolerance = current_tol,
+                        colorL = current_color_level,
+                        triqE = current_triq_enabled,
+                        triqP = current_triq_prob,
+                        medianF = current_mfilter_enabled,
+                        registry = current_registry_path,
+                        fileIdx = file_idx,
+                        nFiles = num_files
+                    )
 
-                                colorbar_path = joinpath("public", "colorbar_MSI_$(text_nmass).png")
-                                println("generate_colorbar_image time:")
-                                @time generate_colorbar_image(slice, colorLevel, colorbar_path)
-                                colorbar = "/colorbar_MSI_$(text_nmass).png?t=$(timestamp)"
-                                current_col_msi = "colorbar_MSI_$(text_nmass).png"
+                    # Process the file
+                    success, error_msg = process_file_safely(file_path, masses, all_params, progress_message, overall_progress)
 
-                                msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
-                                col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")), lt=natural)
-                                selectedTab = "tab0"
-                                fTime = time()
-                                eTime = round(fTime - sTime, digits=3)
-                                msg = "The image has been created in $(eTime) seconds successfully inside the 'public' folder of the app"
-                            end
-                        end
-                    catch e
-                        msg = "There was an error creating the image: $e"
-                        warning_msg = true
-                        @error "Image creation failed" exception=(e, catch_backtrace())
+                    if !success
+                        push!(errors["load_errors"], error_msg)
+                    else
+                        dataset_name = replace(basename(file_path), r"\.imzML$"i => "")
+                        push!(newly_created_folders, dataset_name)
                     end
+                    current_step += 1
+                end
+
+                # --- 3. Final Report ---
+                total_time_end = round(time() - total_time_start, digits=3)
+                
+                # Update folder lists in UI
+                registry = load_registry(current_registry_path)
+                all_folders = sort(collect(keys(registry)), lt=natural)
+                img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+                available_folders = deepcopy(all_folders)
+                image_available_folders = deepcopy(img_folders)
+
+                if !isempty(newly_created_folders)
+                    selected_folder_main = first(newly_created_folders)
+                end
+
+                successful_files = length(newly_created_folders)
+                total_errors = sum(length, values(errors))
+
+                if total_errors == 0
+                    msg = "Successfully processed all $(successful_files) file(s) in $(total_time_end) seconds."
                 else
-                    msg = "Invalid parameters. Nmass, Tol, or colorLevel are incorrect."
+                    msg = "Batch completed in $(total_time_end) seconds with $(total_errors) error(s)."
                     warning_msg = true
-                    @error msg
                 end
+
+                batch_summary = """
+                Processed $(successful_files)/$(num_files) files successfully.
+
+                Errors by category:
+                • Load failures: $(length(errors["load_errors"]))
+                • Slice generation: $(length(errors["slice_errors"]))  
+                • I/O issues: $(length(errors["io_errors"]))
+
+                Detailed errors:
+                $(join(vcat(values(errors)...), "\n"))
+                """
+                showBatchSummary = true
+
+            catch e
+                println("Error in main process: $e")
+                msg = "Batch processing failed: $e"
+                warning_msg = true
+                @error "Main process failed" exception=(e, catch_backtrace())
             finally
-                # This block will always run at the end of the async task
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
-                end
+                # --- UI State Reset ---
+                progress = false
                 btnStartDisable = false
                 btnPlotDisable = false
                 btnOpticalDisable = false
-                progress = false
                 btnSpectraDisable = false
                 SpectraEnabled = true
+                overall_progress = 0.0
+                println("Done")
             end
         end
     end
 
     @onbutton createMeanPlot begin
-        if msi_data === nothing
-            msg = "No data loaded. Please select a file first."
+        if isempty(selected_folder_main)
+            msg = "No dataset selected. Please process a file and select a folder first."
             warning_msg = true
             return
         end
 
-        # UI updates immediately
         progressSpectraPlot = true
         btnPlotDisable = true
         btnStartDisable = true
-        msg = "Loading plot..."
+        msg = "Loading plot for $(selected_folder_main)..."
 
         @async begin
             try
                 sTime = time()
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data)
-                
+                registry = load_registry(registry_path)
+                target_path = registry[selected_folder_main]["source_path"]
+                if target_path == "unknown (manually added)"
+                    msg = "Dataset selected contained no route."
+                    warning_msg = true
+                    return
+                end
+
+                if msi_data === nothing || full_route != target_path
+                    msg = "Reloading $(basename(target_path)) for analysis..."
+                    full_route = target_path
+                    msi_data = OpenMSIData(target_path)
+
+                    existing_entry = get(registry, selected_folder_main, nothing)
+                    if existing_entry !== nothing && haskey(get(existing_entry, "metadata", Dict()), "global_min_mz") && existing_entry["metadata"]["global_min_mz"] !== nothing
+                        println("Injecting cached m/z range to skip Pass 1...")
+                        msi_data.global_min_mz = existing_entry["metadata"]["global_min_mz"]
+                        msi_data.global_max_mz = existing_entry["metadata"]["global_max_mz"]
+                    else
+                        precompute_analytics(msi_data)
+                    end
+                end
+
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data, selected_folder_main)
                 selectedTab = "tab2"
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
@@ -644,35 +965,53 @@ include("./julia_imzML_visual.jl")
                 warning_msg = true
                 @error "Mean spectrum plotting failed" exception=(e, catch_backtrace())
             finally
-                # This runs after the async task is finished
                 progressSpectraPlot = false
                 btnPlotDisable = false
                 btnSpectraDisable = false
-                if msi_data !== nothing && msi_data.source isa ImzMLSource
-                    btnStartDisable = false
-                end
+                btnStartDisable = false
             end
         end
     end
 
     @onbutton createSumPlot begin
-        if msi_data === nothing
-            msg = "No data loaded. Please select a file first."
+        if isempty(selected_folder_main)
+            msg = "No dataset selected. Please process a file and select a folder first."
             warning_msg = true
             return
         end
 
-        # UI updates immediately
         progressSpectraPlot = true
         btnPlotDisable = true
         btnStartDisable = true
-        msg = "Loading total spectrum plot..."
+        msg = "Loading total spectrum plot for $(selected_folder_main)..."
 
         @async begin
             try
                 sTime = time()
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data)
-                
+                registry = load_registry(registry_path)
+                target_path = registry[selected_folder_main]["source_path"]
+                if target_path == "unknown (manually added)"
+                    msg = "Dataset selected contained no route."
+                    warning_msg = true
+                    return
+                end
+
+                if msi_data === nothing || full_route != target_path
+                    msg = "Reloading $(basename(target_path)) for analysis..."
+                    full_route = target_path
+                    msi_data = OpenMSIData(target_path)
+
+                    existing_entry = get(registry, selected_folder_main, nothing)
+                    if existing_entry !== nothing && haskey(get(existing_entry, "metadata", Dict()), "global_min_mz") && existing_entry["metadata"]["global_min_mz"] !== nothing
+                        println("Injecting cached m/z range to skip Pass 1...")
+                        msi_data.global_min_mz = existing_entry["metadata"]["global_min_mz"]
+                        msi_data.global_max_mz = existing_entry["metadata"]["global_max_mz"]
+                    else
+                        precompute_analytics(msi_data)
+                    end
+                end
+
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data, selected_folder_main)
                 selectedTab = "tab2"
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
@@ -682,44 +1021,58 @@ include("./julia_imzML_visual.jl")
                 warning_msg = true
                 @error "Total spectrum plotting failed" exception=(e, catch_backtrace())
             finally
-                # This runs after the async task is finished
                 progressSpectraPlot = false
                 btnPlotDisable = false
                 btnSpectraDisable = false
-                if msi_data !== nothing && msi_data.source isa ImzMLSource
-                    btnStartDisable = false
-                end
+                btnStartDisable = false
             end
         end
     end
 
     @onbutton createXYPlot begin
-        if msi_data === nothing
-            msg = "No data loaded. Please select a file first."
+        if isempty(selected_folder_main)
+            msg = "No dataset selected. Please process a file and select a folder first."
             warning_msg = true
             return
         end
 
-        # UI updates immediately
         progressSpectraPlot = true
         btnStartDisable = true
         btnPlotDisable = true
         btnSpectraDisable = true
-        msg = "Loading plot..."
+        msg = "Loading plot for $(selected_folder_main)..."
 
         @async begin
             try
                 sTime = time()
-                # The UI uses negative Y values, so we adjust before calling the plot function
+                registry = load_registry(registry_path)
+                target_path = registry[selected_folder_main]["source_path"]
+                if target_path == "unknown (manually added)"
+                    msg = "Dataset selected contained no route."
+                    warning_msg = true
+                    return
+                end
+
+                if msi_data === nothing || full_route != target_path
+                    msg = "Reloading $(basename(target_path)) for analysis..."
+                    full_route = target_path
+                    msi_data = OpenMSIData(target_path)
+
+                    existing_entry = get(registry, selected_folder_main, nothing)
+                    if existing_entry !== nothing && haskey(get(existing_entry, "metadata", Dict()), "global_min_mz") && existing_entry["metadata"]["global_min_mz"] !== nothing
+                        println("Injecting cached m/z range to skip Pass 1...")
+                        msi_data.global_min_mz = existing_entry["metadata"]["global_min_mz"]
+                        msi_data.global_max_mz = existing_entry["metadata"]["global_max_mz"]
+                    else
+                        precompute_analytics(msi_data)
+                    end
+                end
+
                 y = yCoord < 0 ? abs(yCoord) : yCoord
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y, imgWidth, imgHeight)
-                
-                # Update UI coordinates
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y, imgWidth, imgHeight, selected_folder_main)
                 xCoord = plotlayout.title == "Spectrum #$(xCoord)" ? xCoord : clamp(xCoord, 1, imgWidth)
                 yCoord = plotlayout.title == "Spectrum #$(xCoord)" ? 0 : -clamp(y, 1, imgHeight)
-
                 selectedTab = "tab2"
-
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
                 msg = "Plot loaded in $(eTime) seconds"
@@ -728,249 +1081,460 @@ include("./julia_imzML_visual.jl")
                 warning_msg = true
                 @error "Spectrum plotting failed" exception=(e, catch_backtrace())
             finally
-                # This runs after the async task is finished
                 progressSpectraPlot = false
                 btnPlotDisable = false
                 btnSpectraDisable = false
-                if msi_data !== nothing && msi_data.source isa ImzMLSource
-                    btnStartDisable = false
-                end
+                btnStartDisable = false
             end
         end
     end
 
-    # Image loaders based on the position of the current image (increment and decrement for both normal and filter)
-    # And a pre-generated list from all image files from /public folder
+    # --- Main View Handlers ---
     @onbutton imgMinus begin
-        # Append a query string to force the image to refresh 
-        timestamp=string(time_ns()) 
-        # Update the array of images listed in the public folder
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        if isempty(selected_folder_main) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_main)
+        # Check if folder exists to prevent errors
+        if !isdir(folder_path) return end
+        
+        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
 
         new_msi=decrement_image(current_msi, msi_bmp)
         new_col_msi=decrement_image(current_col_msi, col_msi_png)
-        if new_msi!=nothing || new_col_msi!=nothing
-            current_msi=new_msi
-            current_col_msi=new_col_msi
-            imgInt="/$(current_msi)?t=$(timestamp)"
-            colorbar="/$(current_col_msi)?t=$(timestamp)"
-
-            text_nmass=replace(current_msi, "MSI_" => "")
-            text_nmass=replace(text_nmass, ".bmp" => "")
-            msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
-            # Process the image in the function
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-            btnOpticalDisable=false
-        else
-            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
-            plotdataImg=[traceImg]
-            plotlayoutImg=layoutImg
-            msgimg=""
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_msi = new_msi
+            current_col_msi = new_col_msi
+            imgInt = "/$(selected_folder_main)/$(current_msi)?t=$(timestamp)"
+            colorbar = "/$(selected_folder_main)/$(current_col_msi)?t=$(timestamp)"
+            text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
+            msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
+            btnOpticalDisable = false
         end
     end
     @onbutton imgPlus begin
-        # Append a query string to force the image to refresh 
+        if isempty(selected_folder_main) return end
         timestamp=string(time_ns())
-        # Update the array of images listed in the public folder
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        folder_path = joinpath("public", selected_folder_main)
+        if !isdir(folder_path) return end
+
+        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
         
         new_msi=increment_image(current_msi, msi_bmp)
         new_col_msi=increment_image(current_col_msi, col_msi_png)
-        if new_msi!=nothing || new_col_msi!=nothing
-            current_msi=new_msi
-            current_col_msi=new_col_msi
-            imgInt="/$(current_msi)?t=$(timestamp)"
-            colorbar="/$(current_col_msi)?t=$(timestamp)"
-
-            text_nmass=replace(current_msi, "MSI_" => "")
-            text_nmass=replace(text_nmass, ".bmp" => "")
-            msgimg="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
-            # Process the image in the function
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-            btnOpticalDisable=false
-        else
-            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
-            plotdataImg=[traceImg]
-            plotlayoutImg=layoutImg
-            msgimg=""
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_msi = new_msi
+            current_col_msi = new_col_msi
+            imgInt = "/$(selected_folder_main)/$(current_msi)?t=$(timestamp)"
+            colorbar = "/$(selected_folder_main)/$(current_col_msi)?t=$(timestamp)"
+            text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
+            msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
+            btnOpticalDisable = false
         end
     end
 
     @onbutton imgMinusT begin
-        # Append a query string to force the image to refresh 
-        timestamp=string(time_ns()) 
-        # Update the array of images with TrIQ filter listed in the public folder
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        if isempty(selected_folder_main) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_main)
+        if !isdir(folder_path) return end
+
+        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
 
         new_msi=decrement_image(current_triq, triq_bmp)
         new_col_msi=decrement_image(current_col_triq, col_triq_png)
-        if new_msi!=nothing || new_col_msi!=nothing
-            current_triq=new_msi
-            current_col_triq=new_col_msi
-            imgIntT="/$(current_triq)?t=$(timestamp)"
-            colorbarT="/$(current_col_triq)?t=$(timestamp)"
-
-            text_nmass=replace(current_triq, "TrIQ_" => "")
-            text_nmass=replace(text_nmass, ".bmp" => "")
-            msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
-            # Process the image in the function
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
-            btnOpticalDisable=false
-        else
-            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
-            plotdataImgT=[traceImg]
-            plotlayoutImgT=layoutImg
-            msgtriq=""
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_triq = new_msi
+            current_col_triq = new_col_msi
+            imgIntT = "/$(selected_folder_main)/$(current_triq)?t=$(timestamp)"
+            colorbarT = "/$(selected_folder_main)/$(current_col_triq)?t=$(timestamp)"
+            text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
+            msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
+            btnOpticalDisable = false
         end
     end
     @onbutton imgPlusT begin
-        # Append a query string to force the image to refresh 
-        timestamp=string(time_ns()) 
-        # Update the array of images with TrIQ filter listed in the public folder
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        if isempty(selected_folder_main) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_main)
+        if !isdir(folder_path) return end
+
+        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
 
         new_msi=increment_image(current_triq, triq_bmp)
         new_col_msi=increment_image(current_col_triq, col_triq_png)
-        if new_msi!=nothing || new_col_msi!=nothing
-            current_triq=new_msi
-            current_col_triq=new_col_msi
-            imgIntT="/$(current_triq)?t=$(timestamp)"
-            colorbarT="/$(current_col_triq)?t=$(timestamp)"
-
-            text_nmass=replace(current_triq, "TrIQ_" => "")
-            text_nmass=replace(text_nmass, ".bmp" => "")
-            msgtriq="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
-            # Process the image in the function
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
-            btnOpticalDisable=false
-        else
-            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
-            plotdataImgT=[traceImg]
-            plotlayoutImgT=layoutImg
-            msgtriq=""
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_triq = new_msi
+            current_col_triq = new_col_msi
+            imgIntT = "/$(selected_folder_main)/$(current_triq)?t=$(timestamp)"
+            colorbarT = "/$(selected_folder_main)/$(current_col_triq)?t=$(timestamp)"
+            text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
+            msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
+            btnOpticalDisable = false
         end
     end
 
-    # Image loaders for the comparative view
-    @onbutton imgMinusComp begin
-        # Append a query string to force the image to refresh 
-        timestamp=string(time_ns()) 
-        # Update the array of images listed in the public folder
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-    
-        new_msi=decrement_image(current_msiComp, msi_bmp)
-        new_col_msi=decrement_image(current_col_msiComp, col_msi_png)
-        if new_msi!=nothing || new_col_msi!=nothing
-            current_msiComp=new_msi
-            current_col_msiComp=new_col_msi
-            imgIntComp="/$(current_msiComp)?t=$(timestamp)"
-            colorbarComp="/$(current_col_msiComp)?t=$(timestamp)"
-    
-            text_nmass=replace(current_msiComp, "MSI_" => "")
-            text_nmass=replace(text_nmass, ".bmp" => "")
-            msgimgComp="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
-            # Process the image in the function
-            plotdataImgComp, plotlayoutImgComp, _, _=loadImgPlot(imgIntComp)
-            btnOpticalDisable=false
-        else
-            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
-            plotdataImgComp=[traceImg]
-            plotlayoutImgComp=layoutImg
-            msgimgComp=""
-        end
-    end
-    
-    @onbutton imgPlusComp begin
-        # Append a query string to force the image to refresh 
+    # --- Compare View Handlers ---
+    @onbutton imgMinusCompLeft begin
+        if isempty(selected_folder_compare_left) return end
         timestamp=string(time_ns())
-        # Update the array of images listed in the public folder
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+        folder_path = joinpath("public", selected_folder_compare_left)
+        if !isdir(folder_path) return end
+
+        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
+
+        new_msi=decrement_image(current_msiCompLeft, msi_bmp)
+        new_col_msi=decrement_image(current_col_msiCompLeft, col_msi_png)
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_msiCompLeft = new_msi
+            current_col_msiCompLeft = new_col_msi
+            imgIntCompLeft = "/$(selected_folder_compare_left)/$(current_msiCompLeft)?t=$(timestamp)"
+            colorbarCompLeft = "/$(selected_folder_compare_left)/$(current_col_msiCompLeft)?t=$(timestamp)"
+            text_nmass = replace(current_msiCompLeft, r"MSI_|.bmp" => "")
+            msgimgCompLeft = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgCompLeft, plotlayoutImgCompLeft, _, _ = loadImgPlot(imgIntCompLeft)
+        end
+    end
+
+    @onbutton imgPlusCompLeft begin
+        if isempty(selected_folder_compare_left) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_compare_left)
+        if !isdir(folder_path) return end
+
+        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
         
-        new_msi=increment_image(current_msiComp, msi_bmp)
-        new_col_msi=increment_image(current_col_msiComp, col_msi_png)
-        if new_msi!=nothing || new_col_msi!=nothing
-            current_msiComp=new_msi
-            current_col_msiComp=new_col_msi
-            imgIntComp="/$(current_msiComp)?t=$(timestamp)"
-            colorbarComp="/$(current_col_msiComp)?t=$(timestamp)"
-    
-            text_nmass=replace(current_msiComp, "MSI_" => "")
-            text_nmass=replace(text_nmass, ".bmp" => "")
-            msgimgComp="Image with the Nmass of $(replace(text_nmass, "_" => "."))"
-            # Process the image in the function
-            plotdataImgComp, plotlayoutImgComp, _, _=loadImgPlot(imgIntComp)
-            btnOpticalDisable=false
-        else
-            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
-            plotdataImgComp=[traceImg]
-            plotlayoutImgComp=layoutImg
-            msgimgComp=""
+        new_msi=increment_image(current_msiCompLeft, msi_bmp)
+        new_col_msi=increment_image(current_col_msiCompLeft, col_msi_png)
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_msiCompLeft = new_msi
+            current_col_msiCompLeft = new_col_msi
+            imgIntCompLeft = "/$(selected_folder_compare_left)/$(current_msiCompLeft)?t=$(timestamp)"
+            colorbarCompLeft = "/$(selected_folder_compare_left)/$(current_col_msiCompLeft)?t=$(timestamp)"
+            text_nmass = replace(current_msiCompLeft, r"MSI_|.bmp" => "")
+            msgimgCompLeft = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgCompLeft, plotlayoutImgCompLeft, _, _ = loadImgPlot(imgIntCompLeft)
         end
     end
-    
-    @onbutton imgMinusTComp begin
-        # Append a query string to force the image to refresh 
-        timestamp=string(time_ns()) 
-        # Update the array of images with TrIQ filter listed in the public folder
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-    
-        new_msi=decrement_image(current_triqComp, triq_bmp)
-        new_col_msi=decrement_image(current_col_triqComp, col_triq_png)
-        if new_msi!=nothing || new_col_msi!=nothing
-            current_triqComp=new_msi
-            current_col_triqComp=new_col_msi
-            imgIntTComp="/$(current_triqComp)?t=$(timestamp)"
-            colorbarTComp="/$(current_col_triqComp)?t=$(timestamp)"
-    
-            text_nmass=replace(current_triqComp, "TrIQ_" => "")
-            text_nmass=replace(text_nmass, ".bmp" => "")
-            msgtriqComp="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
-            # Process the image in the function
-            plotdataImgTComp, plotlayoutImgTComp, _, _=loadImgPlot(imgIntTComp)
-            btnOpticalDisable=false
-        else
-            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
-            plotdataImgTComp=[traceImg]
-            plotlayoutImgTComp=layoutImg
-            msgtriqComp=""
+
+    @onbutton imgMinusTCompLeft begin
+        if isempty(selected_folder_compare_left) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_compare_left)
+        if !isdir(folder_path) return end
+
+        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
+
+        new_msi=decrement_image(current_triqCompLeft, triq_bmp)
+        new_col_msi=decrement_image(current_col_triqCompLeft, col_triq_png)
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_triqCompLeft = new_msi
+            current_col_triqCompLeft = new_col_msi
+            imgIntTCompLeft = "/$(selected_folder_compare_left)/$(current_triqCompLeft)?t=$(timestamp)"
+            colorbarTCompLeft = "/$(selected_folder_compare_left)/$(current_col_triqCompLeft)?t=$(timestamp)"
+            text_nmass = replace(current_triqCompLeft, r"TrIQ_|.bmp" => "")
+            msgtriqCompLeft = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgTCompLeft, plotlayoutImgTCompLeft, _, _ = loadImgPlot(imgIntTCompLeft)
         end
     end
-    
-    @onbutton imgPlusTComp begin
-        # Append a query string to force the image to refresh 
-        timestamp=string(time_ns()) 
-        # Update the array of images with TrIQ filter listed in the public folder
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-    
-        new_msi=increment_image(current_triqComp, triq_bmp)
-        new_col_msi=increment_image(current_col_triqComp, col_triq_png)
-        if new_msi!=nothing || new_col_msi!=nothing
-            current_triqComp=new_msi
-            current_col_triqComp=new_col_msi
-            imgIntTComp="/$(current_triqComp)?t=$(timestamp)"
-            colorbarTComp="/$(current_col_triqComp)?t=$(timestamp)"
-    
-            text_nmass=replace(current_triqComp, "TrIQ_" => "")
-            text_nmass=replace(text_nmass, ".bmp" => "")
-            msgtriqComp="TrIQ image with the Nmass of $(replace(text_nmass, "_" => "."))"
-            # Process the image in the function
-            plotdataImgTComp, plotlayoutImgTComp, _, _=loadImgPlot(imgIntTComp)
-            btnOpticalDisable=false
-        else
-            traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
-            plotdataImgTComp=[traceImg]
-            plotlayoutImgTComp=layoutImg
-            msgtriqComp=""
+
+    @onbutton imgPlusTCompLeft begin
+        if isempty(selected_folder_compare_left) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_compare_left)
+        if !isdir(folder_path) return end
+
+        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
+
+        new_msi=increment_image(current_triqCompLeft, triq_bmp)
+        new_col_msi=increment_image(current_col_triqCompLeft, col_triq_png)
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_triqCompLeft = new_msi
+            current_col_triqCompLeft = new_col_msi
+            imgIntTCompLeft = "/$(selected_folder_compare_left)/$(current_triqCompLeft)?t=$(timestamp)"
+            colorbarTCompLeft = "/$(selected_folder_compare_left)/$(current_col_triqCompLeft)?t=$(timestamp)"
+            text_nmass = replace(current_triqCompLeft, r"TrIQ_|.bmp" => "")
+            msgtriqCompLeft = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgTCompLeft, plotlayoutImgTCompLeft, _, _ = loadImgPlot(imgIntTCompLeft)
         end
     end
+
+    @onbutton imgMinusCompRight begin
+        if isempty(selected_folder_compare_right) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_compare_right)
+        if !isdir(folder_path) return end
+
+        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
+
+        new_msi=decrement_image(current_msiCompRight, msi_bmp)
+        new_col_msi=decrement_image(current_col_msiCompRight, col_msi_png)
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_msiCompRight = new_msi
+            current_col_msiCompRight = new_col_msi
+            imgIntCompRight = "/$(selected_folder_compare_right)/$(current_msiCompRight)?t=$(timestamp)"
+            colorbarCompRight = "/$(selected_folder_compare_right)/$(current_col_msiCompRight)?t=$(timestamp)"
+            text_nmass = replace(current_msiCompRight, r"MSI_|.bmp" => "")
+            msgimgCompRight = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgCompRight, plotlayoutImgCompRight, _, _ = loadImgPlot(imgIntCompRight)
+        end
+    end
+
+    @onbutton imgPlusCompRight begin
+        if isempty(selected_folder_compare_right) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_compare_right)
+        if !isdir(folder_path) return end
+
+        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
+        
+        new_msi=increment_image(current_msiCompRight, msi_bmp)
+        new_col_msi=increment_image(current_col_msiCompRight, col_msi_png)
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_msiCompRight = new_msi
+            current_col_msiCompRight = new_col_msi
+            imgIntCompRight = "/$(selected_folder_compare_right)/$(current_msiCompRight)?t=$(timestamp)"
+            colorbarCompRight = "/$(selected_folder_compare_right)/$(current_col_msiCompRight)?t=$(timestamp)"
+            text_nmass = replace(current_msiCompRight, r"MSI_|.bmp" => "")
+            msgimgCompRight = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgCompRight, plotlayoutImgCompRight, _, _ = loadImgPlot(imgIntCompRight)
+        end
+    end
+
+    @onbutton imgMinusTCompRight begin
+        if isempty(selected_folder_compare_right) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_compare_right)
+        if !isdir(folder_path) return end
+
+        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
+
+        new_msi=decrement_image(current_triqCompRight, triq_bmp)
+        new_col_msi=decrement_image(current_col_triqCompRight, col_triq_png)
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_triqCompRight = new_msi
+            current_col_triqCompRight = new_col_msi
+            imgIntTCompRight = "/$(selected_folder_compare_right)/$(current_triqCompRight)?t=$(timestamp)"
+            colorbarTCompRight = "/$(selected_folder_compare_right)/$(current_col_triqCompRight)?t=$(timestamp)"
+            text_nmass = replace(current_triqCompRight, r"TrIQ_|.bmp" => "")
+            msgtriqCompRight = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgTCompRight, plotlayoutImgTCompRight, _, _ = loadImgPlot(imgIntTCompRight)
+        end
+    end
+
+    @onbutton imgPlusTCompRight begin
+        if isempty(selected_folder_compare_right) return end
+        timestamp=string(time_ns())
+        folder_path = joinpath("public", selected_folder_compare_right)
+        if !isdir(folder_path) return end
+
+        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
+        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
+
+        new_msi=increment_image(current_triqCompRight, triq_bmp)
+        new_col_msi=increment_image(current_col_triqCompRight, col_triq_png)
+        if new_msi !== nothing && new_col_msi !== nothing
+            current_triqCompRight = new_msi
+            current_col_triqCompRight = new_col_msi
+            imgIntTCompRight = "/$(selected_folder_compare_right)/$(current_triqCompRight)?t=$(timestamp)"
+            colorbarTCompRight = "/$(selected_folder_compare_right)/$(current_col_triqCompRight)?t=$(timestamp)"
+            text_nmass = replace(current_triqCompRight, r"TrIQ_|.bmp" => "")
+            msgtriqCompRight = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+            plotdataImgTCompRight, plotlayoutImgTCompRight, _, _ = loadImgPlot(imgIntTCompRight)
+        end
+    end
+
+    # This handler will now correctly load the first image from the newly selected folder.
+    @onchange selected_folder_main begin
+        if !isempty(selected_folder_main)
+            folder_path = joinpath("public", selected_folder_main)
+            if !isdir(folder_path) 
+                imgInt = ""
+                colorbar = ""
+                imgIntT = ""
+                colorbarT = ""
+                msgimg = "Folder not found."
+                msgtriq = "Folder not found."
+                plotdataImg = [traceImg]
+                plotlayoutImg = layoutImg
+                plotdataImgT = [traceImg]
+                plotlayoutImgT = layoutImg
+                return
+            end
+
+            # Handle normal images
+            msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)), lt=natural)
+            col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)), lt=natural)
+            
+            if !isempty(msi_bmp)
+                current_msi = first(msi_bmp)
+                imgInt = "/$(selected_folder_main)/$(current_msi)"
+                plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
+                text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
+                msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+                if !isempty(col_msi_png)
+                    current_col_msi = first(col_msi_png)
+                    colorbar = "/$(selected_folder_main)/$(current_col_msi)"
+                else
+                    colorbar = ""
+                end
+            else
+                imgInt = ""
+                colorbar = ""
+                msgimg = "No MSI images found in this dataset."
+                plotdataImg = [traceImg]
+                plotlayoutImg = layoutImg
+            end
+
+            # Handle TrIQ images
+            triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)), lt=natural)
+            col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)), lt=natural)
+
+            if !isempty(triq_bmp)
+                current_triq = first(triq_bmp)
+                imgIntT = "/$(selected_folder_main)/$(current_triq)"
+                plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
+                text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
+                msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+                if !isempty(col_triq_png)
+                    current_col_triq = first(col_triq_png)
+                    colorbarT = "/$(selected_folder_main)/$(current_col_triq)"
+                else
+                    colorbarT = ""
+                end
+            else
+                imgIntT = ""
+                colorbarT = ""
+                msgtriq = "No TrIQ images found in this dataset."
+                plotdataImgT = [traceImg]
+                plotlayoutImgT = layoutImg
+            end
+        end
+    end
+
+    @onchange selected_folder_compare_left begin
+        if !isempty(selected_folder_compare_left)
+            timestamp = string(time_ns())
+            folder_path = joinpath("public", selected_folder_compare_left)
+            
+            if !isdir(folder_path)
+                imgIntCompLeft, colorbarCompLeft, imgIntTCompLeft, colorbarTCompLeft = "", "", "", ""
+                msgimgCompLeft, msgtriqCompLeft = "Folder not found.", "Folder not found."
+                return
+            end
+
+            # Handle normal images
+            msi_bmp = sort(filter(f -> startswith(f, "MSI_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
+            col_msi_png = sort(filter(f -> startswith(f, "colorbar_MSI_") && endswith(f, ".png"), readdir(folder_path)), lt=natural)
+            
+            if !isempty(msi_bmp)
+                current_msiCompLeft = first(msi_bmp)
+                imgIntCompLeft = "/$(selected_folder_compare_left)/$(current_msiCompLeft)?t=$(timestamp)"
+                plotdataImgCompLeft, plotlayoutImgCompLeft, _, _ = loadImgPlot(imgIntCompLeft)
+                text_nmass = replace(current_msiCompLeft, r"MSI_|.bmp" => "")
+                msgimgCompLeft = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+                
+                if !isempty(col_msi_png)
+                    current_col_msiCompLeft = first(col_msi_png)
+                    colorbarCompLeft = "/$(selected_folder_compare_left)/$(current_col_msiCompLeft)?t=$(timestamp)"
+                else
+                    colorbarCompLeft = ""
+                end
+            else
+                imgIntCompLeft, colorbarCompLeft, msgimgCompLeft = "", "", "No MSI images."
+            end
+
+            # Handle TrIQ images
+            triq_bmp = sort(filter(f -> startswith(f, "TrIQ_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
+            col_triq_png = sort(filter(f -> startswith(f, "colorbar_TrIQ_") && endswith(f, ".png"), readdir(folder_path)), lt=natural)
+
+            if !isempty(triq_bmp)
+                current_triqCompLeft = first(triq_bmp)
+                imgIntTCompLeft = "/$(selected_folder_compare_left)/$(current_triqCompLeft)?t=$(timestamp)"
+                plotdataImgTCompLeft, plotlayoutImgTCompLeft, _, _ = loadImgPlot(imgIntTCompLeft)
+                text_nmass = replace(current_triqCompLeft, r"TrIQ_|.bmp" => "")
+                msgtriqCompLeft = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+
+                if !isempty(col_triq_png)
+                    current_col_triqCompLeft = first(col_triq_png)
+                    colorbarTCompLeft = "/$(selected_folder_compare_left)/$(current_col_triqCompLeft)?t=$(timestamp)"
+                else
+                    colorbarTCompLeft = ""
+                end
+            else
+                imgIntTCompLeft, colorbarTCompLeft, msgtriqCompLeft = "", "", "No TrIQ images."
+            end
+        end
+    end
+
+    @onchange selected_folder_compare_right begin
+        if !isempty(selected_folder_compare_right)
+            timestamp = string(time_ns())
+            folder_path = joinpath("public", selected_folder_compare_right)
+            if !isdir(folder_path) 
+                imgIntCompRight, colorbarCompRight, imgIntTCompRight, colorbarTCompRight = "", "", "", ""
+                msgimgCompRight, msgtriqCompRight = "Folder not found.", "Folder not found."
+                return
+            end
+
+            # Handle normal images
+            msi_bmp = sort(filter(f -> startswith(f, "MSI_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
+            col_msi_png = sort(filter(f -> startswith(f, "colorbar_MSI_") && endswith(f, ".png"), readdir(folder_path)), lt=natural)
+            
+            if !isempty(msi_bmp)
+                current_msiCompRight = first(msi_bmp)
+                imgIntCompRight = "/$(selected_folder_compare_right)/$(current_msiCompRight)?t=$(timestamp)"
+                plotdataImgCompRight, plotlayoutImgCompRight, _, _ = loadImgPlot(imgIntCompRight)
+                text_nmass = replace(current_msiCompRight, r"MSI_|.bmp" => "")
+                msgimgCompRight = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+                
+                if !isempty(col_msi_png)
+                    current_col_msiCompRight = first(col_msi_png)
+                    colorbarCompRight = "/$(selected_folder_compare_right)/$(current_col_msiCompRight)?t=$(timestamp)"
+                else
+                    colorbarCompRight = ""
+                end
+            else
+                imgIntCompRight, colorbarCompRight, msgimgCompRight = "", "", "No MSI images."
+            end
+
+            # Handle TrIQ images
+            triq_bmp = sort(filter(f -> startswith(f, "TrIQ_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
+            col_triq_png = sort(filter(f -> startswith(f, "colorbar_TrIQ_") && endswith(f, ".png"), readdir(folder_path)), lt=natural)
+
+            if !isempty(triq_bmp)
+                current_triqCompRight = first(triq_bmp)
+                imgIntTCompRight = "/$(selected_folder_compare_right)/$(current_triqCompRight)?t=$(timestamp)"
+                plotdataImgTCompRight, plotlayoutImgTCompRight, _, _ = loadImgPlot(imgIntTCompRight)
+                text_nmass = replace(current_triqCompRight, r"TrIQ_|.bmp" => "")
+                msgtriqCompRight = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+
+                if !isempty(col_triq_png)
+                    current_col_triqCompRight = first(col_triq_png)
+                    colorbarTCompRight = "/$(selected_folder_compare_right)/$(current_col_triqCompRight)?t=$(timestamp)"
+                else
+                    colorbarTCompRight = ""
+                end
+            else
+                imgIntTCompRight, colorbarTCompRight, msgtriqCompRight = "", "", "No TrIQ images."
+            end
+        end
+    end
+
     
     # 3d plot
     @onbutton image3dPlot begin
@@ -1161,13 +1725,49 @@ include("./julia_imzML_visual.jl")
     # To include a visualization in the spectrum plot indicating where is the selected mass
     @onchange Nmass begin
         if !isempty(xSpectraMz)
-            # Use a stem plot for the main spectrum for consistency
-            traceSpectra = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>", showlegend=false)
+            # Main spectrum trace
+            traceSpectra = PlotlyBase.scatter(
+                x=xSpectraMz, 
+                y=ySpectraMz, 
+                marker=attr(size=1, color="blue", opacity=0.5), 
+                name="Spectrum", 
+                hoverinfo="x", 
+                hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>", 
+                showlegend=false
+            )
             
-            # Keep this as a scatter plot to draw the vertical line
-            trace2 = PlotlyBase.scatter(x=[Nmass, Nmass], y=[0, maximum(ySpectraMz)], mode="lines", line=attr(color="red", width=0.5), name="<i>m/z</i> selected", showlegend=false)
+            # Parse all valid masses from the comma-separated string
+            mass_strs = split(Nmass, ',', keepempty=false)
+            mass_traces = [traceSpectra]  # Start with the main spectrum
             
-            plotdata = [traceSpectra, trace2]
+            valid_masses = Float64[]
+            for (idx, mass_str) in enumerate(mass_strs)
+                try
+                    mass_val = parse(Float64, strip(mass_str))
+                    if mass_val > 0  # Only add valid positive masses
+                        push!(valid_masses, mass_val)
+                        
+                        # Create a vertical line for this mass (Plotly will auto-assign colors)
+                        mass_trace = PlotlyBase.scatter(
+                            x=[mass_val, mass_val], 
+                            y=[0, maximum(ySpectraMz)], 
+                            mode="lines", 
+                            line=attr(width=1.5, dash="dash"),
+                            name="m/z $(round(mass_val, digits=4))",
+                            showlegend=false,
+                            hoverinfo="x+name",
+                            hovertemplate="<b>%{data.name}</b><extra></extra>"
+                        )
+                        push!(mass_traces, mass_trace)
+                    end
+                catch e
+                    # Skip invalid entries, continue with next
+                    continue
+                end
+            end
+            
+            # Update the plot data
+            plotdata = mass_traces
         end
     end
 
@@ -1258,6 +1858,67 @@ include("./julia_imzML_visual.jl")
 
     @mounted watchplots()
 
+    @onchange isready begin
+        if isready && !registry_init_done
+            @async begin # Run asynchronously to not block startup
+                sleep(1.0) # Give frontend time to initialize
+                try
+                    println("Synchronizing registry with filesystem on backend init...")
+                    reg_path = joinpath("public", "registry.json")
+                    registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
+
+                    public_dirs = isdir("public") ? readdir("public") : []
+                    ignored_dirs = ["css", "masks"]
+                    
+                    dataset_dirs = filter(d -> isdir(joinpath("public", d)) && !(d in ignored_dirs), public_dirs)
+                    
+                    registry_keys = Set(keys(registry))
+                    folder_set = Set(dataset_dirs)
+
+                    new_folders = setdiff(folder_set, registry_keys)
+                    for folder in new_folders
+                        println("Found new folder: $folder")
+                        registry[folder] = Dict(
+                            "source_path" => "unknown (manually added)",
+                            "processed_date" => "unknown",
+                            "metadata" => Dict(),
+                            "is_imzML" => true # Assume folder contains images if found this way
+                        )
+                    end
+
+                    removed_folders = setdiff(registry_keys, folder_set)
+                    for folder in removed_folders
+                        delete!(registry, folder)
+                    end
+
+                    if !isempty(new_folders) || !isempty(removed_folders)
+                        println("Registry changed, saving...")
+                        open(reg_path, "w") do f
+                            JSON.print(f, registry, 4)
+                        end
+                    end
+                    
+                    all_folders = sort(collect(keys(registry)), lt=natural)
+                    img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+
+                    available_folders = deepcopy(all_folders)
+                    image_available_folders = deepcopy(img_folders)
+                    
+                    println("UI lists updated. All: $(length(available_folders)), Images: $(length(image_available_folders))")
+
+                catch e
+                    @warn "Registry synchronization failed: $e"
+                    available_folders = []
+                    image_available_folders = []
+                    selected_files = String[]
+                finally
+                    registry_init_done = true
+                end
+            end
+        end
+        warmup_init()
+    end
+
     GC.gc() # Trigger garbage collection
     if Sys.islinux()
         ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
@@ -1267,40 +1928,3 @@ end
 # Register a new route and the page that will be loaded on access
 @page("/", "app.jl.html")
 end
-
-#=
-function __init__()
-    @async begin
-        println("Pre-compiling functions at startup...")
-        
-        # Create a dummy MSIData object to be used for pre-compilation
-        dummy_source = ImzMLSource("dummy.ibd", Float32, Float32)
-        dummy_meta = MSI_src.SpectrumMetadata(0,0,"",MSI_src.UNKNOWN, MSI_src.SpectrumAsset(Float32,false,0,0,:mz), MSI_src.SpectrumAsset(Float32,false,0,0,:intensity))
-        dummy_msi_data = MSIData(dummy_source, [dummy_meta], (1,1), zeros(Int,1,1), 0)
-
-        # Pre-compile functions from btnSearch
-        try OpenMSIData("dummy.imzML") catch end
-        try precompute_analytics(dummy_msi_data) catch end
-
-        # Pre-compile functions from mainProcess
-        try get_mz_slice(dummy_msi_data, 1.0, 1.0) catch end
-        try TrIQ(zeros(10,10), 256, 0.98) catch end
-        try quantize_intensity(zeros(10,10), 256) catch end
-        
-        dummy_bmp_path = joinpath("public", "dummy.bmp")
-        dummy_png_path = joinpath("public", "dummy.png")
-        try 
-            save_bitmap(dummy_bmp_path, zeros(UInt8, 10, 10), ViridisPalette)
-            loadImgPlot("/dummy.bmp")
-            generate_colorbar_image(zeros(10,10), 256, dummy_png_path)
-        catch e
-            @warn "Pre-compilation step failed (this is expected if dummy files can't be created/read)"
-        finally
-            rm(dummy_bmp_path, force=true)
-            rm(dummy_png_path, force=true)
-        end
-
-        println("Pre-compilation finished.")
-    end
-end
-=#
