@@ -10,7 +10,7 @@
 # Instructions:
 # 1. Fill in the placeholder paths in the "CONFIG" section below.
 # 2. Run the script from the project's root directory:
-#    julia test/run_tests.jl
+#    julia --project=. test/run_tests.jl
 # 3. Check the `test/results/` folder for the output images.
 # ===================================================================
 

@@ -90,6 +90,12 @@
     overflow-y: auto; /* Add scroll if content overflows */
 }
 
+.pixelated-plot svg image {
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges; /* Firefox */
+    image-rendering: crisp-edges;
+}
+
 *{
     font-family: 'Roboto', 'Lato', sans-serif;
 }

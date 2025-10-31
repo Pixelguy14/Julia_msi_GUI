@@ -1,7 +1,40 @@
+# MSI_src.jl
+
 module MSI_src
 
-# Export the public API
-export OpenMSIData, GetSpectrum, IterateSpectra, ImportMzmlFile, load_slices, plot_slices, plot_slice, get_total_spectrum, get_average_spectrum, LoadMzml, LoadSpectra, precompute_analytics
+# Export the public MSI API
+export OpenMSIData, 
+       GetSpectrum, 
+       IterateSpectra, 
+       ImportMzmlFile, 
+       load_slices, 
+       plot_slices, 
+       plot_slice, 
+       get_total_spectrum, 
+       get_average_spectrum, 
+       LoadMzml, 
+       precompute_analytics, 
+       process_spectrum
+
+# Export the public Preprocessing API
+export FeatureMatrix,
+       run_preprocessing_pipeline,
+       qc_is_empty,
+       qc_is_regular,
+       transform_intensity,
+       smooth_spectrum,
+       snip_baseline,
+       tic_normalize,
+       pqn_normalize,
+       detect_peaks_profile,
+       align_peaks_lowess,
+       bin_peaks,
+       plot_stage_spectrum,
+       calculate_ppm_error, 
+       calculate_resolution_fwhm, 
+       analyze_mass_accuracy,
+       generate_qc_report, 
+       get_common_calibration_standards
 
 # Include all source files directly into the main module
 include("MSIData.jl")
@@ -9,6 +42,7 @@ include("ParserHelpers.jl")
 include("mzML.jl")
 include("imzML.jl")
 include("MzmlConverter.jl")
+include("Preprocessing.jl")
 
 
 # --- Main Entry Point --- #

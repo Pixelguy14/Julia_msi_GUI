@@ -24,153 +24,6 @@ using .MSI_src: MSIData, OpenMSIData, #=GetSpectrum,=# process_spectrum, Iterate
 
 include("./julia_imzML_visual.jl")
 
-function load_registry(registry_path)
-    if isfile(registry_path)
-        try
-            return JSON.parsefile(registry_path, dicttype=Dict{String, Any})
-        catch e
-            @error "Failed to parse registry.json: $e"
-            return Dict{String, Any}()
-        end
-    end
-    return Dict{String, Any}()
-end
-
-function extract_metadata(msi_data::MSIData, source_path::String)
-    df = msi_data.spectrum_stats_df
-    if df === nothing
-        # This can happen if precompute_analytics hasn't been run
-        # We can still return basic info
-        return Dict(
-            "summary" => [
-                Dict("parameter" => "File Name", "value" => basename(source_path)),
-                Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
-                Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
-            ],
-            "global_min_mz" => nothing,
-            "global_max_mz" => nothing
-        )
-    end
-
-    summary_stats = [
-        Dict("parameter" => "File Name", "value" => basename(source_path)),
-        Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
-        Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
-        Dict("parameter" => "Global Min m/z", "value" => @sprintf("%.4f", msi_data.global_min_mz)),
-        Dict("parameter" => "Global Max m/z", "value" => @sprintf("%.4f", msi_data.global_max_mz)),
-        Dict("parameter" => "Mean TIC", "value" => @sprintf("%.2e", mean(df.TIC))),
-        Dict("parameter" => "Mean BPI", "value" => @sprintf("%.2e", mean(df.BPI))),
-        Dict("parameter" => "Mean # Points", "value" => @sprintf("%.1f", mean(df.NumPoints))),
-    ]
-
-    if hasproperty(df, :Mode)
-        centroid_count = count(==(MSI_src.CENTROID), df.Mode)
-        profile_count = count(==(MSI_src.PROFILE), df.Mode)
-        unknown_count = count(==(MSI_src.UNKNOWN), df.Mode)
-        
-        push!(summary_stats, Dict("parameter" => "Centroid Spectra", "value" => string(centroid_count)))
-        push!(summary_stats, Dict("parameter" => "Profile Spectra", "value" => string(profile_count)))
-        if unknown_count > 0
-            push!(summary_stats, Dict("parameter" => "Unknown Mode Spectra", "value" => string(unknown_count)))
-        end
-    end
-
-    return Dict(
-        "summary" => summary_stats,
-        "global_min_mz" => msi_data.global_min_mz,
-        "global_max_mz" => msi_data.global_max_mz
-    )
-end
-
-function update_registry(registry_path, dataset_name, source_path, metadata=nothing, is_imzML=false)
-    registry = load_registry(registry_path)
-    entry = Dict{String, Any}( # Explicitly type the dictionary to allow mixed value types
-        "source_path" => source_path, 
-        "processed_date" => string(now()),
-        "is_imzML" => is_imzML
-    )
-    if metadata !== nothing
-        entry["metadata"] = metadata
-    end
-    registry[dataset_name] = entry
-    
-    try
-        open(registry_path, "w") do f
-            JSON.print(f, registry, 4)
-        end
-    catch e
-        @error "Failed to write to registry.json: $e"
-    end
-end
-
-function process_file_safely(file_path, masses, params, progress_message_ref, overall_progress_ref)
-    local_msi_data = nothing
-    dataset_name = replace(basename(file_path), r"\.imzML$"i => "")
-    output_dir = joinpath("public", dataset_name)
-    println("Processing: $dataset_name -> $output_dir")
-    
-    try
-        # --- Load Data ---
-        progress_message_ref = "Loading: $(basename(file_path))"
-        local_msi_data = OpenMSIData(file_path)
-        if !(local_msi_data.source isa ImzMLSource)
-            @warn "Skipping non-imzML file: $(basename(file_path))"
-            return (false, "Skipped: Not an imzML file")
-        end
-
-        # --- Generate Slices (this will call precompute_analytics if needed) ---
-        progress_message_ref = "Generating $(length(masses)) slices for $(dataset_name)..."
-        slice_dict = get_multiple_mz_slices(local_msi_data, masses, params.tolerance)
-
-        # --- Extract metadata *after* it has been computed ---
-        metadata = extract_metadata(local_msi_data, file_path)
-
-        # --- Save Slices ---
-        mkpath(output_dir)  # Ensure output directory exists
-        
-        for (mass_idx, mass) in enumerate(masses)
-            progress_message_ref = "File $(params.fileIdx)/$(params.nFiles): Saving slice for m/z=$mass"
-            
-            slice = slice_dict[mass]
-            text_nmass = replace(string(mass), "." => "_")
-            bitmap_filename = params.triqE ? "TrIQ_$(text_nmass).bmp" : "MSI_$(text_nmass).bmp"
-            colorbar_filename = params.triqE ? "colorbar_TrIQ_$(text_nmass).png" : "colorbar_MSI_$(text_nmass).png"
-
-            if all(iszero, slice)
-                sliceQuant = zeros(UInt8, size(slice))
-                @warn "No intensity data for m/z = $mass in $(dataset_name)"
-            else
-                sliceQuant = params.triqE ? TrIQ(slice, params.colorL, params.triqP) : quantize_intensity(slice, params.colorL)
-                if params.medianF
-                    sliceQuant = round.(UInt8, median_filter(sliceQuant))
-                end
-            end
-
-            save_bitmap(joinpath(output_dir, bitmap_filename), sliceQuant, ViridisPalette)
-            if !all(iszero, slice)
-                generate_colorbar_image(slice, params.colorL, joinpath(output_dir, colorbar_filename); use_triq=params.triqE, triq_prob=params.triqP)
-            end
-        end
-        
-        is_imzML = local_msi_data.source isa ImzMLSource
-        update_registry(params.registry, dataset_name, file_path, metadata, is_imzML)
-        return (true, "")
-
-    catch e
-        @error "File processing failed" file=file_path exception=(e, catch_backtrace())
-        return (false, "File: $(basename(file_path)) - $(sprint(showerror, e))")
-    finally
-        if local_msi_data !== nothing
-            # Cleanup
-        end
-        local_msi_data = nothing
-        GC.gc(true)
-        if Sys.islinux()
-            ccall(:malloc_trim, Int32, (Int32,), 0)
-        end
-    end
-end
-
 @genietools
 
 # == Reactive code ==
@@ -316,7 +169,7 @@ end
     @in selected_files = String[]
     @out available_folders = String[]
     @out image_available_folders = String[]
-    @out registry_path = joinpath("public", "registry.json")
+    @out registry_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
     # Progress reporting
     @out overall_progress = 0.0
     @out progress_message = ""
@@ -502,7 +355,7 @@ end
 
     # This handler correctly uses pick_file and loads the selected file
     # as the active dataset for the UI.
-    @onbutton btnSearch @time begin
+    @onbutton btnSearch begin
         picked_route = pick_file(; filterlist="imzML,imzml,mzML,mzml")
         if isempty(picked_route)
             return
@@ -513,7 +366,7 @@ end
 
         @async begin
             try
-                dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML))$"i => "")
+                dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML|mzml))$"i => "")
                 registry = load_registry(registry_path)
                 existing_entry = get(registry, dataset_name, nothing)
 
@@ -1864,7 +1717,7 @@ end
                 sleep(1.0) # Give frontend time to initialize
                 try
                     println("Synchronizing registry with filesystem on backend init...")
-                    reg_path = joinpath("public", "registry.json")
+                    reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
                     registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
 
                     public_dirs = isdir("public") ? readdir("public") : []

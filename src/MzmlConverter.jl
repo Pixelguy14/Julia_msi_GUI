@@ -1,3 +1,4 @@
+# src/MzmlConverter.jl
 """
 This file contains the workflow for converting .mzML files (with one spectrum per pixel)
 into a proper .imzML/.ibd file pair, using a separate synchronization file.

@@ -37,10 +37,13 @@ Before running the tests, you must edit the `test/run_tests.jl` file to point to
     cd /path/to/your/JuliaMSI
     ```
 
-2.  **Execute the Test Script**:
+2.  **Execute the Different Test Scripts**:
     Run the following command from the project's root directory. This will install the necessary dependencies and run the tests.
     ```bash
     julia --project=. test/run_tests.jl
+    ```
+    ```bash
+    julia --project=. test/run_preprocessing.jl
     ```
 
 3.  **Check the Results**:
@@ -48,10 +51,10 @@ Before running the tests, you must edit the `test/run_tests.jl` file to point to
 
 ## Test Case Configuration
 
-You can customize the test run by editing the variables in `test/run_tests.jl`.
+You can customize the test run by editing the variables in `test/run_tests.jl` or `test/run_preprocessing.jl` respectively.
 
 ### Enabling and Disabling Test Cases
-You can run or skip specific test cases by setting the corresponding boolean variables to `true` or `false`.
+You can run or skip specific test cases of run_tests by setting the corresponding boolean variables to `true` or `false`.
 
 ```julia
 test1 = true  # Runs Test Case 1

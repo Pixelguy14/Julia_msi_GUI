@@ -22,7 +22,7 @@ https://codeberg.org/LabABI/JuliaMSI
    ~/Downloads/JuliaMSI-main/juliamsi
 2. Without entering the Julia environment, launch the project in your terminal with the following command (which works for all operating systems):
    ```
-   julia--project=. start_MSI_GUI.jl
+   julia --project=. start_MSI_GUI.jl
    ```
 3. After the script has finished loading, you can open a [page](http://127.0.0.1:1481/) in your browser with the web app running.
 
