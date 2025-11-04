@@ -1,72 +1,91 @@
 <header id="header">
     <img src="/css/LABI_logo.png" alt="Labi Logo Icon" id="imgLogo">
     <div>
-      <h4>JuliaMSI - Mask Editor&nbsp;</h4>
+        <h4>JuliaMSI - Mask Editor&nbsp;</h4>
     </div>
 </header>
 
 <div id="extDivStyle" class="row col-12 q-pa-xl">
-<div class="row col-4">
-    <!-- Left Panel: Controls -->
-    <div class="st-col col-12 st-module q-pa-md">
-        <div class="text-h6">Mask Generation Workflow</div>
-        
-        <!-- Step 1: Select Slice -->
-        <div class="text-subtitle1 q-mt-md">Step 1: Select Slice</div>
-        <div class="row items-center">
-            <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset" class="q-ma-sm col" standout="custom-standout" :disable="is_editing_mask"></q-select>
-        </div>
-        <p class="text-center" v-html="msgimg"></p>
+    <div class="row col-4">
+        <!-- Left Panel: Controls -->
+        <div class="st-col col-12 st-module q-pa-md">
+            <div class="text-h6">Mask Generation Workflow</div>
 
-        <!-- Step 2: Provide Mask Input -->
-        <div class="text-subtitle1 q-mt-md">Step 2: Create/Upload Mask</div>
-        <div class="row justify-around">
-            <q-btn class="q-ma-sm btn-style" v-on:click="btn_use_slice_as_mask = true" label="Use Current Slice" :disable="!is_browsing_slices || !imgInt"></q-btn>
-            <q-btn class="q-ma-sm btn-style" v-on:click="btn_upload_mask = true" label="Upload to Create Mask" :disable="!is_browsing_slices || !imgInt"></q-btn>
-            <q-btn class="q-ma-sm btn-style" v-on:click="btn_change_slice = true" label="Change Mask Blueprint" :disable="!is_editing_mask"></q-btn>
-        </div>
+            <!-- Step 1: Select Slice -->
+            <div class="text-subtitle1 q-mt-md">Step 1: Select Slice</div>
+            <div class="row items-center">
+                <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
+                    class="q-ma-sm col" standout="custom-standout" :disable="is_editing_mask"></q-select>
+            </div>
+            <p class="text-center" v-html="msgimg"></p>
 
-        <!-- Step 3: Automated Processing & Overlay -->
-        <div class="text-subtitle1 q-mt-md">Step 3: Adjust & Verify</div>
-        <div class="q-mt-sm">
-          <p class="text-caption text-center">Adjust automated processing for the initial mask:</p>
-          <q-slider color="primary" label-always v-model="otsu_scale" :label-value="'Otsu Scale: ' + otsu_scale.toFixed(2)" :step="0.01" :min="0.1" :max="2.0" :disable="!is_editing_mask"></q-slider>
-          <q-slider color="primary" label-always v-model="noise_size_percent" :label-value="'Noise Size: ' + (noise_size_percent * 100).toFixed(3) + '%'" :step="0.001" :min="0.001" :max="0.5" :disable="!is_editing_mask"></q-slider>
-          <q-slider color="primary" label-always v-model="hole_size_percent" :label-value="'Hole Size: ' + (hole_size_percent * 100).toFixed(4) + '%'" :step="0.0005" :min="0.0005" :max="0.5" :disable="!is_editing_mask"></q-slider>
-          <q-slider color="primary" label-always v-model="smoothing_level" :label-value="'Smoothing: ' + smoothing_level + 'px'" :step="2" :min="1" :max="9" :disable="!is_editing_mask"></q-slider>
-        </div>
-        <div class="q-mt-md">
-            <p class="text-caption text-center">Adjust slice overlay transparency:</p>
-            <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1.0" :step="0.05" label-always :label-value="'Transparency: ' + imgTrans.toFixed(2)" :disable="!is_editing_mask" />
-        </div>
+            <!-- Step 2: Provide Mask Input -->
+            <div class="text-subtitle1 q-mt-md">Step 2: Create/Upload Mask</div>
+            <div class="row justify-around">
+                <q-btn class="q-ma-sm btn-style" v-on:click="btn_use_slice_as_mask = true" label="Use Current Slice"
+                    :disable="!is_browsing_slices || !imgInt"></q-btn>
+                <q-btn class="q-ma-sm btn-style" v-on:click="btn_upload_mask = true" label="Upload to Create Mask"
+                    :disable="!is_browsing_slices || !imgInt"></q-btn>
+                <q-btn class="q-ma-sm btn-style" v-on:click="btn_change_slice = true" label="Change Mask Blueprint"
+                    :disable="!is_editing_mask"></q-btn>
+            </div>
 
-        <p class="q-mt-md" :class="{'text-negative': mask_editor_warning}">{{ mask_editor_message }}</p>
-        <div class="row">
-            <q-btn  :loading="progress" class="q-ma-sm btn-style" :disable="!is_editing_mask" v-on:click="btn_save_final_mask = !btn_save_final_mask" padding="lg" icon="save" label="Save Final Mask"/>
-            <q-btn class="q-ma-sm btn-style" icon="arrow_back" label="Return" href="/" ></q-btn>
+            <!-- Step 3: Automated Processing & Overlay -->
+            <div class="text-subtitle1 q-mt-md">Step 3: Adjust & Verify</div>
+            <div class="q-mt-sm">
+                <p class="text-caption text-center">Adjust automated processing for the initial mask:</p>
+                <q-slider color="primary" label-always v-model="otsu_scale"
+                    :label-value="'Otsu Scale: ' + otsu_scale.toFixed(2)" :step="0.01" :min="0.1" :max="2.0"
+                    :disable="!is_editing_mask"></q-slider>
+                <q-slider color="primary" label-always v-model="noise_size_percent"
+                    :label-value="'Noise Size: ' + (noise_size_percent * 100).toFixed(3) + '%'" :step="0.001"
+                    :min="0.001" :max="0.5" :disable="!is_editing_mask"></q-slider>
+                <q-slider color="primary" label-always v-model="hole_size_percent"
+                    :label-value="'Hole Size: ' + (hole_size_percent * 100).toFixed(4) + '%'" :step="0.0005"
+                    :min="0.0005" :max="0.5" :disable="!is_editing_mask"></q-slider>
+                <q-slider color="primary" label-always v-model="smoothing_level"
+                    :label-value="'Smoothing: ' + smoothing_level + 'px'" :step="2" :min="1" :max="9"
+                    :disable="!is_editing_mask"></q-slider>
+            </div>
+            <div class="q-mt-md">
+                <p class="text-caption text-center">Adjust slice overlay transparency:</p>
+                <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1.0" :step="0.05" label-always
+                    :label-value="'Transparency: ' + imgTrans.toFixed(2)" :disable="!is_editing_mask" />
+            </div>
+
+            <p class="q-mt-md" :class="{'text-negative': mask_editor_warning}">{{ mask_editor_message }}</p>
+            <div class="row">
+                <q-btn :loading="progress" class="q-ma-sm btn-style" :disable="!is_editing_mask"
+                    v-on:click="btn_save_final_mask = !btn_save_final_mask" padding="lg" icon="save"
+                    label="Save Final Mask" />
+                <q-btn class="q-ma-sm btn-style" icon="arrow_back" label="Return" href="/"></q-btn>
+            </div>
         </div>
     </div>
-</div>
 
     <div class="row col-6">
         <!-- Right Panel: Image Displays -->
         <div id="intDivStyle-right" class="st-col col-12 st-module">
             <div class="text-h6">Mask Preview</div>
             <div class="row items-center">
-                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="btn_img_minus=true" :disable="is_editing_mask"></q-btn>
-                <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="btn_img_plus=true" :disable="is_editing_mask"></q-btn>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="btn_img_minus=true"
+                    :disable="is_editing_mask"></q-btn>
+                <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="btn_img_plus=true"
+                    :disable="is_editing_mask"></q-btn>
             </div>
-            
+
             <div v-if="!show_verification_plot" class="text-center text-grey q-pa-xl">
                 <q-icon name="image" size="5em" class="q-mb-md" />
                 <p>Please select a dataset and provide a mask input to begin.</p>
                 <p class="text-caption">Use the controls on the left to load a slice or upload a mask image.</p>
             </div>
-            
+
             <div v-if="show_verification_plot">
-                <plotly :data="plotdata_verify" :layout="plotlayout_verify" class="q-pa-none q-ma-none pixelated-plot"></plotly>
+                <plotly :data="plotdata_verify" :layout="plotlayout_verify" class="q-pa-none q-ma-none pixelated-plot">
+                </plotly>
                 <div class="q-mt-md text-center">
-                    <q-btn color="primary" class="btn-style" label="Edit Manually" v-on:click="btn_edit_manually=true" />
+                    <q-btn color="primary" class="btn-style" label="Edit Manually"
+                        v-on:click="btn_edit_manually=true" />
                 </div>
             </div>
             <p class="text-center" v-html="msgimg"></p>
@@ -87,54 +106,59 @@
             <div class="q-pa-md q-gutter-sm row justify-center items-center">
                 <!-- Tool Selection -->
                 <q-btn-group>
-                    <q-btn label="Brush" v-on:click="current_tool = 'brush'" :color="current_tool === 'brush' ? 'primary' : 'white'" text-color="black"/>
-                    <q-btn label="Eraser" v-on:click="current_tool = 'eraser'" :color="current_tool === 'eraser' ? 'primary' : 'white'" text-color="black"/>
-                    <q-btn label="Bucket" v-on:click="current_tool = 'bucket'" :color="current_tool === 'bucket' ? 'primary' : 'white'" text-color="black"/>
-                    <q-btn label="Drag" v-on:click="current_tool = 'drag'" :color="current_tool === 'drag' ? 'primary' : 'white'" text-color="black"/>
+                    <q-btn label="Brush" v-on:click="current_tool = 'brush'"
+                        :color="current_tool === 'brush' ? 'primary' : 'white'" text-color="black" />
+                    <q-btn label="Eraser" v-on:click="current_tool = 'eraser'"
+                        :color="current_tool === 'eraser' ? 'primary' : 'white'" text-color="black" />
+                    <q-btn label="Bucket" v-on:click="current_tool = 'bucket'"
+                        :color="current_tool === 'bucket' ? 'primary' : 'white'" text-color="black" />
+                    <q-btn label="Drag" v-on:click="current_tool = 'drag'"
+                        :color="current_tool === 'drag' ? 'primary' : 'white'" text-color="black" />
                 </q-btn-group>
-                
+
                 <q-separator vertical inset />
 
                 <!-- Tool Settings -->
-                <q-input dense filled label="Brush Size" type="number" v-model.number="brush_size" style="max-width: 120px" :min="1"/>
-                <q-input dense filled label="Zoom" type="number" step="0.1" v-model.number="editor_scale" style="max-width: 120px" :min="0.1"/>
-                
+                <q-input dense filled label="Brush Size" type="number" v-model.number="brush_size"
+                    style="max-width: 120px" :min="1" />
+                <q-input dense filled label="Zoom" type="number" step="0.1" v-model.number="editor_scale"
+                    style="max-width: 120px" :min="0.1" />
+
                 <q-separator vertical inset />
 
                 <!-- Image Manipulation -->
-                <q-input dense filled label="Rotate (deg)" type="number" v-model.number="rotate_degrees" style="max-width: 150px" :step="90"/>
-                <q-select dense filled label="Flip" v-model="flip_direction" :options="['horizontal', 'vertical']" style="max-width: 150px"/>
-                <q-btn label="Apply Flip" v-on:click="btn_flip_mask = !btn_flip_mask"/>
+                <q-input dense filled label="Rotate (deg)" type="number" v-model.number="rotate_degrees"
+                    style="max-width: 150px" :step="90" />
+                <q-select dense filled label="Flip" v-model="flip_direction" :options="['horizontal', 'vertical']"
+                    style="max-width: 150px" />
+                <q-btn label="Apply Flip" v-on:click="btn_flip_mask = !btn_flip_mask" />
             </div>
 
             <!-- Drag Tool Controls -->
-            <div v-if="current_tool === 'drag'" class="q-pa-sm q-gutter-sm row justify-center items-center" style="border: 1px solid #ccc; border-radius: 4px;">
-                <q-input dense filled label="Move Pixels" type="number" v-model.number="move_pixels" style="max-width: 120px" :min="1"/>
+            <div v-if="current_tool === 'drag'" class="q-pa-sm q-gutter-sm row justify-center items-center"
+                style="border: 1px solid #ccc; border-radius: 4px;">
+                <q-input dense filled label="Move Pixels" type="number" v-model.number="move_pixels"
+                    style="max-width: 120px" :min="1" />
                 <q-btn icon="arrow_upward" v-on:click="move_mask_payload = { direction: 'up', t: Date.now() }" />
                 <q-btn icon="arrow_downward" v-on:click="move_mask_payload = { direction: 'down', t: Date.now() }" />
                 <q-btn icon="arrow_back" v-on:click="move_mask_payload = { direction: 'left', t: Date.now() }" />
                 <q-btn icon="arrow_forward" v-on:click="move_mask_payload = { direction: 'right', t: Date.now() }" />
             </div>
-            
+
             <!-- Interactive Canvas -->
             <div class="row justify-center q-pa-md">
-              <div style="position: relative; display: inline-block; overflow: auto; max-width: 100%;"> <!-- Added for scrolling very large images -->
-                  <canvas id="maskCanvas" 
-                          :width="canvas_width" 
-                          :height="canvas_height"
-                          :style="{
+                <div style="position: relative; display: inline-block; overflow: auto; max-width: 100%;">
+                    <!-- Added for scrolling very large images -->
+                    <canvas id="maskCanvas" :width="canvas_width" :height="canvas_height" :style="{
                               width: canvas_width * editor_scale + 'px', 
                               height: canvas_height * editor_scale + 'px',
                               border: '2px solid #ccc',
                               cursor: current_tool === 'drag' ? 'move' : 'crosshair',
                               imageRendering: 'pixelated'
-                          }"
-                          v-on:mousedown.prevent="startDrawing"
-                          v-on:mousemove.prevent="draw" 
-                          v-on:mouseup.prevent="stopDrawing()"
-                          v-on:mouseleave.prevent="stopDrawing()">
-                  </canvas>
-              </div>
+                          }" v-on:mousedown.prevent="startDrawing" v-on:mousemove.prevent="draw"
+                        v-on:mouseup.prevent="stopDrawing()" v-on:mouseleave.prevent="stopDrawing()">
+                    </canvas>
+                </div>
             </div>
         </q-card-section>
 

@@ -9,14 +9,12 @@ using Statistics, NaturalSort, LinearAlgebra, StipplePlotly
 using Base.Filesystem: mv
 
 using MSI_src
-using .MSI_src: MSIData
+using .MSI_src: MSIData, process_image_pipeline
 
 # Plot Handling
 include("./julia_imzML_visual.jl")
 
 # Image Processing Pipeline
-include("src/ImageProcessing.jl")
-using .ImageProcessing
 using ImageBinarization
 
 function load_and_binarize_mask(path)
@@ -46,7 +44,7 @@ function alter_image(img_path, otsu_scale, noise_size_percent, hole_size_percent
         gray_img = Float32.(ensure_grayscale(original_img))
 
         binary, noise_removed, holes_filled, smoothed =
-            ImageProcessing.process_image_pipeline(gray_img;
+            process_image_pipeline(gray_img;
                 otsu_scale=otsu_scale, noise_size_percent=noise_size_percent,
                 hole_size_percent=hole_size_percent, smoothing=smoothing_level)
 
@@ -250,7 +248,6 @@ end
             is_browsing_slices = true
             is_editing_mask = false
             folder_path = joinpath("public", selected_folder_main)
-            println("Selected folder: $selected_folder_main")
             if !isdir(folder_path) 
                 imgInt = ""
                 msgimg = "Folder not found."
@@ -674,15 +671,17 @@ end
                 # Update registry directly in the handler
                 reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
                 registry = isfile(reg_path) ? JSON.parsefile(reg_path) : Dict{String, Any}()
+
+                full_mask_path = abspath(final_path)
                 
                 # Update the registry entry
                 if haskey(registry, selected_folder_main)
-                    registry[selected_folder_main]["mask_path"] = "/css/masks/$(final_mask_name)"
+                    registry[selected_folder_main]["mask_path"] = full_mask_path
                     registry[selected_folder_main]["has_mask"] = true
                 else
                     # Create a new entry if folder doesn't exist in registry
                     registry[selected_folder_main] = Dict(
-                        "mask_path" => "/css/masks/$(final_mask_name)",
+                        "mask_path" => full_mask_path,
                         "has_mask" => true,
                         "is_imzML" => true,
                         "processed_date" => string(Dates.now())

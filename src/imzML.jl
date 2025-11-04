@@ -744,9 +744,16 @@ This is a performant function that iterates through spectra once.
 # Returns
 - A `Matrix{Float64}` representing the intensity slice.
 """
-function get_mz_slice(data::MSIData, mass::Real, tolerance::Real)
+function get_mz_slice(data::MSIData, mass::Real, tolerance::Real; mask_path::Union{String, Nothing}=nothing)
     width, height = data.image_dims
     slice_matrix = zeros(Float64, height, width)
+
+    local masked_indices::Union{Set{Int}, Nothing} = nothing
+    if mask_path !== nothing
+        mask_matrix = load_and_prepare_mask(mask_path, (width, height))
+        masked_indices = get_masked_spectrum_indices(data, mask_matrix)
+        println("Applying mask from: $(mask_path), found $(length(masked_indices)) spectra in ROI.")
+    end
 
     # INTELLIGENT LOADING: Ensure analytics are computed for filtering.
     if data.spectrum_stats_df === nothing || !hasproperty(data.spectrum_stats_df, :MinMZ)
@@ -761,7 +768,9 @@ function get_mz_slice(data::MSIData, mass::Real, tolerance::Real)
 
     # 1. Find all candidate spectra first for efficient filtering
     candidate_indices = Set{Int}()
-    for i in 1:length(data.spectra_metadata)
+    indices_to_check = masked_indices === nothing ? (1:length(data.spectra_metadata)) : masked_indices
+    
+    for i in indices_to_check
         spec_min_mz = stats_df.MinMZ[i]
         spec_max_mz = stats_df.MaxMZ[i]
         if target_max >= spec_min_mz && target_min <= spec_max_mz
@@ -769,20 +778,17 @@ function get_mz_slice(data::MSIData, mass::Real, tolerance::Real)
         end
     end
 
-    println("Found $(length(candidate_indices)) candidate spectra (filtered from $(length(data.spectra_metadata)))")
+    println("Found $(length(candidate_indices)) candidate spectra (filtered from $(length(indices_to_check)) initial spectra)")
 
     # 2. Iterate using the optimized, low-allocation iterator
     results_count = 0
-    _iterate_spectra_fast(data) do idx, mz_array, intensity_array
-        # Process only the spectra that are candidates
-        if idx in candidate_indices
-            intensity = find_mass(mz_array, intensity_array, mass, tolerance)
-            if intensity > 0.0
-                meta = data.spectra_metadata[idx]
-                if 1 <= meta.x <= width && 1 <= meta.y <= height
-                    slice_matrix[meta.y, meta.x] = intensity
-                    results_count += 1
-                end
+    _iterate_spectra_fast(data, collect(candidate_indices)) do idx, mz_array, intensity_array
+        meta = data.spectra_metadata[idx]
+        intensity = find_mass(mz_array, intensity_array, mass, tolerance)
+        if intensity > 0.0
+            if 1 <= meta.x <= width && 1 <= meta.y <= height
+                slice_matrix[meta.y, meta.x] = intensity
+                results_count += 1
             end
         end
     end
@@ -802,13 +808,20 @@ This is a highly performant function that iterates through the full dataset only
 # Returns
 - A `Dict{Real, Matrix{Float64}}` mapping each mass to its intensity slice matrix.
 """
-function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, tolerance::Real)
+function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, tolerance::Real; mask_path::Union{String, Nothing}=nothing)
     width, height = data.image_dims
     
     # 1. Initialize a dictionary to hold the output slice matrices
     slice_dict = Dict{Real, Matrix{Float64}}()
     for mass in masses
         slice_dict[mass] = zeros(Float64, height, width)
+    end
+
+    local masked_indices::Union{Set{Int}, Nothing} = nothing
+    if mask_path !== nothing
+        mask_matrix = load_and_prepare_mask(mask_path, (width, height))
+        masked_indices = get_masked_spectrum_indices(data, mask_matrix)
+        println("Applying mask from: $(mask_path), found $(length(masked_indices)) spectra in ROI.")
     end
 
     # 2. Ensure analytics are computed for filtering.
@@ -820,12 +833,13 @@ function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, t
     println("Filtering candidate spectra for $(length(masses)) m/z values...")
     stats_df = data.spectrum_stats_df
     candidate_indices = Set{Int}()
+    indices_to_check = masked_indices === nothing ? (1:length(data.spectra_metadata)) : masked_indices
 
     # 3. Find all spectra that could contain *any* of the requested masses.
     for mass in masses
         target_min = mass - tolerance
         target_max = mass + tolerance
-        for i in 1:length(data.spectra_metadata)
+        for i in indices_to_check
             # If already a candidate, no need to check again
             if i in candidate_indices
                 continue
@@ -841,20 +855,17 @@ function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, t
     println("Found $(length(candidate_indices)) total candidate spectra.")
 
     # 4. Iterate through the data a single time using the optimized iterator.
-    _iterate_spectra_fast(data) do idx, mz_array, intensity_array
-        # Process only the spectra that are candidates
-        if idx in candidate_indices
-            meta = data.spectra_metadata[idx]
-            # For this single spectrum, check all masses of interest
-            for mass in masses
-                # Check if this spectrum's range actually covers the current mass
-                # This is a finer-grained check than the initial filtering
-                if !isempty(mz_array) && (mass + tolerance) >= first(mz_array) && (mass - tolerance) <= last(mz_array)
-                    intensity = find_mass(mz_array, intensity_array, mass, tolerance)
-                    if intensity > 0.0
-                        if 1 <= meta.x <= width && 1 <= meta.y <= height
-                            slice_dict[mass][meta.y, meta.x] = intensity
-                        end
+    _iterate_spectra_fast(data, collect(candidate_indices)) do idx, mz_array, intensity_array
+        meta = data.spectra_metadata[idx]
+        # For this single spectrum, check all masses of interest
+        for mass in masses
+            # Check if this spectrum's range actually covers the current mass
+            # This is a finer-grained check than the initial filtering
+            if !isempty(mz_array) && (mass + tolerance) >= first(mz_array) && (mass - tolerance) <= last(mz_array)
+                intensity = find_mass(mz_array, intensity_array, mass, tolerance)
+                if intensity > 0.0
+                    if 1 <= meta.x <= width && 1 <= meta.y <= height
+                        slice_dict[mass][meta.y, meta.x] = intensity
                     end
                 end
             end
@@ -878,30 +889,15 @@ Generates and saves a plot of a single image slice for a given m/z value.
 This function closely imitates the logic of the original `GetSlice` but uses
 the modern `MSIData` access patterns and robust peak finding.
 """
-function plot_slice(msi_data::MSIData, mass::Real, tolerance::Real, output_dir::String; stage_name="slice_mz_$(mass)", bins=256)
+function plot_slice(msi_data::MSIData, mass::Real, tolerance::Real, output_dir::String; 
+                    stage_name="slice_mz_$(mass)", bins=256, mask_path::Union{String, Nothing}=nothing)
     
-    # 1. Create an empty image for the slice, with dimensions matching plotting expectations
-    width, height = msi_data.image_dims
-    slice_matrix = zeros(Float64, height, width)
-
-    # 2. Iterate through each spectrum to build the slice
+    # 1. Generate the slice, applying the mask if provided.
     println("Generating slice for m/z $mass...")
-    _iterate_spectra_fast(msi_data) do spec_idx, mz_array, intensity_array
-        meta = msi_data.spectra_metadata[spec_idx]
-        
-        # Find the peak intensity using the modern, robust find_mass
-        intensity = find_mass(mz_array, intensity_array, mass, tolerance)
-        
-        if intensity > 0.0
-            # Populate the matrix using (y, x) indexing
-            if 1 <= meta.x <= width && 1 <= meta.y <= height
-                slice_matrix[meta.y, meta.x] = intensity
-            end
-        end
-    end
+    slice_matrix = get_mz_slice(msi_data, mass, tolerance, mask_path=mask_path)
     println("Slice generation complete.")
 
-    # 3. Plot the resulting slice matrix using CairoMakie
+    # 2. Plot the resulting slice matrix using CairoMakie
     println("Plotting slice...")
     
     fig = Figure(size = (600, 500))
@@ -925,7 +921,7 @@ function plot_slice(msi_data::MSIData, mass::Real, tolerance::Real, output_dir::
     Colorbar(fig[1, 2], hm, label="Intensity")
     colgap!(fig.layout, 5)
 
-    # 4. Save the plot
+    # 3. Save the plot
     mkpath(output_dir)
     filename = "$(stage_name).png"
     save_path = joinpath(output_dir, filename)
@@ -957,9 +953,9 @@ is used to exclude outliers before normalization.
 # Returns
 - A tuple `(low, high)` representing the calculated lower and upper intensity bounds.
 """
-function get_outlier_thres(img::AbstractMatrix{<:Real}, prob::Real=0.98)
+function get_outlier_thres(img::AbstractVector{<:Real}, prob::Real=0.98)
     # DO NOT filter zeros. Use all pixel values like R does.
-    int_values = vec(img)
+    int_values = img
     low = minimum(int_values)
     upp = maximum(int_values)
 
@@ -999,6 +995,10 @@ function get_outlier_thres(img::AbstractMatrix{<:Real}, prob::Real=0.98)
     actual_threshold = isempty(values_below_edge) ? low : maximum(values_below_edge)
 
     return (low, actual_threshold)
+end
+
+function get_outlier_thres(img::AbstractMatrix{<:Real}, prob::Real=0.98)
+    return get_outlier_thres(vec(img), prob)
 end
 
 """
@@ -1063,11 +1063,26 @@ within these bounds.
 # Returns
 - A new image matrix with intensities quantized to the specified depth within the TrIQ bounds.
 """
-function TrIQ(pixMap::AbstractMatrix{<:Real}, depth::Integer, prob::Real=0.98)
-    # Compute new dynamic range
-    bounds = get_outlier_thres(pixMap, prob)
+function TrIQ(pixMap::AbstractMatrix{<:Real}, depth::Integer, prob::Real=0.98; mask_matrix::Union{BitMatrix, Nothing}=nothing)
+    local values_for_thres
+    if mask_matrix !== nothing
+        # Extract values only from the masked region for threshold calculation
+        values_for_thres = pixMap[mask_matrix]
+        # Filter out only zeros created by the mask.
+        filter!(x -> x != 0, values_for_thres)
+    else
+        values_for_thres = pixMap
+    end
+
+    # If the relevant values are empty or all zero, return a zero matrix
+    if isempty(values_for_thres) || all(iszero, values_for_thres)
+        bounds = (0.0, 0.0)
+    else
+        # Compute new dynamic range from the (potentially filtered) values
+        bounds = get_outlier_thres(values_for_thres, prob)
+    end
     
-    # Set intensity dynamic range
+    # Set intensity dynamic range for the *entire* pixMap, using bounds derived from masked data
     return set_pixel_depth(pixMap, bounds, depth)
 end
 
@@ -1107,8 +1122,17 @@ Linearly scales the intensity values in a slice to a specified number of levels.
 The output is an array of `UInt8` values.
 This is a modernized version of `IntQuantCl`.
 """
-function quantize_intensity(slice::AbstractMatrix{<:Real}, levels::Integer=256)
-    max_val = maximum(slice)
+function quantize_intensity(slice::AbstractMatrix{<:Real}, levels::Integer=256; mask_matrix::Union{BitMatrix, Nothing}=nothing)
+    local max_val
+    if mask_matrix !== nothing
+        masked_slice = slice[mask_matrix]
+        # Filter out zeros that might have been introduced by masking, if any
+        filter!(x -> x != 0, masked_slice)
+        max_val = isempty(masked_slice) ? 0.0 : maximum(masked_slice)
+    else
+        max_val = maximum(slice)
+    end
+
     if max_val <= 0
         return zeros(UInt8, size(slice))
     end
@@ -1208,7 +1232,7 @@ function display_statistics(slices::AbstractArray{<:AbstractMatrix{<:Real}, 2},
     stats_to_calc = Dict{String, Function}("Mean" => mean)
     all_dfs = Dict{String, DataFrame}()
 
-    for (stat_name, stat_func) in stats_to_to_calc
+    for (stat_name, stat_func) in stats_to_calc
         # Pre-allocate matrix for better performance
         stat_matrix = zeros(Float64, n_files, n_masses)
         
@@ -1498,3 +1522,80 @@ end
 
 # Viridis color palette (256 colors) - defined as constant
 const ViridisPalette = generate_palette(ColorSchemes.viridis)
+
+function generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String; use_triq::Bool=false, triq_prob::Float64=0.98, mask_path::Union{String, Nothing}=nothing)
+    # 1. Determine bounds based on whether TrIQ is used and if a mask is applied
+    local data_for_bounds
+    if mask_path !== nothing
+        height, width = size(slice_data)
+        mask_matrix = load_and_prepare_mask(mask_path, (width, height))
+        # Extract only the non-zero values within the mask to accurately calculate the range
+        data_for_bounds = slice_data[mask_matrix]
+        filter!(x -> x > 0, data_for_bounds)
+    else
+        data_for_bounds = vec(slice_data)
+    end
+
+    # Handle cases where data_for_bounds might be empty after filtering
+    if isempty(data_for_bounds)
+        min_val, max_val = 0.0, 1.0 # Default range if no data in ROI
+    else
+        min_val, max_val = if use_triq
+            get_outlier_thres(data_for_bounds, triq_prob)
+        else
+            extrema(data_for_bounds)
+        end
+    end
+
+    # 2. Replicate the tick calculation logic from plot_slices
+    bins = color_levels
+    levels = range(min_val, stop=max_val, length=bins + 1)
+    level_range = levels[end] - levels[1]
+    
+    if level_range == 0
+        levels = range(min_val - 0.1, stop=max_val + 0.1, length=bins + 1)
+        level_range = 0.2
+    end
+    
+    exponent = level_range > 0 ? floor(log10(level_range)) / 3 : 0
+    scale = 10^(3 * exponent)
+    scaled_levels = levels ./ scale
+    
+    format_num = level_range > 0 ? floor(log10(level_range)) % 3 : 0
+    labels = if format_num == 0
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    elseif format_num == 1
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    else
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    end
+    
+    divisors = 2:7
+    remainders = (bins - 1) .% divisors
+    best_divisor = divisors[findlast(x -> x == minimum(remainders), remainders)]
+    tick_indices = round.(Int, range(1, stop=bins + 1, length=best_divisor + 1))
+
+    if !(1 in tick_indices)
+        pushfirst!(tick_indices, 1)
+    end
+    if !((bins + 1) in tick_indices)
+        push!(tick_indices, bins + 1)
+    end
+    unique!(sort!(tick_indices))
+    
+    tick_positions = levels[tick_indices]
+    tick_labels = labels[tick_indices]
+
+    # 3. Create and save the colorbar image
+    fig = Figure(size=(150, 250))
+    Colorbar(fig[1, 1], 
+        colormap=cgrad(:viridis, bins, categorical=true),
+        # limits=(min_val, max_val),
+        limits=(levels[1], levels[end]),
+        label=(scale == 1 ? "Intensity" : "Intensity ×10^$(round(Int, 3 * exponent))"),
+        ticks=(tick_positions, tick_labels),
+        labelsize=20,
+        ticklabelsize=16
+    )
+    save(output_path, fig)
+end

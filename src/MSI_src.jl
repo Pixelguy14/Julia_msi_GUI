@@ -14,7 +14,10 @@ export OpenMSIData,
        get_average_spectrum, 
        LoadMzml, 
        precompute_analytics, 
-       process_spectrum
+       process_spectrum,
+       generate_colorbar_image,
+       process_image_pipeline,
+       load_and_prepare_mask
 
 # Export the public Preprocessing API
 export FeatureMatrix,
@@ -43,6 +46,7 @@ include("mzML.jl")
 include("imzML.jl")
 include("MzmlConverter.jl")
 include("Preprocessing.jl")
+include("ImageProcessing.jl")
 
 
 # --- Main Entry Point --- #

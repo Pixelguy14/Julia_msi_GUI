@@ -1,3 +1,5 @@
+# app.jl
+
 module App
 # ==Packages ==
 using GenieFramework # Set up Genie development environment.
@@ -6,7 +8,6 @@ using Libz
 using PlotlyBase
 using CairoMakie
 using Colors
-# using julia_mzML_imzML
 using MSI_src # Import the new MSIData library
 using Statistics
 using NaturalSort
@@ -20,9 +21,50 @@ using JSON
 using Dates
 
 # Bring MSIData into App module's scope
-using .MSI_src: MSIData, OpenMSIData, #=GetSpectrum,=# process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile
+using .MSI_src: MSIData, OpenMSIData, process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile, generate_colorbar_image, load_and_prepare_mask
 
-include("./julia_imzML_visual.jl")
+if !@isdefined(increment_image)
+    include("./julia_imzML_visual.jl")
+end
+
+# --- Memory Validation Logging ---
+if get(ENV, "GENIE_ENV", "dev") != "prod"
+    function get_rss_mb()
+        if !Sys.islinux()
+            return 0.0
+        end
+        try
+            pid = getpid()
+            cmd = `ps -p $pid -o rss=`
+            rss_kb_str = read(cmd, String)
+            rss_kb = parse(Int, strip(rss_kb_str))
+            return round(rss_kb / 1024, digits=2)
+        catch e
+            @warn "Could not get RSS via `ps` command. Error: $e"
+            return 0.0
+        end
+    end
+
+    function log_memory_usage(context::String, msi_data_val)
+        rss_mb = get_rss_mb()
+        
+        msi_data_size_mb = 0
+        if msi_data_val !== nothing
+            msi_data_size_mb = round(Base.summarysize(msi_data_val) / (1024^2), digits=2)
+        end
+
+        gc_time_s = round(GC.time(), digits=3)
+        
+        println("--- MEMORY LOG [$(context)] ---")
+        println("  Timestamp: $(now())")
+        println("  Process RSS: $(rss_mb) MB")
+        println("  msi_data size: $(msi_data_size_mb) MB")
+        println("  Cumulative GC time: $(gc_time_s) s")
+        println("--------------------------")
+    end
+else
+    log_memory_usage(context::String, msi_data_val) = nothing # No-op for production
+end
 
 @genietools
 
@@ -47,6 +89,7 @@ include("./julia_imzML_visual.jl")
     @in triqEnabled=false
     @in SpectraEnabled=false
     @in MFilterEnabled=false
+    @in maskEnabled=false
     # Dialogs
     @in warning_msg=false
     @in CompareDialog=false
@@ -160,6 +203,9 @@ include("./julia_imzML_visual.jl")
     @out msg_conversion = ""
     @out btnConvertDisable = true
 
+    # == Pre Processing Variables ==
+    @in pre_tab = "stabilization"
+
     # == Batch Summary Dialog ==
     @in showBatchSummary = false
     @out batch_summary = ""
@@ -271,7 +317,7 @@ include("./julia_imzML_visual.jl")
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
     # Dummy 2D scatter plot
-    traceSpectra=PlotlyBase.scatter(x=Vector{Float64}(), y=Vector{Float64}(),marker=attr(size=1, color="blue", opacity=0.1))
+    traceSpectra=PlotlyBase.stem(x=Vector{Float64}(), y=Vector{Float64}(),marker=attr(size=1, color="blue", opacity=0.1))
     # Create conection to frontend
     @out plotdata=[traceSpectra]
     @out plotlayout=layoutSpectra
@@ -384,6 +430,7 @@ include("./julia_imzML_visual.jl")
                     imgWidth, imgHeight = dims[1], dims[2]
 
                     msi_data = nothing # Ensure data is not held in memory
+                    log_memory_usage("Fast Load (msi_data cleared)", msi_data)
                     btnMetadataDisable = false
                     btnStartDisable = false
                     btnPlotDisable = false
@@ -443,6 +490,7 @@ include("./julia_imzML_visual.jl")
 
                 selected_folder_main = dataset_name
                 msi_data = loaded_data
+                log_memory_usage("Full Load", msi_data)
 
                 eTime = round(time() - sTime, digits=3)
                 msg = "Active file loaded in $(eTime) seconds. Dataset '$(dataset_name)' is ready for analysis."
@@ -612,7 +660,7 @@ include("./julia_imzML_visual.jl")
         overall_progress = 0.0
         progress_message = "Preparing batch process..."
 
-        # --- CAPTURE CURRENT VALUES HERE (NO []) ---
+        # --- CAPTURE CURRENT VALUES HERE ---
         current_selected_files = selected_files
         current_nmass = Nmass
         current_tol = Tol
@@ -620,6 +668,7 @@ include("./julia_imzML_visual.jl")
         current_triq_enabled = triqEnabled
         current_triq_prob = triqProb
         current_mfilter_enabled = MFilterEnabled
+        current_mask_enabled = maskEnabled
         current_registry_path = registry_path
 
         println("starting main process with $(length(current_selected_files)) files")
@@ -635,62 +684,33 @@ include("./julia_imzML_visual.jl")
                     return
                 end
 
-                println("Nmass value: '$current_nmass'")
-                println("Type of current_nmass: $(typeof(current_nmass))")
-
-                masses_str = split(current_nmass, ',', keepempty=false)
-                println("Parsed masses strings: $masses_str")
-
-                masses = Float64[] 
+                masses = Float64[]
                 try
-                    masses = [parse(Float64, strip(m)) for m in masses_str]
-                    println("Parsed masses: $masses")
+                    masses = [parse(Float64, strip(m)) for m in split(current_nmass, ',', keepempty=false)]
                 catch e
                     progress_message = "Invalid m/z value(s). Please provide a comma-separated list of numbers. Error: $e"
                     warning_msg = true
-                    println(progress_message)
                     return
                 end
 
-                println("Masses array: $masses, type: $(typeof(masses))")
-
-                if !(masses isa AbstractArray) || isempty(masses)
+                if isempty(masses)
                     progress_message = "No valid m/z values found. Please provide comma-separated positive numbers."
                     warning_msg = true
-                    println(progress_message)
                     return
                 end
 
-                # Check other parameters
-                if !(0 < current_tol <= 1)
-                    progress_message = "Tolerance must be between 0 and 1."
-                    warning_msg = true
-                    println(progress_message)
-                    return
-                end
-
-                if !(1 < current_color_level < 257)
-                    progress_message = "Color levels must be between 2 and 256."
-                    warning_msg = true
-                    println(progress_message)
-                    return
-                end
-
-                println("entering batch processing loop with masses: $masses")
-                
                 # --- 2. Batch Processing Loop ---
                 num_files = length(current_selected_files)
                 total_steps = num_files
                 current_step = 0
                 errors = Dict("load_errors" => String[], "slice_errors" => String[], "io_errors" => String[])
                 newly_created_folders = String[]
+                files_without_mask = 0
 
                 for (file_idx, file_path) in enumerate(current_selected_files)
-                    # Update progress for current file
                     progress_message = "Processing file $file_idx/$num_files: $(basename(file_path))"
                     overall_progress = current_step / total_steps
                     
-                    # Create parameters for this specific file
                     all_params = (
                         tolerance = current_tol,
                         colorL = current_color_level,
@@ -702,14 +722,12 @@ include("./julia_imzML_visual.jl")
                         nFiles = num_files
                     )
 
-                    # Process the file
-                    success, error_msg = process_file_safely(file_path, masses, all_params, progress_message, overall_progress)
+                    success, error_msg = process_file_safely(file_path, masses, all_params, progress_message, overall_progress, use_mask=current_mask_enabled)
 
                     if !success
                         push!(errors["load_errors"], error_msg)
                     else
-                        dataset_name = replace(basename(file_path), r"\.imzML$"i => "")
-                        push!(newly_created_folders, dataset_name)
+                        push!(newly_created_folders, replace(basename(file_path), r"\.imzML$"i => ""))
                     end
                     current_step += 1
                 end
@@ -717,7 +735,6 @@ include("./julia_imzML_visual.jl")
                 # --- 3. Final Report ---
                 total_time_end = round(time() - total_time_start, digits=3)
                 
-                # Update folder lists in UI
                 registry = load_registry(current_registry_path)
                 all_folders = sort(collect(keys(registry)), lt=natural)
                 img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
@@ -738,8 +755,11 @@ include("./julia_imzML_visual.jl")
                     warning_msg = true
                 end
 
+                mask_summary = current_mask_enabled ? "\nFiles processed without a mask: $(files_without_mask)" : ""
+
                 batch_summary = """
                 Processed $(successful_files)/$(num_files) files successfully.
+                $(mask_summary)
 
                 Errors by category:
                 • Load failures: $(length(errors["load_errors"]))
@@ -750,6 +770,56 @@ include("./julia_imzML_visual.jl")
                 $(join(vcat(values(errors)...), "\n"))
                 """
                 showBatchSummary = true
+
+                # Update UI to display the last generated image
+                if !isempty(newly_created_folders)
+                    timestamp = string(time_ns())
+                    folder_path = joinpath("public", selected_folder_main)
+
+                    if current_triq_enabled
+                        triq_files = filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path))
+                        col_triq_files = filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path))
+
+                        if !isempty(triq_files)
+                            latest_triq = triq_files[argmax([mtime(joinpath(folder_path, f)) for f in triq_files])]
+                            current_triq = latest_triq
+                            imgIntT = "/$(selected_folder_main)/$(current_triq)?t=$(timestamp)"
+                            plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
+                            text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
+                            msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+                            
+                            if !isempty(col_triq_files)
+                                latest_col_triq = col_triq_files[argmax([mtime(joinpath(folder_path, f)) for f in col_triq_files])]
+                                current_col_triq = latest_col_triq
+                                colorbarT = "/$(selected_folder_main)/$(current_col_triq)?t=$(timestamp)"
+                            else
+                                colorbarT = ""
+                            end
+                            selectedTab = "tab1"
+                        end
+                    else # Not TrIQ enabled, display regular MSI image
+                        msi_files = filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path))
+                        col_msi_files = filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path))
+
+                        if !isempty(msi_files)
+                            latest_msi = msi_files[argmax([mtime(joinpath(folder_path, f)) for f in msi_files])]
+                            current_msi = latest_msi
+                            imgInt = "/$(selected_folder_main)/$(current_msi)?t=$(timestamp)"
+                            plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
+                            text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
+                            msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+
+                            if !isempty(col_msi_files)
+                                latest_col_msi = col_msi_files[argmax([mtime(joinpath(folder_path, f)) for f in col_msi_files])]
+                                current_col_msi = latest_col_msi
+                                colorbar = "/$(selected_folder_main)/$(current_col_msi)?t=$(timestamp)"
+                            else
+                                colorbar = ""
+                            end
+                            selectedTab = "tab0"
+                        end
+                    end
+                end
 
             catch e
                 println("Error in main process: $e")
@@ -766,6 +836,10 @@ include("./julia_imzML_visual.jl")
                 SpectraEnabled = true
                 overall_progress = 0.0
                 println("Done")
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                end
             end
         end
     end
@@ -786,7 +860,9 @@ include("./julia_imzML_visual.jl")
             try
                 sTime = time()
                 registry = load_registry(registry_path)
-                target_path = registry[selected_folder_main]["source_path"]
+                entry = registry[selected_folder_main]
+                target_path = entry["source_path"]
+
                 if target_path == "unknown (manually added)"
                     msg = "Dataset selected contained no route."
                     warning_msg = true
@@ -797,22 +873,29 @@ include("./julia_imzML_visual.jl")
                     msg = "Reloading $(basename(target_path)) for analysis..."
                     full_route = target_path
                     msi_data = OpenMSIData(target_path)
-
-                    existing_entry = get(registry, selected_folder_main, nothing)
-                    if existing_entry !== nothing && haskey(get(existing_entry, "metadata", Dict()), "global_min_mz") && existing_entry["metadata"]["global_min_mz"] !== nothing
-                        println("Injecting cached m/z range to skip Pass 1...")
-                        msi_data.global_min_mz = existing_entry["metadata"]["global_min_mz"]
-                        msi_data.global_max_mz = existing_entry["metadata"]["global_max_mz"]
+                    if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
+                        msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
+                        msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
                     else
                         precompute_analytics(msi_data)
                     end
                 end
 
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data, selected_folder_main)
+                local mask_path_for_plot::Union{String, Nothing} = nothing
+                if maskEnabled && get(entry, "has_mask", false)
+                    mask_path_for_plot = get(entry, "mask_path", "")
+                    if !isfile(mask_path_for_plot)
+                        @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
+                        mask_path_for_plot = nothing
+                    end
+                end
+
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
                 selectedTab = "tab2"
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
                 msg = "Plot loaded in $(eTime) seconds"
+                log_memory_usage("Mean Plot Generated", msi_data)
             catch e
                 msg = "Could not generate mean spectrum plot: $e"
                 warning_msg = true
@@ -822,6 +905,10 @@ include("./julia_imzML_visual.jl")
                 btnPlotDisable = false
                 btnSpectraDisable = false
                 btnStartDisable = false
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                end
             end
         end
     end
@@ -842,7 +929,9 @@ include("./julia_imzML_visual.jl")
             try
                 sTime = time()
                 registry = load_registry(registry_path)
-                target_path = registry[selected_folder_main]["source_path"]
+                entry = registry[selected_folder_main]
+                target_path = entry["source_path"]
+
                 if target_path == "unknown (manually added)"
                     msg = "Dataset selected contained no route."
                     warning_msg = true
@@ -853,22 +942,29 @@ include("./julia_imzML_visual.jl")
                     msg = "Reloading $(basename(target_path)) for analysis..."
                     full_route = target_path
                     msi_data = OpenMSIData(target_path)
-
-                    existing_entry = get(registry, selected_folder_main, nothing)
-                    if existing_entry !== nothing && haskey(get(existing_entry, "metadata", Dict()), "global_min_mz") && existing_entry["metadata"]["global_min_mz"] !== nothing
-                        println("Injecting cached m/z range to skip Pass 1...")
-                        msi_data.global_min_mz = existing_entry["metadata"]["global_min_mz"]
-                        msi_data.global_max_mz = existing_entry["metadata"]["global_max_mz"]
+                    if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
+                        msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
+                        msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
                     else
                         precompute_analytics(msi_data)
                     end
                 end
 
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data, selected_folder_main)
+                local mask_path_for_plot::Union{String, Nothing} = nothing
+                if maskEnabled && get(entry, "has_mask", false)
+                    mask_path_for_plot = get(entry, "mask_path", "")
+                    if !isfile(mask_path_for_plot)
+                        @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
+                        mask_path_for_plot = nothing
+                    end
+                end
+
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
                 selectedTab = "tab2"
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
                 msg = "Total plot loaded in $(eTime) seconds"
+                log_memory_usage("Sum Plot Generated", msi_data)
             catch e
                 msg = "Could not generate total spectrum plot: $e"
                 warning_msg = true
@@ -878,6 +974,10 @@ include("./julia_imzML_visual.jl")
                 btnPlotDisable = false
                 btnSpectraDisable = false
                 btnStartDisable = false
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                end
             end
         end
     end
@@ -899,7 +999,17 @@ include("./julia_imzML_visual.jl")
             try
                 sTime = time()
                 registry = load_registry(registry_path)
-                target_path = registry[selected_folder_main]["source_path"]
+                
+                # Add error handling for registry access
+                if !haskey(registry, selected_folder_main)
+                    msg = "Dataset '$selected_folder_main' not found in registry."
+                    warning_msg = true
+                    return
+                end
+                
+                entry = registry[selected_folder_main]
+                target_path = entry["source_path"]
+
                 if target_path == "unknown (manually added)"
                     msg = "Dataset selected contained no route."
                     warning_msg = true
@@ -910,25 +1020,62 @@ include("./julia_imzML_visual.jl")
                     msg = "Reloading $(basename(target_path)) for analysis..."
                     full_route = target_path
                     msi_data = OpenMSIData(target_path)
-
-                    existing_entry = get(registry, selected_folder_main, nothing)
-                    if existing_entry !== nothing && haskey(get(existing_entry, "metadata", Dict()), "global_min_mz") && existing_entry["metadata"]["global_min_mz"] !== nothing
-                        println("Injecting cached m/z range to skip Pass 1...")
-                        msi_data.global_min_mz = existing_entry["metadata"]["global_min_mz"]
-                        msi_data.global_max_mz = existing_entry["metadata"]["global_max_mz"]
+                    if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
+                        msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
+                        msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
                     else
                         precompute_analytics(msi_data)
                     end
                 end
 
-                y = yCoord < 0 ? abs(yCoord) : yCoord
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y, imgWidth, imgHeight, selected_folder_main)
-                xCoord = plotlayout.title == "Spectrum #$(xCoord)" ? xCoord : clamp(xCoord, 1, imgWidth)
-                yCoord = plotlayout.title == "Spectrum #$(xCoord)" ? 0 : -clamp(y, 1, imgHeight)
+                local mask_path_for_plot::Union{String, Nothing} = nothing
+                if maskEnabled && get(entry, "has_mask", false)
+                    mask_path_for_plot = get(entry, "mask_path", "")
+                    if !isfile(mask_path_for_plot)
+                        @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
+                        mask_path_for_plot = nothing
+                    end
+                end
+
+                # Convert to positive coordinates for processing
+                y_positive = yCoord < 0 ? abs(yCoord) : yCoord
+                plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
+                
+                # Update coordinates based on actual plot title
+                # Extract title text from the Dict safely
+                actual_title = if plotlayout.title isa Dict && haskey(plotlayout.title, :text)
+                    plotlayout.title[:text]
+                elseif plotlayout.title isa Dict && haskey(plotlayout.title, "text")
+                    plotlayout.title["text"]
+                else
+                    string(plotlayout.title)  # Fallback
+                end
+                
+                if occursin("Masked Spectrum at", actual_title)
+                    # Extract coordinates from masked spectrum title
+                    coords_match = match(r"Masked Spectrum at \((\d+), (\d+)\)", actual_title)
+                    if coords_match !== nothing
+                        xCoord = parse(Int, coords_match.captures[1])
+                        yCoord = -parse(Int, coords_match.captures[2])  # Negative for display
+                    end
+                elseif occursin("Spectrum at", actual_title)
+                    # Extract coordinates from regular spectrum title
+                    coords_match = match(r"Spectrum at \((\d+), (\d+)\)", actual_title)
+                    if coords_match !== nothing
+                        xCoord = parse(Int, coords_match.captures[1])
+                        yCoord = -parse(Int, coords_match.captures[2])  # Negative for display
+                    end
+                else
+                    # For non-imaging data or fallback, just clamp the coordinates
+                    xCoord = clamp(xCoord, 1, imgWidth)
+                    yCoord = yCoord < 0 ? yCoord : -clamp(yCoord, 1, imgHeight)
+                end
+                
                 selectedTab = "tab2"
                 fTime = time()
                 eTime = round(fTime - sTime, digits=3)
                 msg = "Plot loaded in $(eTime) seconds"
+                log_memory_usage("XY Plot Generated", msi_data)
             catch e
                 msg = "Could not retrieve spectrum: $e"
                 warning_msg = true
@@ -938,6 +1085,10 @@ include("./julia_imzML_visual.jl")
                 btnPlotDisable = false
                 btnSpectraDisable = false
                 btnStartDisable = false
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                end
             end
         end
     end
@@ -1213,6 +1364,13 @@ include("./julia_imzML_visual.jl")
 
     # This handler will now correctly load the first image from the newly selected folder.
     @onchange selected_folder_main begin
+        msi_data = nothing
+        log_memory_usage("Folder Changed (msi_data cleared)", msi_data)
+        GC.gc()
+        if Sys.islinux()
+            ccall(:malloc_trim, Int32, (Int32,), 0)
+        end
+
         if !isempty(selected_folder_main)
             folder_path = joinpath("public", selected_folder_main)
             if !isdir(folder_path) 
@@ -1226,6 +1384,7 @@ include("./julia_imzML_visual.jl")
                 plotlayoutImg = layoutImg
                 plotdataImgT = [traceImg]
                 plotlayoutImgT = layoutImg
+                imgWidth, imgHeight = 0, 0
                 return
             end
 
@@ -1236,7 +1395,8 @@ include("./julia_imzML_visual.jl")
             if !isempty(msi_bmp)
                 current_msi = first(msi_bmp)
                 imgInt = "/$(selected_folder_main)/$(current_msi)"
-                plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
+                plotdataImg, plotlayoutImg, w, h = loadImgPlot(imgInt)
+                imgWidth, imgHeight = w, h
                 text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
                 msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
                 if !isempty(col_msi_png)
@@ -1260,7 +1420,11 @@ include("./julia_imzML_visual.jl")
             if !isempty(triq_bmp)
                 current_triq = first(triq_bmp)
                 imgIntT = "/$(selected_folder_main)/$(current_triq)"
-                plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
+                plotdataImgT, plotlayoutImgT, w, h = loadImgPlot(imgIntT)
+                # If no MSI image was loaded, dimensions from TrIQ image are used.
+                if isempty(msi_bmp)
+                    imgWidth, imgHeight = w, h
+                end
                 text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
                 msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
                 if !isempty(col_triq_png)
@@ -1275,6 +1439,10 @@ include("./julia_imzML_visual.jl")
                 msgtriq = "No TrIQ images found in this dataset."
                 plotdataImgT = [traceImg]
                 plotlayoutImgT = layoutImg
+            end
+
+            if isempty(msi_bmp) && isempty(triq_bmp)
+                imgWidth, imgHeight = 0, 0
             end
         end
     end
@@ -1391,90 +1559,130 @@ include("./julia_imzML_visual.jl")
     
     # 3d plot
     @onbutton image3dPlot begin
-        msg="Image 3D plot selected"
-        cleaned_imgInt=replace(imgInt, r"\?.*" => "")
-        cleaned_imgInt=lstrip(cleaned_imgInt, '/')
-        var=joinpath( "./public", cleaned_imgInt )
+        msg = "Image 3D plot selected"
+        cleaned_imgInt = replace(imgInt, r"\?.*" => "")
+        cleaned_imgInt = lstrip(cleaned_imgInt, '/')
+        var = joinpath("./public", cleaned_imgInt)
 
         if !isfile(var)
-            msg="Image could not be 3d plotted"
-            warning_msg=true
+            msg = "Image could not be 3d plotted"
+            warning_msg = true
             return
         end
 
-        progressPlot=true
-        btnPlotDisable=true
-        btnStartDisable=true
-        btnSpectraDisable=true
-        
+        progressPlot = true
+        btnPlotDisable = true
+        btnStartDisable = true
+        btnSpectraDisable = true
+
         @async begin
             try
-                sTime=time()
-                plotdata3d, plotlayout3d=loadSurfacePlot(imgInt)
-                GC.gc() # Trigger garbage collection
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                # --- Get Mask Path ---
+                local mask_path_for_plot::Union{String, Nothing} = nothing
+                if maskEnabled && !isempty(selected_folder_main)
+                    registry = load_registry(registry_path)
+                    entry = get(registry, selected_folder_main, nothing)
+                    if entry !== nothing && get(entry, "has_mask", false)
+                        mask_path_candidate = get(entry, "mask_path", "")
+                        if isfile(mask_path_candidate)
+                            mask_path_for_plot = mask_path_candidate
+                        else
+                            @warn "Mask enabled but file not found: $(mask_path_candidate). Plotting without mask."
+                        end
+                    end
                 end
-                selectedTab="tab4"
-                fTime=time()
-                eTime=round(fTime-sTime,digits=3)
-                msg="Plot loaded in $(eTime) seconds"
-            catch e 
-                msg="Failed to load and process image: $e" 
-                warning_msg=true
+                # ---
+
+                sTime = time()
+                if mask_path_for_plot !== nothing
+                    plotdata3d, plotlayout3d = loadSurfacePlot(imgInt, mask_path_for_plot)
+                else
+                    plotdata3d, plotlayout3d = loadSurfacePlot(imgInt)
+                end
+
+                selectedTab = "tab4"
+                fTime = time()
+                eTime = round(fTime - sTime, digits=3)
+                msg = "Plot loaded in $(eTime) seconds"
+                log_memory_usage("Mean Plot Generated", msi_data)
+            catch e
+                msg = "Failed to load and process image: $e"
+                warning_msg = true
+                @error "3D plot generation failed" exception=(e, catch_backtrace())
             finally
                 progressPlot=false
                 btnPlotDisable=false
                 btnStartDisable=false
-                if msi_data !== nothing
-                    # We enable coord search and spectra plot creation
-                    btnSpectraDisable=false
-                    SpectraEnabled=true
+                btnSpectraDisable=false
+                SpectraEnabled=true
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
                 end
             end
         end
-    end    # 3d plot for TrIQ
+    end
     
     @onbutton triq3dPlot begin
-        msg="TrIQ 3D plot selected"
-        cleaned_imgIntT=replace(imgIntT, r"\?.*" => "")
-        cleaned_imgIntT=lstrip(cleaned_imgIntT, '/')
-        var=joinpath( "./public", cleaned_imgIntT )
+        msg = "TrIQ 3D plot selected"
+        cleaned_imgIntT = replace(imgIntT, r"\?.*" => "")
+        cleaned_imgIntT = lstrip(cleaned_imgIntT, '/')
+        var = joinpath("./public", cleaned_imgIntT)
 
         if !isfile(var)
-            msg="Image could not be 3d plotted"
-            warning_msg=true
+            msg = "Image could not be 3d plotted"
+            warning_msg = true
             return
         end
 
-        progressPlot=true
-        btnPlotDisable=true
-        btnStartDisable=true
-        btnSpectraDisable=true
-        
+        progressPlot = true
+        btnPlotDisable = true
+        btnStartDisable = true
+        btnSpectraDisable = true
+
         @async begin
             try
-                sTime=time()
-                plotdata3d, plotlayout3d=loadSurfacePlot(imgIntT)
-                GC.gc() # Trigger garbage collection
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
+                # --- Get Mask Path ---
+                local mask_path_for_plot::Union{String, Nothing} = nothing
+                if maskEnabled[] && !isempty(selected_folder_main)
+                    registry = load_registry(registry_path)
+                    entry = get(registry, selected_folder_main, nothing)
+                    if entry !== nothing && get(entry, "has_mask", false)
+                        mask_path_candidate = get(entry, "mask_path", "")
+                        if isfile(mask_path_candidate)
+                            mask_path_for_plot = mask_path_candidate
+                        else
+                            @warn "Mask enabled but file not found: $(mask_path_candidate). Plotting without mask."
+                        end
+                    end
                 end
-                selectedTab="tab4"
-                fTime=time()
-                eTime=round(fTime-sTime,digits=3)
-                msg="Plot loaded in $(eTime) seconds"
-            catch e 
-                msg="Failed to load and process image: $e" 
-                warning_msg=true
+                # ---
+
+                sTime = time()
+                if mask_path_for_plot !== nothing
+                    plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT, mask_path_for_plot)
+                else
+                    plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT)
+                end
+
+                selectedTab = "tab4"
+                fTime = time()
+                eTime = round(fTime - sTime, digits=3)
+                msg = "Plot loaded in $(eTime) seconds"
+                log_memory_usage("Mean Plot Generated", msi_data)
+            catch e
+                msg = "Failed to load and process image: $e"
+                warning_msg = true
+                @error "3D TrIQ plot generation failed" exception=(e, catch_backtrace())
             finally
                 progressPlot=false
                 btnPlotDisable=false
                 btnStartDisable=false
-                if msi_data !== nothing
-                    # We enable coord search and spectra plot creation
-                    btnSpectraDisable=false
-                    SpectraEnabled=true
+                btnSpectraDisable=false
+                SpectraEnabled=true
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
                 end
             end
         end
@@ -1517,10 +1725,11 @@ include("./julia_imzML_visual.jl")
                 progressPlot=false
                 btnPlotDisable=false
                 btnStartDisable=false
-                if msi_data !== nothing
-                    # We enable coord search and spectra plot creation
-                    btnSpectraDisable=false
-                    SpectraEnabled=true
+                btnSpectraDisable=false
+                SpectraEnabled=true
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
                 end
             end
         end
@@ -1562,10 +1771,11 @@ include("./julia_imzML_visual.jl")
                 progressPlot=false
                 btnPlotDisable=false
                 btnStartDisable=false
-                if msi_data !== nothing
-                    # We enable coord search and spectra plot creation
-                    btnSpectraDisable=false
-                    SpectraEnabled=true
+                btnSpectraDisable=false
+                SpectraEnabled=true
+                GC.gc()
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
                 end
             end
         end
@@ -1579,7 +1789,7 @@ include("./julia_imzML_visual.jl")
     @onchange Nmass begin
         if !isempty(xSpectraMz)
             # Main spectrum trace
-            traceSpectra = PlotlyBase.scatter(
+            traceSpectra = PlotlyBase.stem(
                 x=xSpectraMz, 
                 y=ySpectraMz, 
                 marker=attr(size=1, color="blue", opacity=0.5), 
@@ -1651,13 +1861,13 @@ include("./julia_imzML_visual.jl")
 
     @onchange xCoord, yCoord begin 
         if selectedTab == "tab1"
-            plotdataImgT = filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y"]), plotdataImgT)
+            main_trace = plotdataImgT[1]  # The heatmap/image trace
             trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
-            plotdataImgT = append!(plotdataImgT, [trace1, trace2])
+            plotdataImgT = [main_trace, trace1, trace2]  # Fresh array every time
         elseif selectedTab == "tab0"
-            plotdataImg = filter(trace -> !(get(trace, :name, "") in ["Line X", "Line Y", "Optical"]), plotdataImg)
+            main_trace = plotdataImg[1]  # The heatmap/image trace
             trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
-            plotdataImg = append!(plotdataImg, [trace1, trace2])
+            plotdataImg = [main_trace, trace1, trace2]
         end
     end
 
@@ -1769,6 +1979,7 @@ include("./julia_imzML_visual.jl")
                 end
             end
         end
+        log_memory_usage("App Ready", msi_data)
         warmup_init()
     end
 

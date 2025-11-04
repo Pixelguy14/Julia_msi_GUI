@@ -1,290 +1,133 @@
 <header id="header">
-    <img src="/css/LABI_logo.png" alt="Labi Logo Icon" id="imgLogo">
-    <div>
-      <h4>JuliaMSI&nbsp;</h4>
-    </div>
-  </header>
-  <div id="extDivStyle" class="row col-12 q-pa-xl">
-    <div class="row col-6">
-      <!-- Left DIV -->
-      <div id="intDivStyle-left" class="st-col col-12 st-module">
-        <q-tabs v-model="left_tab" dense class="text-grey" indicator-color="primary" align="justify">
-          <q-tab name="generator" label="Slice Generator"></q-tab>
-          <q-tab name="converter" label="Converter"></q-tab>
-        </q-tabs>
-        <q-separator></q-separator>
-        <q-tab-panels v-model="left_tab" animated>
-          <q-tab-panel name="generator">
-            <div class="text-h6">imzML & mzML Data Processor</div>
-            <p>Please make sure the ibd and imzML file are located in the same directory and have the same name.
-              <br>It may take a while to generate the slice / spectrum, please be patient.
-              <br>To generate the contour or surface plots, you have to select the desired slice first using the interface.</p>
-        <div class="row items-center">
-          <q-input standout="custom-standout" class="q-ma-sm cursor-pointer col" 
-            v-model="full_route" readonly 
-            :label="batch_file_count > 0 ? batch_file_count + ' file(s) in batch' : 'Select an imzML file'" 
-            v-on:click="btnSearch=true">
-            <template v-slot:append>
+  <img src="/css/LABI_logo.png" alt="Labi Logo Icon" id="imgLogo">
+  <div>
+    <h4>JuliaMSI&nbsp;</h4>
+  </div>
+</header>
+<div id="extDivStyle" class="row col-12 q-pa-xl">
+  <div class="row col-6">
+    <!-- Left DIV -->
+    <div id="intDivStyle-left" class="st-col col-12 st-module">
+      <q-tabs v-model="left_tab" dense class="text-grey" indicator-color="primary" align="justify">
+        <q-tab name="pre_treatment" label="Pre-Treatment"></q-tab>
+        <q-tab name="generator" label="Slice Generator"></q-tab>
+        <q-tab name="converter" label="Converter"></q-tab>
+      </q-tabs>
+      <q-separator></q-separator>
+      <q-tab-panels v-model="left_tab" animated>
+        <q-tab-panel name="pre_treatment">
+          <div class="text-h6">imzML & mzML Data Pre-Treatment</div>
+          <div class="row items-center">
+            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer col" v-model="full_route" readonly
+              :label="batch_file_count > 0 ? batch_file_count + ' file(s) in batch' : 'Select an imzML file'"
+              v-on:click="btnSearch=true">
+              <template v-slot:append>
                 <q-icon name="search" v-on:click="btnSearch=true" class="cursor-pointer" />
-            </template>
-          </q-input>
-          <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add"></q-btn>
-          <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" 
-                 :disable="batch_file_count === 0" label="Clear"></q-btn>
-        </div>
-        <q-list bordered separator v-if="selected_files.length > 0">
-          <q-item v-for="(file, index) in selected_files" :key="index">
-            <q-item-section>
-              {{ file }}
-            </q-item-section>
-            <q-item-section side>
-              <q-btn flat round icon="delete" size="sm" v-on:click="selected_files.splice(index, 1)"></q-btn>
-            </q-item-section>
-          </q-item>
-        </q-list>
+              </template>
+            </q-input>
+            <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add"></q-btn>
+            <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" :disable="batch_file_count === 0"
+              label="Clear"></q-btn>
+          </div>
+          <br>
+          <br>
+          <q-tabs v-model="pre_tab" dense class="text-grey" indicator-color="primary" align="justify">
+            <q-tab name="stabilization" label="Stabilization"></q-tab>
+            <q-tab name="smoothing" label="Smoothing"></q-tab>
+            <q-tab name="baseline" label="Baseline"></q-tab>
+            <q-tab name="calibration" label="Calibration"></q-tab>
+            <q-tab name="warping" label="Warping"></q-tab>
+            <q-tab name="peak" label="Peak Detection"></q-tab>
+            <q-tab name="binning" label="Binning"></q-tab>
+          </q-tabs>
+          <q-separator></q-separator>
+          <q-tab-panels v-model="pre_tab" animated>
+            <q-tab-panel name="stabilization">
+              <p>HI!</p>
+            </q-tab-panel>
+          </q-tab-panels>
+        </q-tab-panel>
+        <q-tab-panel name="generator">
+          <div class="text-h6">imzML & mzML Data Processor</div>
+          <p>Please make sure the ibd and imzML file are located in the same directory and have the same name.
+            <br>It may take a while to generate the slice / spectrum, please be patient.
+            <br>To generate the contour or surface plots, you have to select the desired slice first using the
+            interface.
+          </p>
+          <div class="row items-center">
+            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer col" v-model="full_route" readonly
+              :label="batch_file_count > 0 ? batch_file_count + ' file(s) in batch' : 'Select an imzML file'"
+              v-on:click="btnSearch=true">
+              <template v-slot:append>
+                <q-icon name="search" v-on:click="btnSearch=true" class="cursor-pointer" />
+              </template>
+            </q-input>
+            <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add"></q-btn>
+            <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" :disable="batch_file_count === 0"
+              label="Clear"></q-btn>
+          </div>
+          <q-list bordered separator v-if="selected_files.length > 0">
+            <q-item v-for="(file, index) in selected_files" :key="index">
+              <q-item-section>
+                {{ file }}
+              </q-item-section>
+              <q-item-section side>
+                <q-btn flat round icon="delete" size="sm" v-on:click="selected_files.splice(index, 1)"></q-btn>
+              </q-item-section>
+            </q-item>
+          </q-list>
 
-        <!-- Variable Manipulation -->
-            <div class="row">
-              <div class="st-col col-4 col-sm q-ma-sm">
-                <q-input standout="custom-standout" id="textNmass" v-model="Nmass"
-                  label="Mass-to-charge ratio(s) of interest" type="text"
-                  :rules="[ 
+          <!-- Variable Manipulation -->
+          <div class="row">
+            <div class="st-col col-4 col-sm q-ma-sm">
+              <q-input standout="custom-standout" id="textNmass" v-model="Nmass"
+                label="Mass-to-charge ratio(s) of interest" type="text" :rules="[ 
                     val => !!val || '* Required',
                     val => val.split(',').every(m => !isNaN(parseFloat(m.trim())) && parseFloat(m.trim()) > 0) || 'Need comma-separated positive numbers'
                   ]">
-                </q-input>
-              </div>
-              <div class="st-col col-4 col-sm q-ma-sm">
-                <q-input standout="custom-standout" id="textTol" step="0.005" v-model="Tol"
-                  label="Mass-to-charge ratio tolerance" type="number"
-                  :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
-              </div>
-              <div class="st-col col-4 col-sm q-ma-sm">
-                <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color levels"
-                  type="number"
-                  :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
-              </div>
+              </q-input>
             </div>
-            <div class="row">
-              <!-- Triq Variable Manipulation and filters-->
-              <div class="col-6">
-                <div class="st-col col-6 col-sm q-ma-sm">
-                  <q-toggle id="btnEnableMFilter" v-on:click="MFilterEnabled" v-model="MFilterEnabled" color="green"
-                    label="Add Median Filter"></q-toggle>
-                  <q-toggle id="btnEnableTriq" v-on:click="triqEnabled" v-model="triqEnabled" color="blue"
-                    label="Add Threshold Intensity Quantization (TrIQ)"></q-toggle>
-                </div>
-                <div class="row">
-                  <div class="st-col col-4 col-sm-4 q-ma-sm">
-                    <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb"
-                      label="TrIQ probability" type="number" :rules="[
+            <div class="st-col col-4 col-sm q-ma-sm">
+              <q-input standout="custom-standout" id="textTol" step="0.005" v-model="Tol"
+                label="Mass-to-charge ratio tolerance" type="number"
+                :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
+            </div>
+            <div class="st-col col-4 col-sm q-ma-sm">
+              <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color levels"
+                type="number"
+                :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
+            </div>
+          </div>
+          <div class="row">
+            <!-- Triq Variable Manipulation and filters-->
+            <div class="col-6">
+              <div class="st-col col-6 col-sm q-ma-sm">
+                <q-toggle id="btnEnableMFilter" v-on:click="MFilterEnabled" v-model="MFilterEnabled" color="green"
+                  label="Add Median Filter"></q-toggle>
+                <q-toggle id="btnEnableTriq" v-on:click="triqEnabled" v-model="triqEnabled" color="blue"
+                  label="Add Threshold Intensity Quantization (TrIQ)"></q-toggle>
+                <q-toggle id="btnEnableMask" v-on:click="maskEnabled" v-model="maskEnabled" color="black"
+                  label="Use Mask To Filter Data"></q-toggle>
+              </div>
+              <div class="row">
+                <div class="st-col col-4 col-sm-4 q-ma-sm">
+                  <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb"
+                    label="TrIQ probability" type="number" :rules="[
                             val => triqEnabled ? ( '* Required', val >= 0.8 &amp;&amp; val <= 1 || 'Needs to be in range between 0.8 and 1') : true
                             ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
-                  </div>
-                </div>
-              </div>
-              <!-- Spectra Plot Manipulation -->
-              <div class="col-6">
-                <div class="st-col col-6 col-sm">
-                  <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
-                    label="Generate Spectra" icon="play_arrow">
-                    <template v-slot:loading>
-                      <q-spinner-hourglass class="on-left" />
-                      Loading plot
-                    </template>
-    
-                    <q-list>
-                      <q-item clickable v-close-popup v-on:click="createMeanPlot=true">
-                        <q-item-section>
-                          <q-item-label>Mean spectrum plot</q-item-label>
-                        </q-item-section>
-                      </q-item>
-                      <q-item clickable v-close-popup v-on:click="createSumPlot=true">
-                        <q-item-section>
-                          <q-item-label>Sum Spectrum plot</q-item-label>
-                        </q-item-section>
-                      </q-item>
-                      <q-item clickable v-close-popup v-on:click="createXYPlot=true">
-                        <q-item-section>
-                          <q-item-label>Spectrum plot (X,Y)</q-item-label>
-                        </q-item-section>
-                      </q-item>
-                    </q-list>
-                  </q-btn-dropdown>
-                </div>
-                <div class="row col-6">
-                  <div class="st-col col-4 col-sm-4 q-ma-sm">
-                    <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord" type="number" :rules="[
-                            val => SpectraEnabled ? ( '* Required', val >= 0|| 'Needs to be bigger than 0') : true
-                            ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
-                  </div>
-                  <div class="st-col col-4 col-sm-4 q-ma-sm">
-                    <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord" type="number" :rules="[
-                            val => SpectraEnabled ? ( '* Required', val <= 0|| 'Needs to be lower than 0') : true
-                            ]" :readonly="!SpectraEnabled" :disable="!SpectraEnabled"></q-input>
-                  </div>
                 </div>
               </div>
             </div>
-            <div class="row">
-                        <q-btn :loading="progress" class="q-ma-sm btn-style" :disabled="btnStartDisable" icon="play_arrow"
-                          v-on:click="mainProcess=true" padding="lg" label="Generate Slice">
-                          <template v-slot:loading>
-                            <q-spinner-hourglass class="on-left" />
-                            Loading...
-                          </template>
-                        </q-btn>
-                        <q-btn icon="zoom_out_map" class="q-ma-sm on-right btn-style" v-on:click="compareBtn=true" padding="sm"
-                          label="Compare"></q-btn>
-                        <!--<q-btn class="q-ma-sm btn-style" :disable="btnMetadataDisable"
-                          v-on:click="showMetadataBtn=true" label="Show Metadata"></q-btn>-->
-                          <q-btn class="q-ma-sm btn-style" icon="edit" label="Mask Editor" href="/mask"></q-btn>
-                          <q-btn class="q-ma-sm btn-style" v-on:click="showMetadataBtn=true" label="Show Metadata"></q-btn>
-                        <div class="q-pa-md row items-center" v-show="progress">
-                          <q-spinner color="primary" size="2em" class="q-mr-sm"></q-spinner>
-                          <div class="text-caption">{{ progress_message }}</div>
-                        </div>
-                      </div>
-                      <p>{{msg}}</p>    
-            <div class="row st-col col-12">
-              <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressPlot" :disable="btnPlotDisable"
-                label="Generate Plots" icon="play_arrow">
-                <template v-slot:loading>
-                  <q-spinner-hourglass class="on-left" />
-                  Loading plot
-                </template>
-    
-                <q-list>
-                  <q-item clickable v-close-popup v-on:click="imageCPlot=true">
-                    <q-item-section>
-                      <q-item-label>Image topography Plot</q-item-label>
-                    </q-item-section>
-                  </q-item>
-    
-                  <q-item clickable v-close-popup v-on:click="triqCPlot=true">
-                    <q-item-section>
-                      <q-item-label>TrIQ topography Plot</q-item-label>
-                    </q-item-section>
-                  </q-item>
-    
-                  <q-item clickable v-close-popup v-on:click="image3dPlot=true">
-                    <q-item-section>
-                      <q-item-label>Image surface Plot</q-item-label>
-                    </q-item-section>
-                  </q-item>
-    
-                  <q-item clickable v-close-popup v-on:click="triq3dPlot=true">
-                    <q-item-section>
-                      <q-item-label>TrIQ Surface Plot</q-item-label>
-                    </q-item-section>
-                  </q-item>
-                </q-list>
-              </q-btn-dropdown>
-              <q-btn-dropdown icon="search" class="q-ma-sm btn-style" :disable="btnOpticalDisable"
-                label="Load your optical image">
-                <q-item clickable v-close-popup v-on:click="btnOptical=true">
-                  <q-item-section>
-                    <q-item-label>Over normal image</q-item-label>
-                  </q-item-section>
-                </q-item>
-                <q-item clickable v-close-popup v-on:click="btnOpticalT=true">
-                  <q-item-section>
-                    <q-item-label>Over TrIQ image</q-item-label>
-                  </q-item-section>
-                </q-item>
-              </q-btn-dropdown>
-              <div class="q-mx-sm">
-                <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
-                <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
-              </div>
-            </div>
-          </q-tab-panel>
-          <q-tab-panel name="converter">
-            <div class="text-h6">mzML to imzML Converter</div>
-            <p>Select the .mzML file and the corresponding .txt synchronization file to convert them into an .imzML/.ibd pair.</p>
-            
-            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="mzml_full_route" readonly label="Select your .mzML file" v-on:click="btnSearchMzml=true">
-                <template v-slot:append>
-                    <q-icon name="search" v-on:click="btnSearchMzml=true" class="cursor-pointer" />
-                </template>
-            </q-input>
-
-            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="sync_full_route" readonly label="Select your .txt sync file" v-on:click="btnSearchSync=true">
-                <template v-slot:append>
-                    <q-icon name="search" v-on:click="btnSearchSync=true" class="cursor-pointer" />
-                </template>
-            </q-input>
-
-            <q-btn :loading="progress_conversion" class="q-ma-sm btn-style" :disabled="btnConvertDisable" icon="swap_horiz" v-on:click="convert_process=true" padding="lg" label="Convert File">
-                <template v-slot:loading>
-                    <q-spinner-hourglass class="on-left" />
-                    Converting...
-                </template>
-            </q-btn>
-            <p>{{msg_conversion}}</p>
-          </q-tab-panel>
-        </q-tab-panels>
-      </div>
-    </div>
-    <div class="row col-6">
-      <!-- Right DIV -->
-      <div id="intDivStyle-right" class="st-col col-12 col-sm st-module">
-        <st-tabs id="tabHeader-main" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab" no-arrows></st-tabs>
-        <q-tab-panels v-model="selectedTab">
-          <q-tab-panel name="tab0">
-            <!-- Content for Tab 0 -->
-            <h6>Image visualizer</h6>
-            <div class="row items-center">
-              <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset" class="q-ma-sm" style="min-width: 200px;"></q-select>
-              <q-space></q-space>
-              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinus=true"></q-btn>
-              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlus=true"></q-btn>
-            </div>
-            <!-- Image manager -->
-            <div id="image-container-normal" class="row st-col col-12">
-              <div class="col-10 q-pa-none q-ma-none">
-                <plotly id="plotImg" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data"
-                  @click="data_click"></plotly>
-              </div>
-              <div class="col-2 q-pa-none q-ma-none">
-                <q-img id="colorbar-normal" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
-              </div>
-            </div>
-            <p v-html="msgimg"></p>
-          </q-tab-panel>
-
-          <q-tab-panel name="tab1">
-            <!-- Content for Tab 1 -->
-            <h6>TrIQ visualizer</h6>
-            <div class="row items-center">
-              <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset" class="q-ma-sm" style="min-width: 200px;"></q-select>
-              <q-space></q-space>
-              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusT=true"></q-btn>
-              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusT=true"></q-btn>
-            </div>
-            <!-- Triq Image manager -->
-            <div id="image-container-triq" class="row st-col col-12">
-              <div class="col-10 q-pa-none q-ma-none ">
-                <plotly id="plotImgT" :data="plotdataImgT" :layout="plotlayoutImgT"
-                  class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
-              </div>
-              <div class="col-2 q-pa-none q-ma-none ">
-                <q-img id="colorbar-triq" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
-              </div>
-            </div>
-            <p v-html="msgtriq"></p>
-          </q-tab-panel>
-
-          <q-tab-panel name="tab2">
-            <div class="row items-center">
-                <q-select v-model="selected_folder_main" :options="available_folders" label="Select Dataset" class="q-ma-sm" style="min-width: 200px;"></q-select>
+            <!-- Spectra Plot Manipulation -->
+            <div class="col-6">
+              <div class="st-col col-6 col-sm">
                 <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
                   label="Generate Spectra" icon="play_arrow">
                   <template v-slot:loading>
                     <q-spinner-hourglass class="on-left" />
                     Loading plot
                   </template>
-  
+
                   <q-list>
                     <q-item clickable v-close-popup v-on:click="createMeanPlot=true">
                       <q-item-section>
@@ -303,237 +146,444 @@
                     </q-item>
                   </q-list>
                 </q-btn-dropdown>
+              </div>
+              <div class="row col-6">
+                <div class="st-col col-4 col-sm-4 q-ma-sm">
+                  <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord" type="number" :rules="[
+                            val => SpectraEnabled ? ( '* Required', val >= 0|| 'Needs to be bigger than 0') : true
+                            ]"></q-input>
+                </div>
+                <div class="st-col col-4 col-sm-4 q-ma-sm">
+                  <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord" type="number" :rules="[
+                            val => SpectraEnabled ? ( '* Required', val <= 0|| 'Needs to be lower than 0') : true
+                            ]"></q-input>
+                </div>
+              </div>
             </div>
-            <plotly id="plotSpectra" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
-          </q-tab-panel>
+          </div>
+          <div class="row">
+            <q-btn :loading="progress" class="q-ma-sm btn-style" :disabled="btnStartDisable" icon="play_arrow"
+              v-on:click="mainProcess=true" padding="lg" label="Generate Slice">
+              <template v-slot:loading>
+                <q-spinner-hourglass class="on-left" />
+                Loading...
+              </template>
+            </q-btn>
+            <q-btn icon="zoom_out_map" class="q-ma-sm on-right btn-style" v-on:click="compareBtn=true" padding="sm"
+              label="Compare"></q-btn>
+            <!--<q-btn class="q-ma-sm btn-style" :disable="btnMetadataDisable"
+                          v-on:click="showMetadataBtn=true" label="Show Metadata"></q-btn>-->
+            <q-btn class="q-ma-sm btn-style" icon="edit" label="Mask Editor" href="/mask"></q-btn>
+            <q-btn class="q-ma-sm btn-style" v-on:click="showMetadataBtn=true" label="Show Metadata"></q-btn>
+            <div class="q-pa-md row items-center" v-show="progress">
+              <q-spinner color="primary" size="2em" class="q-mr-sm"></q-spinner>
+              <div class="text-caption">{{ progress_message }}</div>
+            </div>
+          </div>
+          <p>{{msg}}</p>
+          <div class="row st-col col-12">
+            <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressPlot" :disable="btnPlotDisable"
+              label="Generate Plots" icon="play_arrow">
+              <template v-slot:loading>
+                <q-spinner-hourglass class="on-left" />
+                Loading plot
+              </template>
 
-          <q-tab-panel name="tab3">
-            <!-- Content for Tab 3 -->
-            <plotly id="plotTopo" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
-          </q-tab-panel>
-          <q-tab-panel name="tab4">
-            <!-- Content for Tab 4 -->
-            <plotly id="plot3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
-          </q-tab-panel>
-        </q-tab-panels>
-      </div>
+              <q-list>
+                <q-item clickable v-close-popup v-on:click="imageCPlot=true">
+                  <q-item-section>
+                    <q-item-label>Image topography Plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+
+                <q-item clickable v-close-popup v-on:click="triqCPlot=true">
+                  <q-item-section>
+                    <q-item-label>TrIQ topography Plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+
+                <q-item clickable v-close-popup v-on:click="image3dPlot=true">
+                  <q-item-section>
+                    <q-item-label>Image surface Plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+
+                <q-item clickable v-close-popup v-on:click="triq3dPlot=true">
+                  <q-item-section>
+                    <q-item-label>TrIQ Surface Plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+            </q-btn-dropdown>
+            <q-btn-dropdown icon="search" class="q-ma-sm btn-style" :disable="btnOpticalDisable"
+              label="Load your optical image">
+              <q-item clickable v-close-popup v-on:click="btnOptical=true">
+                <q-item-section>
+                  <q-item-label>Over normal image</q-item-label>
+                </q-item-section>
+              </q-item>
+              <q-item clickable v-close-popup v-on:click="btnOpticalT=true">
+                <q-item-section>
+                  <q-item-label>Over TrIQ image</q-item-label>
+                </q-item-section>
+              </q-item>
+            </q-btn-dropdown>
+            <div class="q-mx-sm">
+              <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
+              <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
+            </div>
+          </div>
+        </q-tab-panel>
+        <q-tab-panel name="converter">
+          <div class="text-h6">mzML to imzML Converter</div>
+          <p>Select the .mzML file and the corresponding .txt synchronization file to convert them into an .imzML/.ibd
+            pair.</p>
+
+          <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="mzml_full_route" readonly
+            label="Select your .mzML file" v-on:click="btnSearchMzml=true">
+            <template v-slot:append>
+              <q-icon name="search" v-on:click="btnSearchMzml=true" class="cursor-pointer" />
+            </template>
+          </q-input>
+
+          <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="sync_full_route" readonly
+            label="Select your .txt sync file" v-on:click="btnSearchSync=true">
+            <template v-slot:append>
+              <q-icon name="search" v-on:click="btnSearchSync=true" class="cursor-pointer" />
+            </template>
+          </q-input>
+
+          <q-btn :loading="progress_conversion" class="q-ma-sm btn-style" :disabled="btnConvertDisable"
+            icon="swap_horiz" v-on:click="convert_process=true" padding="lg" label="Convert File">
+            <template v-slot:loading>
+              <q-spinner-hourglass class="on-left" />
+              Converting...
+            </template>
+          </q-btn>
+          <p>{{msg_conversion}}</p>
+        </q-tab-panel>
+      </q-tab-panels>
     </div>
   </div>
-
-  <q-dialog v-model="warning_msg">
-    <q-card>
-      <q-card-section>
-        <div class="text-h6">Warning</div>
-      </q-card-section>
-
-      <q-card-section class="q-pt-none">
-        {{msg}}
-      </q-card-section>
-
-      <q-card-actions align="right">
-        <q-btn flat label="Ok" style="color:#009f90" v-close-popup />
-      </q-card-actions>
-    </q-card>
-  </q-dialog>
-
-  <q-dialog v-model="CompareDialog" full-width>
-    <q-card>
-      <q-card-section class="row items-center">
-        <div class="text-h6 q-ma-sm">Compare two different images or plots</div>
-        <div class="q-mx-sm">
-          <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
-          <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
-        </div>
-        <q-toggle id="btnOpticalOver" v-on:click="opticalOverTriq" v-model="opticalOverTriq" color="black"
-          label="Optical over TrIQ"></q-toggle>
-      </q-card-section>
-
-      <q-card-section class="q-pt-none col-12">
-        <div class="row">
-          <div class="col-6">
-            <div class="row items-center">
-                <q-select v-model="selected_folder_compare_left" :options="image_available_folders" label="Select Left Dataset" class="q-ma-sm" style="min-width: 200px;"></q-select>
-                <q-space></q-space>
-                <st-tabs id="tabHeaderCompareLeft" :ids="CompTabIDsLeft" :labels="CompTabLabelsLeft" v-model="CompSelectedTabLeft"></st-tabs>
-            </div>
-            <q-tab-panels v-model="CompSelectedTabLeft">
-              <q-tab-panel name="tab0">
-                <!-- Content for Tab 0 -->
-                <!-- Btn image changer -->
-                <div>
-                  <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusCompLeft=true"></q-btn>
-                  <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusCompLeft=true"></q-btn>
-                </div>
-                <!-- Image manager -->
-                <div id="image-container-compare-left-normal" class="row st-col col-12">
-                  <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotImgCompareLeft" :data="plotdataImgCompLeft" :layout="plotlayoutImgCompLeft" class="q-pa-none q-ma-none">
-                    </plotly>
-                  </div>
-                  <div class="col-2">
-                    <q-img id="colorbarCompareLeft" class="q-ma-none q-pa-none" :src="colorbarCompLeft"></q-img>
-                  </div>
-                </div>
-                <p v-html="msgimgCompLeft"></p>
-              </q-tab-panel>
-
-              <q-tab-panel name="tab1">
-                <!-- Content for Tab 1 -->
-                <!-- Triq Btn image changer -->
-                <div>
-                  <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTCompLeft=true"></q-btn>
-                  <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusTCompLeft=true"></q-btn>
-                </div>
-                <!-- Triq Image manager -->
-                <div id="image-container-compare-left-triq" class="row st-col col-12">
-                  <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotImgTCompareLeft" :data="plotdataImgTCompLeft" :layout="plotlayoutImgTCompLeft" class="q-pa-none q-ma-none">
-                    </plotly>
-                  </div>
-                  <div class="col-2">
-                    <q-img id="colorbarTCompareLeft" class="q-ma-none q-pa-none" :src="colorbarTCompLeft"></q-img>
-                  </div>
-                </div>
-                <p v-html="msgtriqCompLeft"></p>
-              </q-tab-panel>
-              <q-tab-panel name="tab2">
-                <!-- Content for Tab 2 -->
-                <plotly id="plotSpectraCompareLeft" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
-              </q-tab-panel>
-              <q-tab-panel name="tab3">
-                <!-- Content for Tab 3 -->
-                <plotly id="plotTopoCompareLeft" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
-              </q-tab-panel>
-              <q-tab-panel name="tab4">
-                <!-- Content for Tab 4 -->
-                <plotly id="plot3dCompareLeft" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
-              </q-tab-panel>
-            </q-tab-panels>
+  <div class="row col-6">
+    <!-- Right DIV -->
+    <div id="intDivStyle-right" class="st-col col-12 col-sm st-module">
+      <st-tabs id="tabHeader-main" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab" no-arrows></st-tabs>
+      <q-tab-panels v-model="selectedTab">
+        <q-tab-panel name="tab0">
+          <!-- Content for Tab 0 -->
+          <h6>Image visualizer</h6>
+          <div class="row items-center">
+            <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
+              class="q-ma-sm" style="min-width: 200px;"></q-select>
+            <q-space></q-space>
+            <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinus=true"></q-btn>
+            <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlus=true"></q-btn>
           </div>
-          <div class="col-6">
-            <div class="row items-center">
-                <q-select v-model="selected_folder_compare_right" :options="image_available_folders" label="Select Right Dataset" class="q-ma-sm" style="min-width: 200px;"></q-select>
-                <q-space></q-space>
-                <st-tabs id="tabHeaderCompareRight" :ids="CompTabIDsRight" :labels="CompTabLabelsRight" v-model="CompSelectedTabRight"></st-tabs>
+          <!-- Image manager -->
+          <div id="image-container-normal" class="row st-col col-12">
+            <div class="col-10 q-pa-none q-ma-none">
+              <plotly id="plotImg" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data"
+                @click="data_click"></plotly>
             </div>
-            <q-tab-panels v-model="CompSelectedTabRight">
-              <q-tab-panel name="tab0">
-                <!-- Content for Tab 0 -->
-                <!-- Btn image changer -->
-                <div>
-                  <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusCompRight=true"></q-btn>
-                  <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
-                    v-on:click="imgPlusCompRight=true"></q-btn>
-                </div>
-                <!-- Image manager -->
-                <div id="image-container-compare-right-normal" class="row st-col col-12">
-                  <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotImgCompareRight" :data="plotdataImgCompRight" :layout="plotlayoutImgCompRight"
-                      class="q-pa-none q-ma-none">
-                    </plotly>
-                  </div>
-                  <div class="col-2 q-pa-none q-ma-none ">
-                    <q-img id="colorbarCompRight" class="q-ma-none q-pa-none" :src="colorbarCompRight"></q-img>
-                  </div>
-                </div>
-                <p v-html="msgimgCompRight"></p>
-              </q-tab-panel>
-
-              <q-tab-panel name="tab1">
-                <!-- Content for Tab 1 -->
-                <!-- Triq Btn image changer -->
-                <div>
-                  <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTCompRight=true"></q-btn>
-                  <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
-                    v-on:click="imgPlusTCompRight=true"></q-btn>
-                </div>
-                <!-- Triq Image manager -->
-                <div id="image-container-compare-right-triq" class="row st-col col-12">
-                  <div class="col-10 q-pa-none q-ma-none ">
-                    <plotly id="plotImgTCompareRight" :data="plotdataImgTCompRight" :layout="plotlayoutImgTCompRight"
-                      class="q-pa-none q-ma-none">
-                    </plotly>
-                  </div>
-                  <div class="col-2 q-pa-none q-ma-none ">
-                    <q-img id="colorbarTCompRight" class="q-ma-none q-pa-none" :src="colorbarTCompRight"></q-img>
-                  </div>
-                </div>
-                <p v-html="msgtriqCompRight"></p>
-              </q-tab-panel>
-              <q-tab-panel name="tab2">
-                <!-- Content for Tab 2 -->
-                <plotly id="plotSpectraCompareRight" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
-              </q-tab-panel>
-              <q-tab-panel name="tab3">
-                <!-- Content for Tab 3 -->
-                <plotly id="plotTopoCompareRight" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
-              </q-tab-panel>
-              <q-tab-panel name="tab4">
-                <!-- Content for Tab 4 -->
-                <plotly id="plot3dCompareRight" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
-              </q-tab-panel>
-            </q-tab-panels>
+            <div class="col-2 q-pa-none q-ma-none">
+              <q-img id="colorbar-normal" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
+            </div>
           </div>
-        </div>
-      </q-card-section>
+          <p v-html="msgimg"></p>
+        </q-tab-panel>
 
-      <q-card-actions align="right">
-        <q-btn flat label="Done" style="color:#009f90" v-close-popup />
-      </q-card-actions>
-    </q-card>
-  </q-dialog>
+        <q-tab-panel name="tab1">
+          <!-- Content for Tab 1 -->
+          <h6>TrIQ visualizer</h6>
+          <div class="row items-center">
+            <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
+              class="q-ma-sm" style="min-width: 200px;"></q-select>
+            <q-space></q-space>
+            <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusT=true"></q-btn>
+            <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusT=true"></q-btn>
+          </div>
+          <!-- Triq Image manager -->
+          <div id="image-container-triq" class="row st-col col-12">
+            <div class="col-10 q-pa-none q-ma-none ">
+              <plotly id="plotImgT" :data="plotdataImgT" :layout="plotlayoutImgT" class="q-pa-none q-ma-none sync_data"
+                @click="data_click"></plotly>
+            </div>
+            <div class="col-2 q-pa-none q-ma-none ">
+              <q-img id="colorbar-triq" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
+            </div>
+          </div>
+          <p v-html="msgtriq"></p>
+        </q-tab-panel>
 
-  <q-dialog v-model="showBatchSummary">
-    <q-card>
-      <q-card-section>
-        <div class="text-h6">Batch Process Summary</div>
-      </q-card-section>
+        <q-tab-panel name="tab2">
+          <div class="row items-center">
+            <q-select v-model="selected_folder_main" :options="available_folders" label="Select Dataset" class="q-ma-sm"
+              style="min-width: 200px;"></q-select>
+            <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+              label="Generate Spectra" icon="play_arrow">
+              <template v-slot:loading>
+                <q-spinner-hourglass class="on-left" />
+                Loading plot
+              </template>
 
-      <q-card-section class="q-pt-none">
-        <pre>{{ batch_summary }}</pre>
-      </q-card-section>
-
-      <q-card-actions align="right">
-        <q-btn flat label="Ok" style="color:#009f90" v-close-popup />
-      </q-card-actions>
-    </q-card>
-  </q-dialog>
-
-  <q-dialog v-model="showMetadataDialog" full-width full-height>
-    <q-card>
-        <q-card-section class="row items-center q-pb-none">
-            <div class="text-h6">Dataset Summary</div>
-            <q-space />
-            <q-select 
-                v-model="selected_folder_metadata" 
-                :options="available_folders" 
-                label="Select Dataset"
-                class="q-ma-sm"
-                style="min-width: 250px;"
-                standout="custom-standout"
-            ></q-select>
-        </q-card-section>
-
-        <q-card-section class="q-pt-none">
-            <q-list bordered separator v-if="metadata_rows.length > 0">
-                <q-item v-for="row in metadata_rows" :key="row.parameter">
-                    <q-item-section>
-                        <q-item-label class="text-body1">{{ row.parameter }}</q-item-label>
-                    </q-item-section>
-                    <q-item-section side>
-                        <q-item-label caption class="text-body1">{{ row.value }}</q-item-label>
-                    </q-item-section>
+              <q-list>
+                <q-item clickable v-close-popup v-on:click="createMeanPlot=true">
+                  <q-item-section>
+                    <q-item-label>Mean spectrum plot</q-item-label>
+                  </q-item-section>
                 </q-item>
-            </q-list>
-            <div v-else class="text-center q-pa-md text-grey-7">
-                <q-icon name="info" size="3em" />
-                <p class="q-mt-md">No metadata found in registry for this dataset.</p>
-                <p class="text-caption">You may need to process the file first.</p>
-            </div>
-        </q-card-section>
+                <q-item clickable v-close-popup v-on:click="createSumPlot=true">
+                  <q-item-section>
+                    <q-item-label>Sum Spectrum plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+                <q-item clickable v-close-popup v-on:click="createXYPlot=true">
+                  <q-item-section>
+                    <q-item-label>Spectrum plot (X,Y)</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+            </q-btn-dropdown>
+          </div>
+          <plotly id="plotSpectra" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
+        </q-tab-panel>
 
-        <q-card-actions align="right">
-            <q-btn flat label="Close" style="color:#009f90" v-close-popup />
-        </q-card-actions>
-    </q-card>
-  </q-dialog>
+        <q-tab-panel name="tab3">
+          <!-- Content for Tab 3 -->
+          <plotly id="plotTopo" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
+        </q-tab-panel>
+        <q-tab-panel name="tab4">
+          <!-- Content for Tab 4 -->
+          <plotly id="plot3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
+        </q-tab-panel>
+      </q-tab-panels>
+    </div>
+  </div>
+</div>
+
+<q-dialog v-model="warning_msg">
+  <q-card>
+    <q-card-section>
+      <div class="text-h6">Warning</div>
+    </q-card-section>
+
+    <q-card-section class="q-pt-none">
+      {{msg}}
+    </q-card-section>
+
+    <q-card-actions align="right">
+      <q-btn flat label="Ok" style="color:#009f90" v-close-popup />
+    </q-card-actions>
+  </q-card>
+</q-dialog>
+
+<q-dialog v-model="CompareDialog" full-width>
+  <q-card>
+    <q-card-section class="row items-center">
+      <div class="text-h6 q-ma-sm">Compare two different images or plots</div>
+      <div class="q-mx-sm">
+        <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
+        <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
+      </div>
+      <q-toggle id="btnOpticalOver" v-on:click="opticalOverTriq" v-model="opticalOverTriq" color="black"
+        label="Optical over TrIQ"></q-toggle>
+    </q-card-section>
+
+    <q-card-section class="q-pt-none col-12">
+      <div class="row">
+        <div class="col-6">
+          <div class="row items-center">
+            <q-select v-model="selected_folder_compare_left" :options="image_available_folders"
+              label="Select Left Dataset" class="q-ma-sm" style="min-width: 200px;"></q-select>
+            <q-space></q-space>
+            <st-tabs id="tabHeaderCompareLeft" :ids="CompTabIDsLeft" :labels="CompTabLabelsLeft"
+              v-model="CompSelectedTabLeft"></st-tabs>
+          </div>
+          <q-tab-panels v-model="CompSelectedTabLeft">
+            <q-tab-panel name="tab0">
+              <!-- Content for Tab 0 -->
+              <!-- Btn image changer -->
+              <div>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusCompLeft=true"></q-btn>
+                <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
+                  v-on:click="imgPlusCompLeft=true"></q-btn>
+              </div>
+              <!-- Image manager -->
+              <div id="image-container-compare-left-normal" class="row st-col col-12">
+                <div class="col-10 q-pa-none q-ma-none ">
+                  <plotly id="plotImgCompareLeft" :data="plotdataImgCompLeft" :layout="plotlayoutImgCompLeft"
+                    class="q-pa-none q-ma-none">
+                  </plotly>
+                </div>
+                <div class="col-2">
+                  <q-img id="colorbarCompareLeft" class="q-ma-none q-pa-none" :src="colorbarCompLeft"></q-img>
+                </div>
+              </div>
+              <p v-html="msgimgCompLeft"></p>
+            </q-tab-panel>
+
+            <q-tab-panel name="tab1">
+              <!-- Content for Tab 1 -->
+              <!-- Triq Btn image changer -->
+              <div>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTCompLeft=true"></q-btn>
+                <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
+                  v-on:click="imgPlusTCompLeft=true"></q-btn>
+              </div>
+              <!-- Triq Image manager -->
+              <div id="image-container-compare-left-triq" class="row st-col col-12">
+                <div class="col-10 q-pa-none q-ma-none ">
+                  <plotly id="plotImgTCompareLeft" :data="plotdataImgTCompLeft" :layout="plotlayoutImgTCompLeft"
+                    class="q-pa-none q-ma-none">
+                  </plotly>
+                </div>
+                <div class="col-2">
+                  <q-img id="colorbarTCompareLeft" class="q-ma-none q-pa-none" :src="colorbarTCompLeft"></q-img>
+                </div>
+              </div>
+              <p v-html="msgtriqCompLeft"></p>
+            </q-tab-panel>
+            <q-tab-panel name="tab2">
+              <!-- Content for Tab 2 -->
+              <plotly id="plotSpectraCompareLeft" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none">
+              </plotly>
+            </q-tab-panel>
+            <q-tab-panel name="tab3">
+              <!-- Content for Tab 3 -->
+              <plotly id="plotTopoCompareLeft" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none">
+              </plotly>
+            </q-tab-panel>
+            <q-tab-panel name="tab4">
+              <!-- Content for Tab 4 -->
+              <plotly id="plot3dCompareLeft" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none">
+              </plotly>
+            </q-tab-panel>
+          </q-tab-panels>
+        </div>
+        <div class="col-6">
+          <div class="row items-center">
+            <q-select v-model="selected_folder_compare_right" :options="image_available_folders"
+              label="Select Right Dataset" class="q-ma-sm" style="min-width: 200px;"></q-select>
+            <q-space></q-space>
+            <st-tabs id="tabHeaderCompareRight" :ids="CompTabIDsRight" :labels="CompTabLabelsRight"
+              v-model="CompSelectedTabRight"></st-tabs>
+          </div>
+          <q-tab-panels v-model="CompSelectedTabRight">
+            <q-tab-panel name="tab0">
+              <!-- Content for Tab 0 -->
+              <!-- Btn image changer -->
+              <div>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusCompRight=true"></q-btn>
+                <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
+                  v-on:click="imgPlusCompRight=true"></q-btn>
+              </div>
+              <!-- Image manager -->
+              <div id="image-container-compare-right-normal" class="row st-col col-12">
+                <div class="col-10 q-pa-none q-ma-none ">
+                  <plotly id="plotImgCompareRight" :data="plotdataImgCompRight" :layout="plotlayoutImgCompRight"
+                    class="q-pa-none q-ma-none">
+                  </plotly>
+                </div>
+                <div class="col-2 q-pa-none q-ma-none ">
+                  <q-img id="colorbarCompRight" class="q-ma-none q-pa-none" :src="colorbarCompRight"></q-img>
+                </div>
+              </div>
+              <p v-html="msgimgCompRight"></p>
+            </q-tab-panel>
+
+            <q-tab-panel name="tab1">
+              <!-- Content for Tab 1 -->
+              <!-- Triq Btn image changer -->
+              <div>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTCompRight=true"></q-btn>
+                <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
+                  v-on:click="imgPlusTCompRight=true"></q-btn>
+              </div>
+              <!-- Triq Image manager -->
+              <div id="image-container-compare-right-triq" class="row st-col col-12">
+                <div class="col-10 q-pa-none q-ma-none ">
+                  <plotly id="plotImgTCompareRight" :data="plotdataImgTCompRight" :layout="plotlayoutImgTCompRight"
+                    class="q-pa-none q-ma-none">
+                  </plotly>
+                </div>
+                <div class="col-2 q-pa-none q-ma-none ">
+                  <q-img id="colorbarTCompRight" class="q-ma-none q-pa-none" :src="colorbarTCompRight"></q-img>
+                </div>
+              </div>
+              <p v-html="msgtriqCompRight"></p>
+            </q-tab-panel>
+            <q-tab-panel name="tab2">
+              <!-- Content for Tab 2 -->
+              <plotly id="plotSpectraCompareRight" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none">
+              </plotly>
+            </q-tab-panel>
+            <q-tab-panel name="tab3">
+              <!-- Content for Tab 3 -->
+              <plotly id="plotTopoCompareRight" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none">
+              </plotly>
+            </q-tab-panel>
+            <q-tab-panel name="tab4">
+              <!-- Content for Tab 4 -->
+              <plotly id="plot3dCompareRight" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none">
+              </plotly>
+            </q-tab-panel>
+          </q-tab-panels>
+        </div>
+      </div>
+    </q-card-section>
+
+    <q-card-actions align="right">
+      <q-btn flat label="Done" style="color:#009f90" v-close-popup />
+    </q-card-actions>
+  </q-card>
+</q-dialog>
+
+<q-dialog v-model="showBatchSummary">
+  <q-card>
+    <q-card-section>
+      <div class="text-h6">Batch Process Summary</div>
+    </q-card-section>
+
+    <q-card-section class="q-pt-none">
+      <pre>{{ batch_summary }}</pre>
+    </q-card-section>
+
+    <q-card-actions align="right">
+      <q-btn flat label="Ok" style="color:#009f90" v-close-popup />
+    </q-card-actions>
+  </q-card>
+</q-dialog>
+
+<q-dialog v-model="showMetadataDialog" full-width full-height>
+  <q-card>
+    <q-card-section class="row items-center q-pb-none">
+      <div class="text-h6">Dataset Summary</div>
+      <q-space />
+      <q-select v-model="selected_folder_metadata" :options="available_folders" label="Select Dataset" class="q-ma-sm"
+        style="min-width: 250px;" standout="custom-standout"></q-select>
+    </q-card-section>
+
+    <q-card-section class="q-pt-none">
+      <q-list bordered separator v-if="metadata_rows.length > 0">
+        <q-item v-for="row in metadata_rows" :key="row.parameter">
+          <q-item-section>
+            <q-item-label class="text-body1">{{ row.parameter }}</q-item-label>
+          </q-item-section>
+          <q-item-section side>
+            <q-item-label caption class="text-body1">{{ row.value }}</q-item-label>
+          </q-item-section>
+        </q-item>
+      </q-list>
+      <div v-else class="text-center q-pa-md text-grey-7">
+        <q-icon name="info" size="3em" />
+        <p class="q-mt-md">No metadata found in registry for this dataset.</p>
+        <p class="text-caption">You may need to process the file first.</p>
+      </div>
+    </q-card-section>
+
+    <q-card-actions align="right">
+      <q-btn flat label="Close" style="color:#009f90" v-close-popup />
+    </q-card-actions>
+  </q-card>
+</q-dialog>

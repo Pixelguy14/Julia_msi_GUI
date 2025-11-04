@@ -143,6 +143,45 @@ mutable struct MSIData
     end
 end
 
+"""
+    get_masked_spectrum_indices(data::MSIData, mask_matrix::BitMatrix) -> Set{Int}
+
+Converts a 2D boolean mask matrix (e.g., loaded from a PNG) into a `Set` of linear
+spectrum indices that fall within the `true` regions of the mask.
+
+# Arguments
+- `data`: The `MSIData` object containing the `coordinate_map`.
+- `mask_matrix`: A `BitMatrix` where `true` indicates a pixel is part of the ROI.
+
+# Returns
+- A `Set{Int}` containing the linear indices of spectra within the mask.
+"""
+function get_masked_spectrum_indices(data::MSIData, mask_matrix::BitMatrix)
+    if data.coordinate_map === nothing
+        error("Coordinate map not available. Cannot apply mask to non-imaging data.")
+    end
+    
+    width, height = data.image_dims
+    mask_height, mask_width = size(mask_matrix)
+
+    if mask_width != width || mask_height != height
+        error("Mask dimensions ($(mask_width)x$(mask_height)) do not match image dimensions ($(width)x$(height)).")
+    end
+
+    masked_indices = Set{Int}()
+    for y in 1:height
+        for x in 1:width
+            if mask_matrix[y, x] # If this pixel is part of the mask
+                idx = data.coordinate_map[x, y]
+                if idx != 0 # Ensure there's an actual spectrum at this coordinate
+                    push!(masked_indices, idx)
+                end
+            end
+        end
+    end
+    return masked_indices
+end
+
 
 # --- Internal function for reading binary data --- #
 
@@ -513,7 +552,7 @@ It uses a fast, two-pass approach:
 This function is highly optimized for `.imzML` by leveraging direct binary
 reading and optimized binning logic. It is called by `get_total_spectrum`.
 """
-function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
+function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000, masked_indices::Union{Set{Int}, Nothing}=nothing)
     println("Calculating total spectrum for imzML (2-pass method)...")
     total_start_time = time_ns()
 
@@ -529,7 +568,7 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
         println("  Pass 1: Finding global m/z range...")
         g_min_mz = Inf
         g_max_mz = -Inf
-        _iterate_spectra_fast(msi_data) do idx, mz, _
+        _iterate_spectra_fast(msi_data, masked_indices === nothing ? nothing : collect(masked_indices)) do idx, mz, _
             if !isempty(mz)
                 local_min, local_max = extrema(mz)
                 g_min_mz = min(g_min_mz, local_min)
@@ -539,7 +578,7 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
         pass1_duration = (time_ns() - pass1_start_time) / 1e9
         if !isfinite(g_min_mz)
             @warn "Could not determine a valid m/z range for imzML. All spectra might be empty."
-            return (Float64[], Float64[])
+            return (Float64[], Float64[], 0)
         end
         
         # Use and cache the result
@@ -560,7 +599,9 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
     # 3. Second Pass: Optimized binning
     pass2_start_time = time_ns()
     println("  Pass 2: Summing intensities into $num_bins bins...")
-    _iterate_spectra_fast(msi_data) do idx, mz, intensity
+    num_spectra_processed = 0
+    _iterate_spectra_fast(msi_data, masked_indices === nothing ? nothing : collect(masked_indices)) do idx, mz, intensity
+        num_spectra_processed += 1
         if isempty(mz)
             return
         end
@@ -594,7 +635,7 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000)
     println("----------------------------------------\n")
 
     println("Total spectrum calculation complete for imzML.")
-    return (collect(mz_bins), intensity_sum)
+    return (collect(mz_bins), intensity_sum, num_spectra_processed)
 end
 
 """
@@ -608,7 +649,7 @@ It uses a two-pass approach analogous to the `imzML` implementation:
 
 This function is called by `get_total_spectrum`.
 """
-function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000)
+function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000, masked_indices::Union{Set{Int}, Nothing}=nothing)
     println("Calculating total spectrum for mzML (2-pass method)...")
     total_start_time = time_ns()
 
@@ -624,7 +665,7 @@ function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000)
         println("  Pass 1: Finding global m/z range...")
         g_min_mz = Inf
         g_max_mz = -Inf
-        _iterate_spectra_fast(msi_data) do idx, mz, intensity
+        _iterate_spectra_fast(msi_data, masked_indices === nothing ? nothing : collect(masked_indices)) do idx, mz, intensity
             if !isempty(mz)
                 local_min, local_max = extrema(mz)
                 g_min_mz = min(g_min_mz, local_min)
@@ -635,7 +676,7 @@ function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000)
 
         if !isfinite(g_min_mz)
             @warn "Could not determine a valid m/z range for mzML. All spectra might be empty."
-            return (Float64[], Float64[])
+            return (Float64[], Float64[], 0)
         end
 
         # Use and cache the result
@@ -658,7 +699,9 @@ function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000)
     inv_bin_step = 1.0 / bin_step  # Precompute reciprocal
     min_mz = global_min_mz
 
-    _iterate_spectra_fast(msi_data) do idx, mz, intensity
+    num_spectra_processed = 0
+    _iterate_spectra_fast(msi_data, masked_indices === nothing ? nothing : collect(masked_indices)) do idx, mz, intensity
+        num_spectra_processed += 1
         if isempty(mz)
             return
         end
@@ -687,7 +730,7 @@ function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000)
     println("----------------------------------------\n")
 
     println("Total spectrum calculation complete for mzML.")
-    return (collect(mz_bins), intensity_sum)
+    return (collect(mz_bins), intensity_sum, num_spectra_processed)
 end
 
 """
@@ -699,11 +742,18 @@ This function dispatches to a specialized implementation based on the file type
 
 Returns a tuple containing two vectors: the binned m/z axis and the summed intensities.
 """
-function get_total_spectrum(msi_data::MSIData; num_bins::Int=2000)
+function get_total_spectrum(msi_data::MSIData; num_bins::Int=2000, mask_path::Union{String, Nothing}=nothing)::Tuple{Vector{Float64}, Vector{Float64}, Int}
+    local masked_indices::Union{Set{Int}, Nothing} = nothing
+    if mask_path !== nothing
+        mask_matrix = load_and_prepare_mask(mask_path, msi_data.image_dims)
+        masked_indices = get_masked_spectrum_indices(msi_data, mask_matrix)
+        println("Calculating total spectrum for masked region (mask from: $(mask_path))")
+    end
+
     if msi_data.source isa ImzMLSource
-        return get_total_spectrum_imzml(msi_data, num_bins=num_bins)
+        return get_total_spectrum_imzml(msi_data, num_bins=num_bins, masked_indices=masked_indices)
     else # MzMLSource
-        return get_total_spectrum_mzml(msi_data, num_bins=num_bins)
+        return get_total_spectrum_mzml(msi_data, num_bins=num_bins, masked_indices=masked_indices)
     end
 end
 
@@ -715,14 +765,15 @@ This is effectively the total spectrum divided by the number of spectra.
 
 Returns a tuple containing two vectors: the binned m/z axis and the averaged intensities.
 """
-function get_average_spectrum(msi_data::MSIData; num_bins::Int=2000)
-    mz_bins, intensity_sum = get_total_spectrum(msi_data, num_bins=num_bins)
+function get_average_spectrum(msi_data::MSIData; num_bins::Int=2000, mask_path::Union{String, Nothing}=nothing)::Tuple{Vector{Float64}, Vector{Float64}}
+    mz_bins, intensity_sum, num_spectra_processed = get_total_spectrum(msi_data, num_bins=num_bins, mask_path=mask_path)
 
-    if isempty(intensity_sum)
-        return (mz_bins, intensity_sum)
+    if isempty(intensity_sum) || num_spectra_processed == 0
+        @warn "Cannot calculate average spectrum: no spectra were processed."
+        return (mz_bins, Float64[])
     end
-    num_spectra = length(msi_data.spectra_metadata)
-    average_intensity = intensity_sum ./ num_spectra
+
+    average_intensity = intensity_sum ./ num_spectra_processed
     
     return (mz_bins, average_intensity)
 end
@@ -855,13 +906,16 @@ is significantly faster for bulk processing than reading spectra one by one.
 - `data`: The `MSIData` object.
 - `source`: The `ImzMLSource`.
 """
-function _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSource)
+function _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     # Optimized path for uncompressed data using buffer reuse
     max_points = maximum(meta -> meta.mz_asset.encoded_length, data.spectra_metadata)
     mz_buffer = Vector{source.mz_format}(undef, max_points)
     int_buffer = Vector{source.intensity_format}(undef, max_points)
 
-    for i in 1:length(data.spectra_metadata)
+    # Determine which indices to iterate over
+    spectrum_indices = (indices_to_iterate === nothing) ? (1:length(data.spectra_metadata)) : indices_to_iterate
+
+    for i in spectrum_indices
         meta = data.spectra_metadata[i]
         nPoints = meta.mz_asset.encoded_length
 
@@ -904,10 +958,14 @@ and will be slower and allocate more memory than `_iterate_uncompressed_fast`.
 - `data`: The `MSIData` object.
 - `source`: The `ImzMLSource`.
 """
-function _iterate_compressed_fast(f::Function, data::MSIData, source::ImzMLSource)
+function _iterate_compressed_fast(f::Function, data::MSIData, source::ImzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     # Path for datasets containing at least one compressed spectrum.
     # This path reads and decompresses each spectrum individually.
-    for i in 1:length(data.spectra_metadata)
+    
+    # Determine which indices to iterate over
+    spectrum_indices = (indices_to_iterate === nothing) ? (1:length(data.spectra_metadata)) : indices_to_iterate
+
+    for i in spectrum_indices
         meta = data.spectra_metadata[i]
         
         if meta.mz_asset.encoded_length == 0 && meta.int_asset.encoded_length == 0
@@ -937,7 +995,7 @@ This function acts as a dispatcher:
 - If all spectra are uncompressed, it uses a highly optimized path that reuses pre-allocated 
   buffers to minimize memory allocations and overhead.
 """
-function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::ImzMLSource)
+function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::ImzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     if isempty(data.spectra_metadata)
         return
     end
@@ -947,9 +1005,9 @@ function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::ImzMLSou
                         data.spectra_metadata)
     
     if any_compressed
-        _iterate_compressed_fast(f, data, source)
+        _iterate_compressed_fast(f, data, source, indices_to_iterate)
     else
-        _iterate_uncompressed_fast(f, data, source)
+        _iterate_uncompressed_fast(f, data, source, indices_to_iterate)
     end
 end
 
@@ -961,12 +1019,16 @@ through each spectrum, decodes the Base64 data on the fly, and calls the
 provided function. It bypasses the `GetSpectrum` cache to avoid storing
 all decoded spectra in memory.
 """
-function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::MzMLSource)
+function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::MzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     # This implementation is for mzML. It iterates through each spectrum,
     # decodes it, and then calls the function `f`. It's less performant than
     # the imzML version because we cannot pre-allocate buffers of a known size,
     # but it is correct and still faster than using GetSpectrum due to bypassing the cache.
-    for i in 1:length(data.spectra_metadata)
+    
+    # Determine which indices to iterate over
+    spectrum_indices = (indices_to_iterate === nothing) ? (1:length(data.spectra_metadata)) : indices_to_iterate
+
+    for i in spectrum_indices
         meta = data.spectra_metadata[i]
         
         mz = read_binary_vector(source.file_handle, meta.mz_asset)
@@ -986,7 +1048,7 @@ It dispatches to a specialized implementation based on the data source type
 - `f`: A function to call for each spectrum, with signature `f(index, mz, intensity)`.
 - `data`: The `MSIData` object.
 """
-function _iterate_spectra_fast(f::Function, data::MSIData)
+function _iterate_spectra_fast(f::Function, data::MSIData, indices_to_iterate::Union{AbstractVector{Int}, Nothing}=nothing)
     # Dispatch to the correct implementation based on the source type
-    _iterate_spectra_fast_impl(f, data, data.source)
+    _iterate_spectra_fast_impl(f, data, data.source, indices_to_iterate)
 end
