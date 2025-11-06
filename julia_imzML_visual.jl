@@ -1,5 +1,7 @@
 # julia_imzML_visual.jl
 
+const REGISTRY_LOCK = ReentrantLock()
+
 """
     increment_image(current_image, image_list)
 
@@ -541,7 +543,17 @@ function meanSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Uni
         # Update title to indicate empty spectrum
         layout.title.text = "Empty " * layout.title.text
     else
-        trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        df = data.spectrum_stats_df
+        profile_count = 0
+        if df !== nothing && hasproperty(df, :Mode)
+            profile_count = count(==(MSI_src.PROFILE), df.Mode)
+        end
+
+        if profile_count > 0
+            trace = PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        else
+            trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        end
     end
 
     plotdata = [trace]
@@ -571,12 +583,24 @@ Generates a plot for the spectrum at a specific coordinate (for imaging data) or
 function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, imgHeight::Int, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
     local mz::AbstractVector, intensity::AbstractVector
     local plot_title::String
+    local spectrum_mode = MSI_src.CENTROID # Default to centroid
 
     is_imaging = data.source isa ImzMLSource
 
     if is_imaging
         x = clamp(xCoord, 1, imgWidth)
         y = clamp(yCoord, 1, imgHeight)
+
+        # Get spectrum mode
+        if data.spectrum_stats_df !== nothing && hasproperty(data.spectrum_stats_df, :Mode)
+            w, h = data.image_dims
+            if y > 0 && x > 0 && y <= h && x <= w
+                idx = (y - 1) * w + x
+                if idx <= length(data.spectrum_stats_df.Mode)
+                    spectrum_mode = data.spectrum_stats_df.Mode[idx]
+                end
+            end
+        end
 
         if mask_path !== nothing
             mask_matrix = load_and_prepare_mask(mask_path, (imgWidth, imgHeight))
@@ -601,6 +625,12 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     else
         # For non-imaging data, treat xCoord as the spectrum index
         index = clamp(xCoord, 1, length(data.spectra_metadata))
+
+        if data.spectrum_stats_df !== nothing && hasproperty(data.spectrum_stats_df, :Mode)
+            if index <= length(data.spectrum_stats_df.Mode)
+                spectrum_mode = data.spectrum_stats_df.Mode[index]
+            end
+        end
 
         process_spectrum(data, index) do recieved_mz, recieved_intensity
             mz = recieved_mz
@@ -636,7 +666,11 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     # Downsample for plotting performance
     mz_down, int_down = MSI_src.downsample_spectrum(mz, intensity)
 
-    trace = PlotlyBase.stem(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    trace = if spectrum_mode == MSI_src.PROFILE
+        PlotlyBase.scatter(x=mz_down, y=int_down, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    else
+        PlotlyBase.stem(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    end
 
     plotdata = [trace]
     plotlayout = layout
@@ -700,7 +734,17 @@ function sumSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Unio
         # Update title to indicate empty spectrum
         layout.title.text = "Empty " * layout.title.text
     else
-        trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        df = data.spectrum_stats_df
+        profile_count = 0
+        if df !== nothing && hasproperty(df, :Mode)
+            profile_count = count(==(MSI_src.PROFILE), df.Mode)
+        end
+
+        if profile_count > 0
+            trace = PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        else
+            trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        end
     end
 
     plotdata = [trace]
@@ -733,7 +777,7 @@ function warmup_init()
         try
             save_bitmap(dummy_bmp_path, zeros(UInt8, 10, 10), ViridisPalette)
             loadImgPlot("/dummy.bmp")
-            generate_colorbar_image(zeros(10, 10), 256, dummy_png_path)
+            generate_colorbar_image(zeros(10, 10), 256, dummy_png_path, (0.0, 1.0))
         catch e
             @warn "Pre-compilation step failed (this is expected if dummy files can't be created/read)"
         finally
@@ -757,15 +801,18 @@ Loads the dataset registry from a JSON file.
 - A dictionary containing the registry data. Returns an empty dictionary if the file doesn't exist or fails to parse.
 """
 function load_registry(registry_path)
-    if isfile(registry_path)
-        try
-            return JSON.parsefile(registry_path, dicttype=Dict{String,Any})
-        catch e
-            @error "Failed to parse registry.json: $e"
-            return Dict{String,Any}()
+    return lock(REGISTRY_LOCK) do
+        if isfile(registry_path)
+            try
+                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
+            catch e
+                @error "Failed to parse registry.json: $e"
+                Dict{String,Any}()
+            end
+        else
+            Dict{String,Any}()
         end
     end
-    return Dict{String,Any}()
 end
 
 """
@@ -839,32 +886,43 @@ Adds or updates an entry in the dataset registry JSON file.
 - `is_imzML`: Boolean indicating if the source is an imzML file.
 """
 function update_registry(registry_path, dataset_name, source_path, metadata=nothing, is_imzML=false)
-    registry = load_registry(registry_path)
-    
-    # Get existing entry if it exists, otherwise create new one
-    existing_entry = get(registry, dataset_name, Dict{String,Any}())
-    
-    # Start with existing data and update only the basic fields
-    entry = copy(existing_entry)
-    entry["source_path"] = source_path
-    entry["processed_date"] = string(now())
-    entry["is_imzML"] = is_imzML
-    
-    # Only update metadata if provided
-    if metadata !== nothing
-        entry["metadata"] = metadata
-    end
-    
-    # Note: has_mask and mask_path are preserved from existing_entry if they exist
-    
-    registry[dataset_name] = entry
-
-    try
-        open(registry_path, "w") do f
-            JSON.print(f, registry, 4)
+    lock(REGISTRY_LOCK) do
+        registry = if isfile(registry_path)
+            try
+                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
+            catch e
+                @error "Failed to parse registry.json while updating: $e"
+                Dict{String,Any}() # Start with empty if parsing fails
+            end
+        else
+            Dict{String,Any}()
         end
-    catch e
-        @error "Failed to write to registry.json: $e"
+
+        # Get existing entry if it exists, otherwise create new one
+        existing_entry = get(registry, dataset_name, Dict{String,Any}())
+        
+        # Start with existing data and update only the basic fields
+        entry = copy(existing_entry)
+        entry["source_path"] = source_path
+        entry["processed_date"] = string(now())
+        entry["is_imzML"] = is_imzML
+        
+        # Only update metadata if provided
+        if metadata !== nothing
+            entry["metadata"] = metadata
+        end
+        
+        # Note: has_mask and mask_path are preserved from existing_entry if they exist
+        
+        registry[dataset_name] = entry
+
+        try
+            open(registry_path, "w") do f
+                JSON.print(f, registry, 4)
+            end
+        catch e
+            @error "Failed to write to registry.json: $e"
+        end
     end
 end
 
@@ -945,18 +1003,27 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
 
             if all(iszero, slice)
                 sliceQuant = zeros(UInt8, size(slice))
+                bounds = (0.0, 1.0)  # Default bounds for empty slice
                 @warn "No intensity data for m/z = $mass in $(dataset_name)"
             else
-                sliceQuant = params.triqE ? TrIQ(slice, params.colorL, params.triqP, mask_matrix=mask_matrix_for_triq) : quantize_intensity(slice, params.colorL, mask_matrix=mask_matrix_for_triq)
+                # Get both quantized data AND bounds in one call
+                if params.triqE
+                    sliceQuant, bounds = TrIQ(slice, params.colorL, params.triqP, mask_matrix=mask_matrix_for_triq)
+                else
+                    sliceQuant, bounds = quantize_intensity(slice, params.colorL, mask_matrix=mask_matrix_for_triq)
+                end
+                
                 if params.medianF
                     sliceQuant = round.(UInt8, median_filter(sliceQuant))
+                    # Note: bounds remain the same after median filter
                 end
             end
 
             save_bitmap(joinpath(output_dir, bitmap_filename), sliceQuant, ViridisPalette)
             if !all(iszero, slice)
-                generate_colorbar_image(slice, params.colorL, joinpath(output_dir, colorbar_filename); 
-                    use_triq=params.triqE, triq_prob=params.triqP, mask_path=mask_path)
+                # Now pass the precomputed bounds to colorbar generation
+                generate_colorbar_image(slice, params.colorL, joinpath(output_dir, colorbar_filename), 
+                                      bounds; use_triq=params.triqE, triq_prob=params.triqP, mask_path=mask_path)
             end
         end
 
@@ -980,28 +1047,39 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
 end
 
 function update_registry_mask_fields(registry_path, dataset_name, has_mask, mask_path)
-    registry = load_registry(registry_path)
-    
-    if haskey(registry, dataset_name)
-        registry[dataset_name]["has_mask"] = has_mask
-        registry[dataset_name]["mask_path"] = mask_path
-    else
-        # Create new entry if it doesn't exist
-        registry[dataset_name] = Dict{String,Any}(
-            "has_mask" => has_mask,
-            "mask_path" => mask_path,
-            "source_path" => "",
-            "processed_date" => string(now()),
-            "is_imzML" => false
-        )
-    end
-
-    try
-        open(registry_path, "w") do f
-            JSON.print(f, registry, 4)
+    lock(REGISTRY_LOCK) do
+        registry = if isfile(registry_path)
+            try
+                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
+            catch e
+                @error "Failed to parse registry.json while updating mask fields: $e"
+                Dict{String,Any}()
+            end
+        else
+            Dict{String,Any}()
         end
-    catch e
-        @error "Failed to write to registry.json: $e"
+        
+        if haskey(registry, dataset_name)
+            registry[dataset_name]["has_mask"] = has_mask
+            registry[dataset_name]["mask_path"] = mask_path
+        else
+            # Create new entry if it doesn't exist
+            registry[dataset_name] = Dict{String,Any}(
+                "has_mask" => has_mask,
+                "mask_path" => mask_path,
+                "source_path" => "",
+                "processed_date" => string(now()),
+                "is_imzML" => false
+            )
+        end
+
+        try
+            open(registry_path, "w") do f
+                JSON.print(f, registry, 4)
+            end
+        catch e
+            @error "Failed to write to registry.json: $e"
+        end
     end
 end
 

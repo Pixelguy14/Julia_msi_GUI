@@ -713,59 +713,57 @@ end
 
     @onchange isready begin
         if isready && !registry_init_done
-            @async begin # Run asynchronously to not block startup
-                sleep(1.0) # Give frontend time to initialize
-                try
-                    println("Synchronizing registry for mask editor...")
-                    reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
-                    # Assuming load_registry is available from MSI_src or a similar utility file
-                    # For now, handle its absence gracefully if it's not explicitly defined here.
-                    registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
+            sleep(1.0) # Give frontend time to initialize
+            try
+                println("Synchronizing registry for mask editor...")
+                reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+                # Assuming load_registry is available from MSI_src or a similar utility file
+                # For now, handle its absence gracefully if it's not explicitly defined here.
+                registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
 
-                    public_dirs = isdir("public") ? readdir("public") : []
-                    ignored_dirs = ["css", "masks"]
-                    
-                    dataset_dirs = filter(d -> isdir(joinpath("public", d)) && !(d in ignored_dirs), public_dirs)
-                    
-                    registry_keys = Set(keys(registry))
-                    folder_set = Set(dataset_dirs)
+                public_dirs = isdir("public") ? readdir("public") : []
+                ignored_dirs = ["css", "masks"]
+                
+                dataset_dirs = filter(d -> isdir(joinpath("public", d)) && !(d in ignored_dirs), public_dirs)
+                
+                registry_keys = Set(keys(registry))
+                folder_set = Set(dataset_dirs)
 
-                    new_folders = setdiff(folder_set, registry_keys)
-                    for folder in new_folders
-                        println("Found new folder: $folder")
-                        registry[folder] = Dict(
-                            "source_path" => "unknown (manually added)",
-                            "processed_date" => "unknown",
-                            "metadata" => Dict(),
-                            "is_imzML" => true # Assume folder contains images if found this way
-                        )
-                    end
-
-                    removed_folders = setdiff(registry_keys, folder_set)
-                    for folder in removed_folders
-                        delete!(registry, folder)
-                    end
-
-                    if !isempty(new_folders) || !isempty(removed_folders)
-                        println("Registry changed, saving...")
-                        open(reg_path, "w") do f
-                            JSON.print(f, registry, 4)
-                        end
-                    end
-                    
-                    all_folders = sort(collect(keys(registry)), lt=natural)
-                    img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
-
-                    available_folders = deepcopy(all_folders)
-                    image_available_folders = deepcopy(img_folders)
-                    println("Mask editor UI lists updated. All: $(length(available_folders)), Images: $(length(image_available_folders))")
-                catch e
-                    @warn "Mask editor registry synchronization failed: $e"
-                    available_folders = []
-                    image_available_folders = []
-                finally
-                    registry_init_done = true
+                new_folders = setdiff(folder_set, registry_keys)
+                for folder in new_folders
+                    println("Found new folder: $folder")
+                    registry[folder] = Dict(
+                        "source_path" => "unknown (manually added)",
+                        "processed_date" => "unknown",
+                        "metadata" => Dict(),
+                        "is_imzML" => true # Assume folder contains images if found this way
+                    )
                 end
+
+                removed_folders = setdiff(registry_keys, folder_set)
+                for folder in removed_folders
+                    delete!(registry, folder)
+                end
+
+                if !isempty(new_folders) || !isempty(removed_folders)
+                    println("Registry changed, saving...")
+                    open(reg_path, "w") do f
+                        JSON.print(f, registry, 4)
+                    end
+                end
+                
+                all_folders = sort(collect(keys(registry)), lt=natural)
+                img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+
+                available_folders = deepcopy(all_folders)
+                image_available_folders = deepcopy(img_folders)
+                println("Mask editor UI lists updated. All: $(length(available_folders)), Images: $(length(image_available_folders))")
+            catch e
+                @warn "Mask editor registry synchronization failed: $e"
+                available_folders = []
+                image_available_folders = []
+            finally
+                registry_init_done = true
             end
         end
     end

@@ -46,9 +46,10 @@ Contains metadata for a single binary data array (m/z or intensity) within a spe
 - `format`: The data type of the elements (e.g., `Float32`, `Int64`).
 - `is_compressed`: A boolean flag indicating if the data is compressed (e.g., with zlib).
 - `offset`: The byte offset of the data within the file (`.ibd` for imzML, `.mzML` for mzML).
-- `encoded_length`: The length of the data. For uncompressed imzML, this is the number of 
-  elements in the array. For compressed imzML, it is the number of bytes of the compressed 
-  data. For mzML, this is the length of the Base64 encoded string.
+- `encoded_length`: The length of the data, which has different meanings depending on the format:
+    - **Uncompressed imzML**: The number of elements (points) in the array.
+    - **Compressed imzML**: The number of bytes of the compressed data chunk in the `.ibd` file.
+    - **mzML**: The number of characters in the Base64 encoded string within the `.mzML` file.
 - `axis_type`: A symbol (`:mz` or `:intensity`) indicating the type of data.
 """
 struct SpectrumAsset
@@ -61,6 +62,15 @@ struct SpectrumAsset
     axis_type::Symbol
 end
 
+"""
+    SpectrumMode
+
+An enum representing the type of a spectrum's data.
+
+- `CENTROID`: The spectrum contains centroided data (i.e., processed peaks).
+- `PROFILE`: The spectrum contains raw profile data.
+- `UNKNOWN`: The spectrum type is not specified.
+"""
 @enum SpectrumMode CENTROID=1 PROFILE=2 UNKNOWN=3
 
 """
@@ -116,7 +126,7 @@ mutable struct MSIData
     coordinate_map::Union{Matrix{Int}, Nothing} # Maps (x,y) to linear index for imzML
 
     # LRU Cache for GetSpectrum
-    cache::Dict{Int, Tuple{Vector, Vector}}
+    cache::Dict{Int, Tuple{Vector{Float64}, Vector{Float64}}}
     cache_order::Vector{Int} # Stores indices, with most recently used at the end
     cache_size::Int # Max number of spectra in cache
     cache_lock::ReentrantLock # To make cache access thread-safe
@@ -144,6 +154,74 @@ mutable struct MSIData
 end
 
 """
+    Base.close(data::MSIData)
+
+Explicitly closes the file handles associated with the `MSIData` object and clears the spectrum cache.
+It is good practice to call this method when you are finished with an `MSIData` object to release resources immediately.
+"""
+function Base.close(data::MSIData)
+    if data.source isa ImzMLSource && isopen(data.source.ibd_handle)
+        close(data.source.ibd_handle)
+    elseif data.source isa MzMLSource && isopen(data.source.file_handle)
+        close(data.source.file_handle)
+    end
+
+    # Clear cache
+    empty!(data.cache)
+    empty!(data.cache_order)
+
+    println("MSIData object closed and resources released.")
+end
+
+"""
+    warm_cache(data::MSIData, indices::AbstractVector{Int})
+
+Pre-loads a specified list of spectra into the cache. This is useful for warming up
+the cache with frequently accessed spectra to improve performance for subsequent
+interactive analysis.
+"""
+function warm_cache(data::MSIData, indices::AbstractVector{Int})
+    println("Warming cache with $(length(indices)) spectra...")
+    for idx in indices
+        # Calling GetSpectrum will load the data and place it in the cache
+        GetSpectrum(data, idx)
+    end
+    println("Cache warming complete.")
+end
+
+"""
+    get_memory_usage(data::MSIData)
+
+Calculates and returns a summary of the memory currently used by the MSIData object,
+including the spectrum cache and metadata.
+
+# Returns
+- A `NamedTuple` with memory usage in bytes for different components.
+"""
+function get_memory_usage(data::MSIData)
+    cache_bytes = 0
+    lock(data.cache_lock) do
+        # This is an approximation; `sizeof` on a dictionary is not fully representative,
+        # but it's much better to sum the size of the actual vectors.
+        for (mz, intensity) in values(data.cache)
+            cache_bytes += sizeof(mz) + sizeof(intensity)
+        end
+    end
+
+    metadata_bytes = sizeof(data.spectra_metadata)
+    coordinate_map_bytes = data.coordinate_map === nothing ? 0 : sizeof(data.coordinate_map)
+
+    total_bytes = cache_bytes + metadata_bytes + coordinate_map_bytes
+
+    return (
+        total_mb = total_bytes / 1024^2,
+        cache_mb = cache_bytes / 1024^2,
+        metadata_mb = metadata_bytes / 1024^2,
+        coordinate_map_mb = coordinate_map_bytes / 1024^2
+    )
+end
+
+"""
     get_masked_spectrum_indices(data::MSIData, mask_matrix::BitMatrix) -> Set{Int}
 
 Converts a 2D boolean mask matrix (e.g., loaded from a PNG) into a `Set` of linear
@@ -158,14 +236,14 @@ spectrum indices that fall within the `true` regions of the mask.
 """
 function get_masked_spectrum_indices(data::MSIData, mask_matrix::BitMatrix)
     if data.coordinate_map === nothing
-        error("Coordinate map not available. Cannot apply mask to non-imaging data.")
+        throw(ArgumentError("Coordinate map not available. Cannot apply mask to non-imaging data."))
     end
     
     width, height = data.image_dims
     mask_height, mask_width = size(mask_matrix)
 
     if mask_width != width || mask_height != height
-        error("Mask dimensions ($(mask_width)x$(mask_height)) do not match image dimensions ($(width)x$(height)).")
+        throw(ArgumentError("Mask dimensions ($(mask_width)x$(mask_height)) do not match image dimensions ($(width)x$(height))."))
     end
 
     masked_indices = Set{Int}()
@@ -209,6 +287,9 @@ by this function and is assumed to be handled by the caller if necessary.
 - A `Vector` of the appropriate type containing the decoded data.
 """
 function read_binary_vector(io::IO, asset::SpectrumAsset)
+    if asset.offset < 0 || asset.offset >= filesize(io)
+        throw(FileFormatError("Invalid asset offset: $(asset.offset) for file size $(filesize(io))"))
+    end
     seek(io, asset.offset)
     raw_b64 = read(io, asset.encoded_length)
     decoded_bytes = base64decode(strip(String(raw_b64)))
@@ -217,6 +298,10 @@ function read_binary_vector(io::IO, asset::SpectrumAsset)
     n_elements = Int(bytes_io.size / sizeof(asset.format))
     out_array = Array{asset.format}(undef, n_elements)
     read!(bytes_io, out_array)
+
+    # FIX: little-endian to host byte order for mzML data
+    out_array .= ltoh.(out_array)
+
     return out_array
 end
 
@@ -241,17 +326,29 @@ function read_spectrum_from_disk(source::ImzMLSource, meta::SpectrumMetadata)
     mz = Array{source.mz_format}(undef, meta.mz_asset.encoded_length)
     intensity = Array{source.intensity_format}(undef, meta.int_asset.encoded_length)
 
-    seek(source.ibd_handle, meta.mz_asset.offset)
-    read!(source.ibd_handle, mz)
-
-    seek(source.ibd_handle, meta.int_asset.offset)
-    read!(source.ibd_handle, intensity)
+    # FIX: Read arrays in the order they appear in the file for efficiency,
+    # but ensure we seek to the correct offset for both.
+    if meta.mz_asset.offset < meta.int_asset.offset
+        seek(source.ibd_handle, meta.mz_asset.offset)
+        read!(source.ibd_handle, mz)
+        seek(source.ibd_handle, meta.int_asset.offset)
+        read!(source.ibd_handle, intensity)
+    else
+        seek(source.ibd_handle, meta.int_asset.offset)
+        read!(source.ibd_handle, intensity)
+        seek(source.ibd_handle, meta.mz_asset.offset)
+        read!(source.ibd_handle, mz)
+    end
 
     # imzML data is little-endian. Convert to host byte order.
     mz .= ltoh.(mz)
-    intensity .= ltoh.(intensity)
+    intensity .= ltoh.(intensity) # FIX: Added missing conversion for intensity
 
-    return mz, intensity
+    mz_f64, intensity_f64 = Float64.(mz), Float64.(intensity)
+
+    validate_spectrum_data(mz_f64, intensity_f64, meta.id)
+
+    return mz_f64, intensity_f64
 end
 
 """
@@ -272,7 +369,12 @@ function read_spectrum_from_disk(source::MzMLSource, meta::SpectrumMetadata)
     # For mzML, data is Base64 encoded within the XML
     mz = read_binary_vector(source.file_handle, meta.mz_asset)
     intensity = read_binary_vector(source.file_handle, meta.int_asset)
-    return mz, intensity
+    
+    mz_f64, intensity_f64 = Float64.(mz), Float64.(intensity)
+
+    validate_spectrum_data(mz_f64, intensity_f64, meta.id)
+
+    return mz_f64, intensity_f64
 end
 
 # --- Public API --- #
@@ -294,7 +396,7 @@ This function is the core of the "Indexed" and "Cache" access patterns.
 """
 function GetSpectrum(data::MSIData, index::Int)
     if index < 1 || index > length(data.spectra_metadata)
-        error("Spectrum index $index out of bounds.")
+        throw(SpectrumNotFoundError(index))
     end
 
     # Phase 1: Check the cache (with lock)
@@ -352,16 +454,16 @@ the indexed `GetSpectrum` method, benefiting from caching.
 """
 function GetSpectrum(data::MSIData, x::Int, y::Int)
     if data.coordinate_map === nothing
-        error("Coordinate map not available. This method is only for imaging data loaded from .imzML files.")
+        throw(ArgumentError("Coordinate map not available. This method is only for imaging data loaded from .imzML files."))
     end
     width, height = data.image_dims
     if x < 1 || x > width || y < 1 || y > height
-        error("Coordinates ($x, $y) out of bounds for image dimensions ($width, $height).")
+        throw(ArgumentError("Coordinates ($x, $y) out of bounds for image dimensions ($width, $height)."))
     end
 
     index = data.coordinate_map[x, y]
     if index == 0
-        error("No spectrum found at coordinates ($x, $y).")
+        throw(SpectrumNotFoundError((x, y)))
     end
 
     return GetSpectrum(data, index) # Call the existing method
@@ -373,13 +475,14 @@ end
 A "function barrier" helper for safely processing a single spectrum.
 
 This function retrieves a spectrum and then immediately calls the provided function `f`
-with the resulting `(mz, intensity)` arrays. This pattern is crucial for performance.
-While `GetSpectrum` itself is type-unstable (because the array data types are not
-known at compile time), calling `f` with the result allows Julia's compiler to
-generate specialized, fast code for `f` based on the *concrete* types it receives.
+with the resulting `(mz, intensity)` arrays. While the `GetSpectrum` API is now type-stable,
+this pattern remains good practice for separating data access from data processing.
 
 Use this function when you need to perform performance-critical operations on a
 single spectrum. Your logic should be inside the function passed to this helper.
+
+For bulk processing of all spectra, consider using the `_iterate_spectra_fast`
+function, which is optimized for sequential access and avoids cache overhead.
 ```
 """
 function process_spectrum(f::Function, data::MSIData, index::Int)
@@ -611,19 +714,14 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000, masked_
         intensity_view = intensity
         
         # Manual binning without clamp/round for SIMD
-        @inbounds for i in eachindex(mz_view)
+        @inbounds @simd for i in eachindex(mz_view)
             # Calculate raw bin index (much faster than round+clamp)
             raw_index = (mz_view[i] - min_mz) * inv_bin_step + 1.0
             bin_index = trunc(Int, raw_index)
             
-            # Manual bounds checking (faster than clamp)
-            if 1 <= bin_index <= num_bins
-                intensity_sum[bin_index] += intensity_view[i]
-            elseif bin_index < 1
-                intensity_sum[1] += intensity_view[i]
-            else # bin_index > num_bins
-                intensity_sum[num_bins] += intensity_view[i]
-            end
+            # Branchless version using clamp
+            final_index = clamp(bin_index, 1, num_bins)
+            intensity_sum[final_index] += intensity_view[i]
         end
     end
     pass2_duration = (time_ns() - pass2_start_time) / 1e9
@@ -706,19 +804,14 @@ function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000, masked_i
             return
         end
         
-        @inbounds for i in eachindex(mz)
+        @inbounds @simd for i in eachindex(mz)
             # Calculate raw bin index
             raw_index = (mz[i] - min_mz) * inv_bin_step + 1.0
             bin_index = trunc(Int, raw_index)
             
-            # Manual bounds checking
-            if 1 <= bin_index <= num_bins
-                intensity_sum[bin_index] += intensity[i]
-            elseif bin_index < 1
-                intensity_sum[1] += intensity[i]
-            else # bin_index > num_bins
-                intensity_sum[num_bins] += intensity[i]
-            end
+            # Branchless version using clamp
+            final_index = clamp(bin_index, 1, num_bins)
+            intensity_sum[final_index] += intensity[i]
         end
     end
     pass2_duration = (time_ns() - pass2_start_time) / 1e9
@@ -842,9 +935,14 @@ end
 Reads a single data array (m/z or intensity) from an `.ibd` file stream,
 handling both compressed and uncompressed data.
 
-- If `asset.is_compressed` is true, it reads the compressed bytes, inflates
-  them using zlib, and reinterprets the result as a vector of the given `format`.
-- If false, it reads the uncompressed data directly into a vector.
+This is an internal function designed for high-performance iteration. It assumes
+the file stream `io` is already positioned at the correct offset.
+
+- If `asset.is_compressed` is true, it reads `asset.encoded_length` bytes of
+  compressed data, inflates them using zlib, and reinterprets the result as a
+  vector of the given `format`.
+- If false, it reads `asset.encoded_length` *elements* of uncompressed data
+  directly into a vector.
 
 # Arguments
 - `io`: The IO stream of the `.ibd` file.
@@ -853,8 +951,16 @@ handling both compressed and uncompressed data.
 
 # Returns
 - A `Vector` containing the data.
+
+# Throws
+- An error if zlib decompression fails, which can indicate corrupt data or
+  an incorrect offset in the `.imzML` metadata.
 """
 function read_compressed_array(io::IO, asset::SpectrumAsset, format::Type)
+    # Add validation before seeking
+    if asset.offset < 0 || asset.offset >= filesize(io)
+        throw(FileFormatError("Invalid asset offset: $(asset.offset) for file size $(filesize(io))"))
+    end
     seek(io, asset.offset)
     
     if asset.is_compressed
@@ -930,10 +1036,12 @@ function _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSou
         if meta.mz_asset.offset < meta.int_asset.offset
             seek(source.ibd_handle, meta.mz_asset.offset)
             read!(source.ibd_handle, mz_view)
+            seek(source.ibd_handle, meta.int_asset.offset) # FIX: Added missing seek
             read!(source.ibd_handle, int_view)
         else
             seek(source.ibd_handle, meta.int_asset.offset)
             read!(source.ibd_handle, int_view)
+            seek(source.ibd_handle, meta.mz_asset.offset) # FIX: Added missing seek
             read!(source.ibd_handle, mz_view)
         end
 
@@ -1020,15 +1128,19 @@ provided function. It bypasses the `GetSpectrum` cache to avoid storing
 all decoded spectra in memory.
 """
 function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::MzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
-    # This implementation is for mzML. It iterates through each spectrum,
-    # decodes it, and then calls the function `f`. It's less performant than
-    # the imzML version because we cannot pre-allocate buffers of a known size,
-    # but it is correct and still faster than using GetSpectrum due to bypassing the cache.
+    # This implementation is for mzML. To improve disk I/O, we can reorder the read
+    # operations to be as sequential as possible based on their offset in the file.
     
     # Determine which indices to iterate over
     spectrum_indices = (indices_to_iterate === nothing) ? (1:length(data.spectra_metadata)) : indices_to_iterate
 
-    for i in spectrum_indices
+    # Create a vector of (index, offset) tuples to be sorted
+    indices_with_offsets = [(i, data.spectra_metadata[i].mz_asset.offset) for i in spectrum_indices]
+    
+    # Sort by offset to make disk access more sequential
+    sort!(indices_with_offsets, by = x -> x[2])
+
+    for (i, _) in indices_with_offsets
         meta = data.spectra_metadata[i]
         
         mz = read_binary_vector(source.file_handle, meta.mz_asset)
@@ -1039,14 +1151,27 @@ function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::MzMLSour
 end
 
 """
-    _iterate_spectra_fast(f::Function, data::MSIData)
+    _iterate_spectra_fast(f::Function, data::MSIData, indices_to_iterate=nothing)
 
-An internal, high-performance iterator for bulk processing that bypasses the cache.
-It dispatches to a specialized implementation based on the data source type
-(`ImzMLSource` or `MzMLSource`).
+An internal, high-performance iterator for bulk processing that bypasses the `GetSpectrum` cache.
+It provides direct, sequential access to spectral data, making it the most efficient
+method for operations that need to process many or all spectra (e.g., calculating
+a total spectrum, pre-computing analytics, or exporting data).
 
-- `f`: A function to call for each spectrum, with signature `f(index, mz, intensity)`.
+This function dispatches to a specialized implementation based on the data source type
+(`ImzMLSource` or `MzMLSource`) and data characteristics (e.g., compressed vs.
+uncompressed) to maximize performance.
+
+# Arguments
+- `f`: A function to call for each spectrum, with the signature `f(index, mz, intensity)`.
 - `data`: The `MSIData` object.
+- `indices_to_iterate`: An optional `AbstractVector{Int}` specifying a subset of
+  spectrum indices to iterate over. If `nothing`, it iterates over all spectra.
+
+# Warning
+This is a low-level function that bypasses the public `GetSpectrum` API. It does not
+use the cache and is not guaranteed to be thread-safe if the same `MSIData` object
+is accessed from multiple threads concurrently.
 """
 function _iterate_spectra_fast(f::Function, data::MSIData, indices_to_iterate::Union{AbstractVector{Int}, Nothing}=nothing)
     # Dispatch to the correct implementation based on the source type

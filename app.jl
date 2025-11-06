@@ -213,8 +213,8 @@ end
     # == Batch Processing & Registry Variables ==
     @private registry_init_done = false
     @in selected_files = String[]
-    @out available_folders = String[]
-    @out image_available_folders = String[]
+    @in available_folders = String[]
+    @in image_available_folders = String[]
     @out registry_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
     # Progress reporting
     @out overall_progress = 0.0
@@ -317,7 +317,7 @@ end
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
     # Dummy 2D scatter plot
-    traceSpectra=PlotlyBase.stem(x=Vector{Float64}(), y=Vector{Float64}(),marker=attr(size=1, color="blue", opacity=0.1))
+    traceSpectra=PlotlyBase.scatter(x=Vector{Float64}(), y=Vector{Float64}(), mode="lines", marker=attr(size=1, color="blue", opacity=0.1))
     # Create conection to frontend
     @out plotdata=[traceSpectra]
     @out plotlayout=layoutSpectra
@@ -410,113 +410,111 @@ end
         progress = true
         msg = "Opening file: $(basename(picked_route))..."
 
-        @async begin
-            try
-                dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML|mzml))$"i => "")
-                registry = load_registry(registry_path)
-                existing_entry = get(registry, dataset_name, nothing)
+        try
+            dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML|mzml))$"i => "")
+            registry = load_registry(registry_path)
+            existing_entry = get(registry, dataset_name, nothing)
 
-                # --- Fast Load Path ---
-                is_same_file = (existing_entry !== nothing && existing_entry["source_path"] == picked_route)
-                if is_same_file && !isempty(get(existing_entry, "metadata", Dict()))
-                    msg = "Fast loading pre-processed file: $(dataset_name)"
-                    println(msg)
-                    
-                    full_route = existing_entry["source_path"]
-                    metadata_rows = existing_entry["metadata"]["summary"]
-                    
-                    dims_str = first(filter(r -> r["parameter"] == "Image Dimensions", metadata_rows))["value"]
-                    dims = parse.(Int, split(dims_str, " x "))
-                    imgWidth, imgHeight = dims[1], dims[2]
-
-                    msi_data = nothing # Ensure data is not held in memory
-                    log_memory_usage("Fast Load (msi_data cleared)", msi_data)
-                    btnMetadataDisable = false
-                    btnStartDisable = false
-                    btnPlotDisable = false
-                    btnSpectraDisable = false
-                    SpectraEnabled = true
-                    selected_folder_main = dataset_name
-                    
-                    # Update folder lists in UI
-                    all_folders = sort(collect(keys(registry)), lt=natural)
-                    img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
-                    available_folders = deepcopy(all_folders)
-                    image_available_folders = deepcopy(img_folders)
-
-                    msg = "Successfully loaded pre-processed dataset: $(dataset_name)"
-                    progress = false
-                    return
-                end
-
-                # --- Full Load Path ---
-                msg = "Performing first-time analysis for: $(basename(picked_route))..."
-                local local_full_route
-                if endswith(picked_route, r"imzml"i)
-                    local_full_route = replace(picked_route, r"\.imzml$"i => ".imzML")
-                    if picked_route != local_full_route
-                        mv(picked_route, local_full_route, force=true)
-                    end
-                else
-                    local_full_route = picked_route
-                end
-                full_route = local_full_route
-
-                sTime = time()
-                loaded_data = OpenMSIData(local_full_route)
-                is_imzML = loaded_data.source isa ImzMLSource
+            # --- Fast Load Path ---
+            is_same_file = (existing_entry !== nothing && existing_entry["source_path"] == picked_route)
+            if is_same_file && !isempty(get(existing_entry, "metadata", Dict()))
+                msg = "Fast loading pre-processed file: $(dataset_name)"
+                println(msg)
                 
-                precompute_analytics(loaded_data)
+                full_route = existing_entry["source_path"]
+                metadata_rows = existing_entry["metadata"]["summary"]
                 
-                metadata_columns = [
-                    Dict("name" => "parameter", "label" => "Parameter", "field" => "parameter", "align" => "left"),
-                    Dict("name" => "value", "label" => "Value", "field" => "value", "align" => "left"),
-                ]
-                summary_stats = extract_metadata(loaded_data, local_full_route)
-                metadata_rows = summary_stats["summary"]
-                btnMetadataDisable = isempty(metadata_rows)
+                dims_str = first(filter(r -> r["parameter"] == "Image Dimensions", metadata_rows))["value"]
+                dims = parse.(Int, split(dims_str, " x "))
+                imgWidth, imgHeight = dims[1], dims[2]
 
-                w, h = loaded_data.image_dims
-                imgWidth, imgHeight = w > 0 ? (w, h) : (500, 500)
-
-                update_registry(registry_path, dataset_name, local_full_route, summary_stats, is_imzML)
+                msi_data = nothing # Ensure data is not held in memory
+                log_memory_usage("Fast Load (msi_data cleared)", msi_data)
+                btnMetadataDisable = false
+                btnStartDisable = false
+                btnPlotDisable = false
+                btnSpectraDisable = false
+                SpectraEnabled = true
+                selected_folder_main = dataset_name
                 
                 # Update folder lists in UI
-                registry = load_registry(registry_path)
                 all_folders = sort(collect(keys(registry)), lt=natural)
                 img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
                 available_folders = deepcopy(all_folders)
                 image_available_folders = deepcopy(img_folders)
 
-                selected_folder_main = dataset_name
-                msi_data = loaded_data
-                log_memory_usage("Full Load", msi_data)
-
-                eTime = round(time() - sTime, digits=3)
-                msg = "Active file loaded in $(eTime) seconds. Dataset '$(dataset_name)' is ready for analysis."
-
-                btnStartDisable = false
-                btnPlotDisable = false
-                btnSpectraDisable = false
-                SpectraEnabled = true
-                
-            catch e
-                msi_data = nothing
-                msg = "Error loading active file: $e"
-                warning_msg = true
-                btnStartDisable = true
-                btnSpectraDisable = true
-                SpectraEnabled = false
-                btnMetadataDisable = true
-                @error "File loading failed" exception=(e, catch_backtrace())
-            finally
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
-                end
+                msg = "Successfully loaded pre-processed dataset: $(dataset_name)"
                 progress = false
-                progressSpectraPlot = false
+                return
             end
+
+            # --- Full Load Path ---
+            msg = "Performing first-time analysis for: $(basename(picked_route))..."
+            local local_full_route
+            if endswith(picked_route, r"imzml"i)
+                local_full_route = replace(picked_route, r"\.imzml$"i => ".imzML")
+                if picked_route != local_full_route
+                    mv(picked_route, local_full_route, force=true)
+                end
+            else
+                local_full_route = picked_route
+            end
+            full_route = local_full_route
+
+            sTime = time()
+            loaded_data = OpenMSIData(local_full_route)
+            is_imzML = loaded_data.source isa ImzMLSource
+            
+            precompute_analytics(loaded_data)
+            
+            metadata_columns = [
+                Dict("name" => "parameter", "label" => "Parameter", "field" => "parameter", "align" => "left"),
+                Dict("name" => "value", "label" => "Value", "field" => "value", "align" => "left"),
+            ]
+            summary_stats = extract_metadata(loaded_data, local_full_route)
+            metadata_rows = summary_stats["summary"]
+            btnMetadataDisable = isempty(metadata_rows)
+
+            w, h = loaded_data.image_dims
+            imgWidth, imgHeight = w > 0 ? (w, h) : (500, 500)
+
+            update_registry(registry_path, dataset_name, local_full_route, summary_stats, is_imzML)
+            
+            # Update folder lists in UI
+            registry = load_registry(registry_path)
+            all_folders = sort(collect(keys(registry)), lt=natural)
+            img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+            available_folders = deepcopy(all_folders)
+            image_available_folders = deepcopy(img_folders)
+
+            selected_folder_main = dataset_name
+            msi_data = loaded_data
+            log_memory_usage("Full Load", msi_data)
+
+            eTime = round(time() - sTime, digits=3)
+            msg = "Active file loaded in $(eTime) seconds. Dataset '$(dataset_name)' is ready for analysis."
+
+            btnStartDisable = false
+            btnPlotDisable = false
+            btnSpectraDisable = false
+            SpectraEnabled = true
+            
+        catch e
+            msi_data = nothing
+            msg = "Error loading active file: $e"
+            warning_msg = true
+            btnStartDisable = true
+            btnSpectraDisable = true
+            SpectraEnabled = false
+            btnMetadataDisable = true
+            @error "File loading failed" exception=(e, catch_backtrace())
+        finally
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
+            end
+            progress = false
+            progressSpectraPlot = false
         end
     end
 
@@ -620,34 +618,32 @@ end
         btnConvertDisable = true
         msg_conversion = "Starting conversion process..."
 
-        @async begin
-            try
-                sTime = time()
-                target_imzml = replace(mzml_full_route, r"\.(mzml|mzML)$" => ".imzML")
-                
-                msg_conversion = "Converting $(basename(mzml_full_route)) to $(basename(target_imzml))... This may take a while."
+        try
+            sTime = time()
+            target_imzml = replace(mzml_full_route, r"\.(mzml|mzML)$" => ".imzML")
+            
+            msg_conversion = "Converting $(basename(mzml_full_route)) to $(basename(target_imzml))... This may take a while."
 
-                success = ImportMzmlFile(mzml_full_route, sync_full_route, target_imzml)
+            success = ImportMzmlFile(mzml_full_route, sync_full_route, target_imzml)
 
-                fTime = time()
-                eTime = round(fTime - sTime, digits=3)
+            fTime = time()
+            eTime = round(fTime - sTime, digits=3)
 
-                if success
-                    msg_conversion = "Conversion successful in $(eTime) seconds. Output file: $(basename(target_imzml))"
-                else
-                    msg_conversion = "Conversion failed after $(eTime) seconds. Check console for errors."
-                    warning_msg = true
-                end
-
-            catch e
-                msg_conversion = "An error occurred during conversion: $e"
+            if success
+                msg_conversion = "Conversion successful in $(eTime) seconds. Output file: $(basename(target_imzml))"
+            else
+                msg_conversion = "Conversion failed after $(eTime) seconds. Check console for errors."
                 warning_msg = true
-                @error "Conversion failed" exception=(e, catch_backtrace())
-            finally
-                progress_conversion = false
-                # Re-enable button if files are still selected
-                btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
             end
+
+        catch e
+            msg_conversion = "An error occurred during conversion: $e"
+            warning_msg = true
+            @error "Conversion failed" exception=(e, catch_backtrace())
+        finally
+            progress_conversion = false
+            # Re-enable button if files are still selected
+            btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
         end
     end
     
@@ -672,174 +668,171 @@ end
         current_registry_path = registry_path
 
         println("starting main process with $(length(current_selected_files)) files")
-
-        @async begin
-            total_time_start = time()
-            try
-                # --- 1. Parameter Validation ---
-                if isempty(current_selected_files)
-                    progress_message = "No .imzML files in batch. Please add files first."
-                    warning_msg = true
-                    println(progress_message)
-                    return
-                end
-
-                masses = Float64[]
-                try
-                    masses = [parse(Float64, strip(m)) for m in split(current_nmass, ',', keepempty=false)]
-                catch e
-                    progress_message = "Invalid m/z value(s). Please provide a comma-separated list of numbers. Error: $e"
-                    warning_msg = true
-                    return
-                end
-
-                if isempty(masses)
-                    progress_message = "No valid m/z values found. Please provide comma-separated positive numbers."
-                    warning_msg = true
-                    return
-                end
-
-                # --- 2. Batch Processing Loop ---
-                num_files = length(current_selected_files)
-                total_steps = num_files
-                current_step = 0
-                errors = Dict("load_errors" => String[], "slice_errors" => String[], "io_errors" => String[])
-                newly_created_folders = String[]
-                files_without_mask = 0
-
-                for (file_idx, file_path) in enumerate(current_selected_files)
-                    progress_message = "Processing file $file_idx/$num_files: $(basename(file_path))"
-                    overall_progress = current_step / total_steps
-                    
-                    all_params = (
-                        tolerance = current_tol,
-                        colorL = current_color_level,
-                        triqE = current_triq_enabled,
-                        triqP = current_triq_prob,
-                        medianF = current_mfilter_enabled,
-                        registry = current_registry_path,
-                        fileIdx = file_idx,
-                        nFiles = num_files
-                    )
-
-                    success, error_msg = process_file_safely(file_path, masses, all_params, progress_message, overall_progress, use_mask=current_mask_enabled)
-
-                    if !success
-                        push!(errors["load_errors"], error_msg)
-                    else
-                        push!(newly_created_folders, replace(basename(file_path), r"\.imzML$"i => ""))
-                    end
-                    current_step += 1
-                end
-
-                # --- 3. Final Report ---
-                total_time_end = round(time() - total_time_start, digits=3)
-                
-                registry = load_registry(current_registry_path)
-                all_folders = sort(collect(keys(registry)), lt=natural)
-                img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
-                available_folders = deepcopy(all_folders)
-                image_available_folders = deepcopy(img_folders)
-
-                if !isempty(newly_created_folders)
-                    selected_folder_main = first(newly_created_folders)
-                end
-
-                successful_files = length(newly_created_folders)
-                total_errors = sum(length, values(errors))
-
-                if total_errors == 0
-                    msg = "Successfully processed all $(successful_files) file(s) in $(total_time_end) seconds."
-                else
-                    msg = "Batch completed in $(total_time_end) seconds with $(total_errors) error(s)."
-                    warning_msg = true
-                end
-
-                mask_summary = current_mask_enabled ? "\nFiles processed without a mask: $(files_without_mask)" : ""
-
-                batch_summary = """
-                Processed $(successful_files)/$(num_files) files successfully.
-                $(mask_summary)
-
-                Errors by category:
-                • Load failures: $(length(errors["load_errors"]))
-                • Slice generation: $(length(errors["slice_errors"]))  
-                • I/O issues: $(length(errors["io_errors"]))
-
-                Detailed errors:
-                $(join(vcat(values(errors)...), "\n"))
-                """
-                showBatchSummary = true
-
-                # Update UI to display the last generated image
-                if !isempty(newly_created_folders)
-                    timestamp = string(time_ns())
-                    folder_path = joinpath("public", selected_folder_main)
-
-                    if current_triq_enabled
-                        triq_files = filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path))
-                        col_triq_files = filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path))
-
-                        if !isempty(triq_files)
-                            latest_triq = triq_files[argmax([mtime(joinpath(folder_path, f)) for f in triq_files])]
-                            current_triq = latest_triq
-                            imgIntT = "/$(selected_folder_main)/$(current_triq)?t=$(timestamp)"
-                            plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
-                            text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
-                            msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-                            
-                            if !isempty(col_triq_files)
-                                latest_col_triq = col_triq_files[argmax([mtime(joinpath(folder_path, f)) for f in col_triq_files])]
-                                current_col_triq = latest_col_triq
-                                colorbarT = "/$(selected_folder_main)/$(current_col_triq)?t=$(timestamp)"
-                            else
-                                colorbarT = ""
-                            end
-                            selectedTab = "tab1"
-                        end
-                    else # Not TrIQ enabled, display regular MSI image
-                        msi_files = filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path))
-                        col_msi_files = filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path))
-
-                        if !isempty(msi_files)
-                            latest_msi = msi_files[argmax([mtime(joinpath(folder_path, f)) for f in msi_files])]
-                            current_msi = latest_msi
-                            imgInt = "/$(selected_folder_main)/$(current_msi)?t=$(timestamp)"
-                            plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
-                            text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
-                            msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-
-                            if !isempty(col_msi_files)
-                                latest_col_msi = col_msi_files[argmax([mtime(joinpath(folder_path, f)) for f in col_msi_files])]
-                                current_col_msi = latest_col_msi
-                                colorbar = "/$(selected_folder_main)/$(current_col_msi)?t=$(timestamp)"
-                            else
-                                colorbar = ""
-                            end
-                            selectedTab = "tab0"
-                        end
-                    end
-                end
-
-            catch e
-                println("Error in main process: $e")
-                msg = "Batch processing failed: $e"
+        total_time_start = time()
+        try
+            # --- 1. Parameter Validation ---
+            if isempty(current_selected_files)
+                progress_message = "No .imzML files in batch. Please add files first."
                 warning_msg = true
-                @error "Main process failed" exception=(e, catch_backtrace())
-            finally
-                # --- UI State Reset ---
-                progress = false
-                btnStartDisable = false
-                btnPlotDisable = false
-                btnOpticalDisable = false
-                btnSpectraDisable = false
-                SpectraEnabled = true
-                overall_progress = 0.0
-                println("Done")
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                println(progress_message)
+                return
+            end
+
+            masses = Float64[]
+            try
+                masses = [parse(Float64, strip(m)) for m in split(current_nmass, ',', keepempty=false)]
+            catch e
+                progress_message = "Invalid m/z value(s). Please provide a comma-separated list of numbers. Error: $e"
+                warning_msg = true
+                return
+            end
+
+            if isempty(masses)
+                progress_message = "No valid m/z values found. Please provide comma-separated positive numbers."
+                warning_msg = true
+                return
+            end
+
+            # --- 2. Batch Processing Loop ---
+            num_files = length(current_selected_files)
+            total_steps = num_files
+            current_step = 0
+            errors = Dict("load_errors" => String[], "slice_errors" => String[], "io_errors" => String[])
+            newly_created_folders = String[]
+            files_without_mask = 0
+
+            for (file_idx, file_path) in enumerate(current_selected_files)
+                progress_message = "Processing file $file_idx/$num_files: $(basename(file_path))"
+                overall_progress = current_step / total_steps
+                
+                all_params = (
+                    tolerance = current_tol,
+                    colorL = current_color_level,
+                    triqE = current_triq_enabled,
+                    triqP = current_triq_prob,
+                    medianF = current_mfilter_enabled,
+                    registry = current_registry_path,
+                    fileIdx = file_idx,
+                    nFiles = num_files
+                )
+
+                success, error_msg = process_file_safely(file_path, masses, all_params, progress_message, overall_progress, use_mask=current_mask_enabled)
+
+                if !success
+                    push!(errors["load_errors"], error_msg)
+                else
+                    push!(newly_created_folders, replace(basename(file_path), r"\.imzML$"i => ""))
                 end
+                current_step += 1
+            end
+
+            # --- 3. Final Report ---
+            total_time_end = round(time() - total_time_start, digits=3)
+            
+            registry = load_registry(current_registry_path)
+            all_folders = sort(collect(keys(registry)), lt=natural)
+            img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+            available_folders = deepcopy(all_folders)
+            image_available_folders = deepcopy(img_folders)
+
+            if !isempty(newly_created_folders)
+                selected_folder_main = first(newly_created_folders)
+            end
+
+            successful_files = length(newly_created_folders)
+            total_errors = sum(length, values(errors))
+
+            if total_errors == 0
+                msg = "Successfully processed all $(successful_files) file(s) in $(total_time_end) seconds."
+            else
+                msg = "Batch completed in $(total_time_end) seconds with $(total_errors) error(s)."
+                warning_msg = true
+            end
+
+            mask_summary = current_mask_enabled ? "\nFiles processed without a mask: $(files_without_mask)" : ""
+
+            batch_summary = """
+            Processed $(successful_files)/$(num_files) files successfully.
+            $(mask_summary)
+
+            Errors by category:
+            • Load failures: $(length(errors["load_errors"]))
+            • Slice generation: $(length(errors["slice_errors"]))  
+            • I/O issues: $(length(errors["io_errors"]))
+
+            Detailed errors:
+            $(join(vcat(values(errors)...), "\n"))
+            """
+            showBatchSummary = true
+
+            # Update UI to display the last generated image
+            if !isempty(newly_created_folders)
+                timestamp = string(time_ns())
+                folder_path = joinpath("public", selected_folder_main)
+
+                if current_triq_enabled
+                    triq_files = filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path))
+                    col_triq_files = filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path))
+
+                    if !isempty(triq_files)
+                        latest_triq = triq_files[argmax([mtime(joinpath(folder_path, f)) for f in triq_files])]
+                        current_triq = latest_triq
+                        imgIntT = "/$(selected_folder_main)/$(current_triq)?t=$(timestamp)"
+                        plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
+                        text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
+                        msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+                        
+                        if !isempty(col_triq_files)
+                            latest_col_triq = col_triq_files[argmax([mtime(joinpath(folder_path, f)) for f in col_triq_files])]
+                            current_col_triq = latest_col_triq
+                            colorbarT = "/$(selected_folder_main)/$(current_col_triq)?t=$(timestamp)"
+                        else
+                            colorbarT = ""
+                        end
+                        selectedTab = "tab1"
+                    end
+                else # Not TrIQ enabled, display regular MSI image
+                    msi_files = filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path))
+                    col_msi_files = filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path))
+
+                    if !isempty(msi_files)
+                        latest_msi = msi_files[argmax([mtime(joinpath(folder_path, f)) for f in msi_files])]
+                        current_msi = latest_msi
+                        imgInt = "/$(selected_folder_main)/$(current_msi)?t=$(timestamp)"
+                        plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
+                        text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
+                        msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
+
+                        if !isempty(col_msi_files)
+                            latest_col_msi = col_msi_files[argmax([mtime(joinpath(folder_path, f)) for f in col_msi_files])]
+                            current_col_msi = latest_col_msi
+                            colorbar = "/$(selected_folder_main)/$(current_col_msi)?t=$(timestamp)"
+                        else
+                            colorbar = ""
+                        end
+                        selectedTab = "tab0"
+                    end
+                end
+            end
+
+        catch e
+            println("Error in main process: $e")
+            msg = "Batch processing failed: $e"
+            warning_msg = true
+            @error "Main process failed" exception=(e, catch_backtrace())
+        finally
+            # --- UI State Reset ---
+            progress = false
+            btnStartDisable = false
+            btnPlotDisable = false
+            btnOpticalDisable = false
+            btnSpectraDisable = false
+            SpectraEnabled = true
+            overall_progress = 0.0
+            println("Done")
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
             end
         end
     end
@@ -856,59 +849,57 @@ end
         btnStartDisable = true
         msg = "Loading plot for $(selected_folder_main)..."
 
-        @async begin
-            try
-                sTime = time()
-                registry = load_registry(registry_path)
-                entry = registry[selected_folder_main]
-                target_path = entry["source_path"]
+        try
+            sTime = time()
+            registry = load_registry(registry_path)
+            entry = registry[selected_folder_main]
+            target_path = entry["source_path"]
 
-                if target_path == "unknown (manually added)"
-                    msg = "Dataset selected contained no route."
-                    warning_msg = true
-                    return
-                end
-
-                if msi_data === nothing || full_route != target_path
-                    msg = "Reloading $(basename(target_path)) for analysis..."
-                    full_route = target_path
-                    msi_data = OpenMSIData(target_path)
-                    if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
-                        msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
-                        msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
-                    else
-                        precompute_analytics(msi_data)
-                    end
-                end
-
-                local mask_path_for_plot::Union{String, Nothing} = nothing
-                if maskEnabled && get(entry, "has_mask", false)
-                    mask_path_for_plot = get(entry, "mask_path", "")
-                    if !isfile(mask_path_for_plot)
-                        @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
-                        mask_path_for_plot = nothing
-                    end
-                end
-
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
-                selectedTab = "tab2"
-                fTime = time()
-                eTime = round(fTime - sTime, digits=3)
-                msg = "Plot loaded in $(eTime) seconds"
-                log_memory_usage("Mean Plot Generated", msi_data)
-            catch e
-                msg = "Could not generate mean spectrum plot: $e"
+            if target_path == "unknown (manually added)"
+                msg = "Dataset selected contained no route."
                 warning_msg = true
-                @error "Mean spectrum plotting failed" exception=(e, catch_backtrace())
-            finally
-                progressSpectraPlot = false
-                btnPlotDisable = false
-                btnSpectraDisable = false
-                btnStartDisable = false
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                return
+            end
+
+            if msi_data === nothing || full_route != target_path
+                msg = "Reloading $(basename(target_path)) for analysis..."
+                full_route = target_path
+                msi_data = OpenMSIData(target_path)
+                if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
+                    msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
+                    msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
+                else
+                    precompute_analytics(msi_data)
                 end
+            end
+
+            local mask_path_for_plot::Union{String, Nothing} = nothing
+            if maskEnabled && get(entry, "has_mask", false)
+                mask_path_for_plot = get(entry, "mask_path", "")
+                if !isfile(mask_path_for_plot)
+                    @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
+                    mask_path_for_plot = nothing
+                end
+            end
+
+            plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
+            selectedTab = "tab2"
+            fTime = time()
+            eTime = round(fTime - sTime, digits=3)
+            msg = "Plot loaded in $(eTime) seconds"
+            log_memory_usage("Mean Plot Generated", msi_data)
+        catch e
+            msg = "Could not generate mean spectrum plot: $e"
+            warning_msg = true
+            @error "Mean spectrum plotting failed" exception=(e, catch_backtrace())
+        finally
+            progressSpectraPlot = false
+            btnPlotDisable = false
+            btnSpectraDisable = false
+            btnStartDisable = false
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
             end
         end
     end
@@ -925,59 +916,57 @@ end
         btnStartDisable = true
         msg = "Loading total spectrum plot for $(selected_folder_main)..."
 
-        @async begin
-            try
-                sTime = time()
-                registry = load_registry(registry_path)
-                entry = registry[selected_folder_main]
-                target_path = entry["source_path"]
+        try
+            sTime = time()
+            registry = load_registry(registry_path)
+            entry = registry[selected_folder_main]
+            target_path = entry["source_path"]
 
-                if target_path == "unknown (manually added)"
-                    msg = "Dataset selected contained no route."
-                    warning_msg = true
-                    return
-                end
-
-                if msi_data === nothing || full_route != target_path
-                    msg = "Reloading $(basename(target_path)) for analysis..."
-                    full_route = target_path
-                    msi_data = OpenMSIData(target_path)
-                    if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
-                        msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
-                        msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
-                    else
-                        precompute_analytics(msi_data)
-                    end
-                end
-
-                local mask_path_for_plot::Union{String, Nothing} = nothing
-                if maskEnabled && get(entry, "has_mask", false)
-                    mask_path_for_plot = get(entry, "mask_path", "")
-                    if !isfile(mask_path_for_plot)
-                        @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
-                        mask_path_for_plot = nothing
-                    end
-                end
-
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
-                selectedTab = "tab2"
-                fTime = time()
-                eTime = round(fTime - sTime, digits=3)
-                msg = "Total plot loaded in $(eTime) seconds"
-                log_memory_usage("Sum Plot Generated", msi_data)
-            catch e
-                msg = "Could not generate total spectrum plot: $e"
+            if target_path == "unknown (manually added)"
+                msg = "Dataset selected contained no route."
                 warning_msg = true
-                @error "Total spectrum plotting failed" exception=(e, catch_backtrace())
-            finally
-                progressSpectraPlot = false
-                btnPlotDisable = false
-                btnSpectraDisable = false
-                btnStartDisable = false
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                return
+            end
+
+            if msi_data === nothing || full_route != target_path
+                msg = "Reloading $(basename(target_path)) for analysis..."
+                full_route = target_path
+                msi_data = OpenMSIData(target_path)
+                if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
+                    msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
+                    msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
+                else
+                    precompute_analytics(msi_data)
                 end
+            end
+
+            local mask_path_for_plot::Union{String, Nothing} = nothing
+            if maskEnabled && get(entry, "has_mask", false)
+                mask_path_for_plot = get(entry, "mask_path", "")
+                if !isfile(mask_path_for_plot)
+                    @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
+                    mask_path_for_plot = nothing
+                end
+            end
+
+            plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
+            selectedTab = "tab2"
+            fTime = time()
+            eTime = round(fTime - sTime, digits=3)
+            msg = "Total plot loaded in $(eTime) seconds"
+            log_memory_usage("Sum Plot Generated", msi_data)
+        catch e
+            msg = "Could not generate total spectrum plot: $e"
+            warning_msg = true
+            @error "Total spectrum plotting failed" exception=(e, catch_backtrace())
+        finally
+            progressSpectraPlot = false
+            btnPlotDisable = false
+            btnSpectraDisable = false
+            btnStartDisable = false
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
             end
         end
     end
@@ -995,100 +984,98 @@ end
         btnSpectraDisable = true
         msg = "Loading plot for $(selected_folder_main)..."
 
-        @async begin
-            try
-                sTime = time()
-                registry = load_registry(registry_path)
-                
-                # Add error handling for registry access
-                if !haskey(registry, selected_folder_main)
-                    msg = "Dataset '$selected_folder_main' not found in registry."
-                    warning_msg = true
-                    return
-                end
-                
-                entry = registry[selected_folder_main]
-                target_path = entry["source_path"]
-
-                if target_path == "unknown (manually added)"
-                    msg = "Dataset selected contained no route."
-                    warning_msg = true
-                    return
-                end
-
-                if msi_data === nothing || full_route != target_path
-                    msg = "Reloading $(basename(target_path)) for analysis..."
-                    full_route = target_path
-                    msi_data = OpenMSIData(target_path)
-                    if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
-                        msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
-                        msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
-                    else
-                        precompute_analytics(msi_data)
-                    end
-                end
-
-                local mask_path_for_plot::Union{String, Nothing} = nothing
-                if maskEnabled && get(entry, "has_mask", false)
-                    mask_path_for_plot = get(entry, "mask_path", "")
-                    if !isfile(mask_path_for_plot)
-                        @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
-                        mask_path_for_plot = nothing
-                    end
-                end
-
-                # Convert to positive coordinates for processing
-                y_positive = yCoord < 0 ? abs(yCoord) : yCoord
-                plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
-                
-                # Update coordinates based on actual plot title
-                # Extract title text from the Dict safely
-                actual_title = if plotlayout.title isa Dict && haskey(plotlayout.title, :text)
-                    plotlayout.title[:text]
-                elseif plotlayout.title isa Dict && haskey(plotlayout.title, "text")
-                    plotlayout.title["text"]
-                else
-                    string(plotlayout.title)  # Fallback
-                end
-                
-                if occursin("Masked Spectrum at", actual_title)
-                    # Extract coordinates from masked spectrum title
-                    coords_match = match(r"Masked Spectrum at \((\d+), (\d+)\)", actual_title)
-                    if coords_match !== nothing
-                        xCoord = parse(Int, coords_match.captures[1])
-                        yCoord = -parse(Int, coords_match.captures[2])  # Negative for display
-                    end
-                elseif occursin("Spectrum at", actual_title)
-                    # Extract coordinates from regular spectrum title
-                    coords_match = match(r"Spectrum at \((\d+), (\d+)\)", actual_title)
-                    if coords_match !== nothing
-                        xCoord = parse(Int, coords_match.captures[1])
-                        yCoord = -parse(Int, coords_match.captures[2])  # Negative for display
-                    end
-                else
-                    # For non-imaging data or fallback, just clamp the coordinates
-                    xCoord = clamp(xCoord, 1, imgWidth)
-                    yCoord = yCoord < 0 ? yCoord : -clamp(yCoord, 1, imgHeight)
-                end
-                
-                selectedTab = "tab2"
-                fTime = time()
-                eTime = round(fTime - sTime, digits=3)
-                msg = "Plot loaded in $(eTime) seconds"
-                log_memory_usage("XY Plot Generated", msi_data)
-            catch e
-                msg = "Could not retrieve spectrum: $e"
+        try
+            sTime = time()
+            registry = load_registry(registry_path)
+            
+            # Add error handling for registry access
+            if !haskey(registry, selected_folder_main)
+                msg = "Dataset '$selected_folder_main' not found in registry."
                 warning_msg = true
-                @error "Spectrum plotting failed" exception=(e, catch_backtrace())
-            finally
-                progressSpectraPlot = false
-                btnPlotDisable = false
-                btnSpectraDisable = false
-                btnStartDisable = false
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                return
+            end
+            
+            entry = registry[selected_folder_main]
+            target_path = entry["source_path"]
+
+            if target_path == "unknown (manually added)"
+                msg = "Dataset selected contained no route."
+                warning_msg = true
+                return
+            end
+
+            if msi_data === nothing || full_route != target_path
+                msg = "Reloading $(basename(target_path)) for analysis..."
+                full_route = target_path
+                msi_data = OpenMSIData(target_path)
+                if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
+                    msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
+                    msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
+                else
+                    precompute_analytics(msi_data)
                 end
+            end
+
+            local mask_path_for_plot::Union{String, Nothing} = nothing
+            if maskEnabled && get(entry, "has_mask", false)
+                mask_path_for_plot = get(entry, "mask_path", "")
+                if !isfile(mask_path_for_plot)
+                    @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
+                    mask_path_for_plot = nothing
+                end
+            end
+
+            # Convert to positive coordinates for processing
+            y_positive = yCoord < 0 ? abs(yCoord) : yCoord
+            plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
+            
+            # Update coordinates based on actual plot title
+            # Extract title text from the Dict safely
+            actual_title = if plotlayout.title isa Dict && haskey(plotlayout.title, :text)
+                plotlayout.title[:text]
+            elseif plotlayout.title isa Dict && haskey(plotlayout.title, "text")
+                plotlayout.title["text"]
+            else
+                string(plotlayout.title)  # Fallback
+            end
+            
+            if occursin("Masked Spectrum at", actual_title)
+                # Extract coordinates from masked spectrum title
+                coords_match = match(r"Masked Spectrum at \((\d+), (\d+)\)", actual_title)
+                if coords_match !== nothing
+                    xCoord = parse(Int, coords_match.captures[1])
+                    yCoord = -parse(Int, coords_match.captures[2])  # Negative for display
+                end
+            elseif occursin("Spectrum at", actual_title)
+                # Extract coordinates from regular spectrum title
+                coords_match = match(r"Spectrum at \((\d+), (\d+)\)", actual_title)
+                if coords_match !== nothing
+                    xCoord = parse(Int, coords_match.captures[1])
+                    yCoord = -parse(Int, coords_match.captures[2])  # Negative for display
+                end
+            else
+                # For non-imaging data or fallback, just clamp the coordinates
+                xCoord = clamp(xCoord, 1, imgWidth)
+                yCoord = yCoord < 0 ? yCoord : -clamp(yCoord, 1, imgHeight)
+            end
+            
+            selectedTab = "tab2"
+            fTime = time()
+            eTime = round(fTime - sTime, digits=3)
+            msg = "Plot loaded in $(eTime) seconds"
+            log_memory_usage("XY Plot Generated", msi_data)
+        catch e
+            msg = "Could not retrieve spectrum: $e"
+            warning_msg = true
+            @error "Spectrum plotting failed" exception=(e, catch_backtrace())
+        finally
+            progressSpectraPlot = false
+            btnPlotDisable = false
+            btnSpectraDisable = false
+            btnStartDisable = false
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
             end
         end
     end
@@ -1575,50 +1562,48 @@ end
         btnStartDisable = true
         btnSpectraDisable = true
 
-        @async begin
-            try
-                # --- Get Mask Path ---
-                local mask_path_for_plot::Union{String, Nothing} = nothing
-                if maskEnabled && !isempty(selected_folder_main)
-                    registry = load_registry(registry_path)
-                    entry = get(registry, selected_folder_main, nothing)
-                    if entry !== nothing && get(entry, "has_mask", false)
-                        mask_path_candidate = get(entry, "mask_path", "")
-                        if isfile(mask_path_candidate)
-                            mask_path_for_plot = mask_path_candidate
-                        else
-                            @warn "Mask enabled but file not found: $(mask_path_candidate). Plotting without mask."
-                        end
+        try
+            # --- Get Mask Path ---
+            local mask_path_for_plot::Union{String, Nothing} = nothing
+            if maskEnabled && !isempty(selected_folder_main)
+                registry = load_registry(registry_path)
+                entry = get(registry, selected_folder_main, nothing)
+                if entry !== nothing && get(entry, "has_mask", false)
+                    mask_path_candidate = get(entry, "mask_path", "")
+                    if isfile(mask_path_candidate)
+                        mask_path_for_plot = mask_path_candidate
+                    else
+                        @warn "Mask enabled but file not found: $(mask_path_candidate). Plotting without mask."
                     end
                 end
-                # ---
+            end
+            # ---
 
-                sTime = time()
-                if mask_path_for_plot !== nothing
-                    plotdata3d, plotlayout3d = loadSurfacePlot(imgInt, mask_path_for_plot)
-                else
-                    plotdata3d, plotlayout3d = loadSurfacePlot(imgInt)
-                end
+            sTime = time()
+            if mask_path_for_plot !== nothing
+                plotdata3d, plotlayout3d = loadSurfacePlot(imgInt, mask_path_for_plot)
+            else
+                plotdata3d, plotlayout3d = loadSurfacePlot(imgInt)
+            end
 
-                selectedTab = "tab4"
-                fTime = time()
-                eTime = round(fTime - sTime, digits=3)
-                msg = "Plot loaded in $(eTime) seconds"
-                log_memory_usage("Mean Plot Generated", msi_data)
-            catch e
-                msg = "Failed to load and process image: $e"
-                warning_msg = true
-                @error "3D plot generation failed" exception=(e, catch_backtrace())
-            finally
-                progressPlot=false
-                btnPlotDisable=false
-                btnStartDisable=false
-                btnSpectraDisable=false
-                SpectraEnabled=true
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
-                end
+            selectedTab = "tab4"
+            fTime = time()
+            eTime = round(fTime - sTime, digits=3)
+            msg = "Plot loaded in $(eTime) seconds"
+            log_memory_usage("Mean Plot Generated", msi_data)
+        catch e
+            msg = "Failed to load and process image: $e"
+            warning_msg = true
+            @error "3D plot generation failed" exception=(e, catch_backtrace())
+        finally
+            progressPlot=false
+            btnPlotDisable=false
+            btnStartDisable=false
+            btnSpectraDisable=false
+            SpectraEnabled=true
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
             end
         end
     end
@@ -1640,50 +1625,48 @@ end
         btnStartDisable = true
         btnSpectraDisable = true
 
-        @async begin
-            try
-                # --- Get Mask Path ---
-                local mask_path_for_plot::Union{String, Nothing} = nothing
-                if maskEnabled[] && !isempty(selected_folder_main)
-                    registry = load_registry(registry_path)
-                    entry = get(registry, selected_folder_main, nothing)
-                    if entry !== nothing && get(entry, "has_mask", false)
-                        mask_path_candidate = get(entry, "mask_path", "")
-                        if isfile(mask_path_candidate)
-                            mask_path_for_plot = mask_path_candidate
-                        else
-                            @warn "Mask enabled but file not found: $(mask_path_candidate). Plotting without mask."
-                        end
+        try
+            # --- Get Mask Path ---
+            local mask_path_for_plot::Union{String, Nothing} = nothing
+            if maskEnabled[] && !isempty(selected_folder_main)
+                registry = load_registry(registry_path)
+                entry = get(registry, selected_folder_main, nothing)
+                if entry !== nothing && get(entry, "has_mask", false)
+                    mask_path_candidate = get(entry, "mask_path", "")
+                    if isfile(mask_path_candidate)
+                        mask_path_for_plot = mask_path_candidate
+                    else
+                        @warn "Mask enabled but file not found: $(mask_path_candidate). Plotting without mask."
                     end
                 end
-                # ---
+            end
+            # ---
 
-                sTime = time()
-                if mask_path_for_plot !== nothing
-                    plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT, mask_path_for_plot)
-                else
-                    plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT)
-                end
+            sTime = time()
+            if mask_path_for_plot !== nothing
+                plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT, mask_path_for_plot)
+            else
+                plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT)
+            end
 
-                selectedTab = "tab4"
-                fTime = time()
-                eTime = round(fTime - sTime, digits=3)
-                msg = "Plot loaded in $(eTime) seconds"
-                log_memory_usage("Mean Plot Generated", msi_data)
-            catch e
-                msg = "Failed to load and process image: $e"
-                warning_msg = true
-                @error "3D TrIQ plot generation failed" exception=(e, catch_backtrace())
-            finally
-                progressPlot=false
-                btnPlotDisable=false
-                btnStartDisable=false
-                btnSpectraDisable=false
-                SpectraEnabled=true
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
-                end
+            selectedTab = "tab4"
+            fTime = time()
+            eTime = round(fTime - sTime, digits=3)
+            msg = "Plot loaded in $(eTime) seconds"
+            log_memory_usage("Mean Plot Generated", msi_data)
+        catch e
+            msg = "Failed to load and process image: $e"
+            warning_msg = true
+            @error "3D TrIQ plot generation failed" exception=(e, catch_backtrace())
+        finally
+            progressPlot=false
+            btnPlotDisable=false
+            btnStartDisable=false
+            btnSpectraDisable=false
+            SpectraEnabled=true
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
             end
         end
     end
@@ -1706,31 +1689,29 @@ end
         btnStartDisable=true
         btnSpectraDisable=true
         
-        @async begin
-            try
-                sTime=time()
-                plotdataC,plotlayoutC=loadContourPlot(imgInt)
-                GC.gc()  # Trigger garbage collection
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
-                end
-                selectedTab="tab3"
-                fTime=time()
-                eTime=round(fTime-sTime,digits=3)
-                msg="Plot loaded in $(eTime) seconds"
-            catch e
-                msg="Failed to load and process image: $e"
-                warning_msg=true
-            finally
-                progressPlot=false
-                btnPlotDisable=false
-                btnStartDisable=false
-                btnSpectraDisable=false
-                SpectraEnabled=true
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
-                end
+        try
+            sTime=time()
+            plotdataC,plotlayoutC=loadContourPlot(imgInt)
+            GC.gc()  # Trigger garbage collection
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
+            end
+            selectedTab="tab3"
+            fTime=time()
+            eTime=round(fTime-sTime,digits=3)
+            msg="Plot loaded in $(eTime) seconds"
+        catch e
+            msg="Failed to load and process image: $e"
+            warning_msg=true
+        finally
+            progressPlot=false
+            btnPlotDisable=false
+            btnStartDisable=false
+            btnSpectraDisable=false
+            SpectraEnabled=true
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
             end
         end
     end
@@ -1752,31 +1733,29 @@ end
         btnStartDisable=true
         btnSpectraDisable=true
         
-        @async begin
-            try
-                sTime=time()
-                plotdataC,plotlayoutC=loadContourPlot(imgIntT)
-                GC.gc()  # Trigger garbage collection
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
-                end
-                selectedTab="tab3"
-                fTime=time()
-                eTime=round(fTime-sTime,digits=3)
-                msg="Plot loaded in $(eTime) seconds"
-            catch e
-                msg="Failed to load and process image: $e"
-                warning_msg=true
-            finally
-                progressPlot=false
-                btnPlotDisable=false
-                btnStartDisable=false
-                btnSpectraDisable=false
-                SpectraEnabled=true
-                GC.gc()
-                if Sys.islinux()
-                    ccall(:malloc_trim, Int32, (Int32,), 0)
-                end
+        try
+            sTime=time()
+            plotdataC,plotlayoutC=loadContourPlot(imgIntT)
+            GC.gc()  # Trigger garbage collection
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
+            end
+            selectedTab="tab3"
+            fTime=time()
+            eTime=round(fTime-sTime,digits=3)
+            msg="Plot loaded in $(eTime) seconds"
+        catch e
+            msg="Failed to load and process image: $e"
+            warning_msg=true
+        finally
+            progressPlot=false
+            btnPlotDisable=false
+            btnStartDisable=false
+            btnSpectraDisable=false
+            SpectraEnabled=true
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
             end
         end
     end
@@ -1923,64 +1902,61 @@ end
 
     @onchange isready begin
         if isready && !registry_init_done
-            @async begin # Run asynchronously to not block startup
-                sleep(1.0) # Give frontend time to initialize
-                try
-                    println("Synchronizing registry with filesystem on backend init...")
-                    reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
-                    registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
+            warmup_init()
+            try
+                println("Synchronizing registry with filesystem on backend init...")
+                reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+                registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
 
-                    public_dirs = isdir("public") ? readdir("public") : []
-                    ignored_dirs = ["css", "masks"]
-                    
-                    dataset_dirs = filter(d -> isdir(joinpath("public", d)) && !(d in ignored_dirs), public_dirs)
-                    
-                    registry_keys = Set(keys(registry))
-                    folder_set = Set(dataset_dirs)
+                public_dirs = isdir("public") ? readdir("public") : []
+                ignored_dirs = ["css", "masks"]
+                
+                dataset_dirs = filter(d -> isdir(joinpath("public", d)) && !(d in ignored_dirs), public_dirs)
+                
+                registry_keys = Set(keys(registry))
+                folder_set = Set(dataset_dirs)
 
-                    new_folders = setdiff(folder_set, registry_keys)
-                    for folder in new_folders
-                        println("Found new folder: $folder")
-                        registry[folder] = Dict(
-                            "source_path" => "unknown (manually added)",
-                            "processed_date" => "unknown",
-                            "metadata" => Dict(),
-                            "is_imzML" => true # Assume folder contains images if found this way
-                        )
-                    end
-
-                    removed_folders = setdiff(registry_keys, folder_set)
-                    for folder in removed_folders
-                        delete!(registry, folder)
-                    end
-
-                    if !isempty(new_folders) || !isempty(removed_folders)
-                        println("Registry changed, saving...")
-                        open(reg_path, "w") do f
-                            JSON.print(f, registry, 4)
-                        end
-                    end
-                    
-                    all_folders = sort(collect(keys(registry)), lt=natural)
-                    img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
-
-                    available_folders = deepcopy(all_folders)
-                    image_available_folders = deepcopy(img_folders)
-                    
-                    println("UI lists updated. All: $(length(available_folders)), Images: $(length(image_available_folders))")
-
-                catch e
-                    @warn "Registry synchronization failed: $e"
-                    available_folders = []
-                    image_available_folders = []
-                    selected_files = String[]
-                finally
-                    registry_init_done = true
+                new_folders = setdiff(folder_set, registry_keys)
+                for folder in new_folders
+                    println("Found new folder: $folder")
+                    registry[folder] = Dict(
+                        "source_path" => "unknown (manually added)",
+                        "processed_date" => "unknown",
+                        "metadata" => Dict(),
+                        "is_imzML" => true # Assume folder contains images if found this way
+                    )
                 end
+
+                removed_folders = setdiff(registry_keys, folder_set)
+                for folder in removed_folders
+                    delete!(registry, folder)
+                end
+
+                if !isempty(new_folders) || !isempty(removed_folders)
+                    println("Registry changed, saving...")
+                    open(reg_path, "w") do f
+                        JSON.print(f, registry, 4)
+                    end
+                end
+                
+                all_folders = sort(collect(keys(registry)), lt=natural)
+                img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+
+                available_folders = deepcopy(all_folders)
+                image_available_folders = deepcopy(img_folders)
+                
+                println("UI lists updated. All: $(length(available_folders)), Images: $(length(image_available_folders))")
+
+            catch e
+                @warn "Registry synchronization failed: $e"
+                available_folders = []
+                image_available_folders = []
+                selected_files = String[]
+            finally
+                registry_init_done = true
             end
         end
         log_memory_usage("App Ready", msi_data)
-        warmup_init()
     end
 
     GC.gc() # Trigger garbage collection

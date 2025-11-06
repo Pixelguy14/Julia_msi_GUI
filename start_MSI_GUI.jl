@@ -13,6 +13,9 @@ using Genie
 # Load and configure Genie
 Genie.loadapp()
 
+# Remove html parser error discrepancy
+redirect_stderr(devnull)
+
 # Start the Genie server
 @async begin
     up(host="127.0.0.1", port=1481)

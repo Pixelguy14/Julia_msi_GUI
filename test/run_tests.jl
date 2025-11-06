@@ -76,8 +76,8 @@ const COORDS_TO_PLOT = (50, 50) # Example coordinates (X, Y)
 const RESULTS_DIR = "test/results"
 
 test1 = false
-test2 = false 
-test3 = true
+test2 = true 
+test3 = false
 
 # ===================================================================
 # DATA VALIDATION UTILITY

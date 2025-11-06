@@ -1,11 +1,8 @@
 # src/imzML.jl
 using Images, Statistics, CairoMakie, DataFrames, Printf, ColorSchemes, StatsBase
 
-# --- Extracted from imzML.jl ---
-
 """
 This file provides a library for parsing `.imzML` and `.ibd` files in pure Julia.
-It is intended to be included by a parent script.
 
 Core Functions:
 - `load_imzml_lazy`: The main function that orchestrates the parsing.
@@ -146,6 +143,37 @@ function get_spectrum_attributes(stream::IO, hIbd::IO)
     return skip
 end
 
+function get_spectrum_attributes_v2(stream::IO, hIbd::IO)
+    # Look for position x
+    readuntil(stream, "IMS:1000050")
+    x_skip = 0
+    
+    # Look for position y  
+    readuntil(stream, "IMS:1000051")
+    y_skip = 0
+    
+    # Determine order of mz/intensity arrays
+    pos_before = position(stream)
+    
+    # Look for first external offset (could be mz or intensity)
+    readuntil(stream, "external offset")
+    current_line = readline(stream)
+    
+    # Check which array comes first by looking at the param group reference
+    mz_first = occursin("mzArray", current_line) ? 3 : 4
+    
+    # Find array length - look for the first external array length after coordinates
+    seek(stream, pos_before)
+    readuntil(stream, "IMS:1000103")
+    array_len_skip = 0
+    
+    # Find spectrum end
+    readuntil(stream, "</spectrum>")
+    spectrum_end_skip = 0
+    
+    return [x_skip, y_skip, mz_first, array_len_skip, spectrum_end_skip]
+end
+
 function determine_parser(stream::IO, mz_is_compressed::Bool, int_is_compressed::Bool)
     start_pos = position(stream)
     spectrum_xml = ""
@@ -200,13 +228,13 @@ end
 function load_imzml_lazy(file_path::String; cache_size::Int=100)
     println("DEBUG: Checking for .imzML file at $file_path")
     if !isfile(file_path)
-        error("Provided path is not a file: $(file_path)")
+        throw(FileFormatError("Provided path is not a file: $(file_path)"))
     end
 
     ibd_path = replace(file_path, r"\.(imzML|mzML)"i => ".ibd")
     println("DEBUG: Checking for .ibd file at $ibd_path")
     if !isfile(ibd_path)
-        error("Corresponding .ibd file not found for: $(file_path)")
+        throw(FileFormatError("Corresponding .ibd file not found for: $(file_path)"))
     end
 
     println("DEBUG: Opening file streams for .imzML and .ibd")
@@ -262,6 +290,7 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
             spectra_metadata = parse_neofx(stream, hIbd, param_groups, width, height, num_spectra, 
                                            default_mz_format, default_intensity_format, 
                                            mz_is_compressed, int_is_compressed, global_mode)
+        #=
         elseif parser_type == :compressed
             println("DEBUG: Using compressed parser.")
             spectra_metadata = parse_compressed(stream, hIbd, param_groups, width, height, num_spectra,
@@ -270,6 +299,13 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
         else # :uncompressed
             println("DEBUG: Using uncompressed parser.")
             spectra_metadata = parse_uncompressed(stream, hIbd, param_groups, width, height, num_spectra,
+                                           default_mz_format, default_intensity_format,
+                                           mz_is_compressed, int_is_compressed, global_mode)
+        end
+        =#
+        else
+            println("DEBUG: Using compressed parser.")
+            spectra_metadata = parse_compressed(stream, hIbd, param_groups, width, height, num_spectra,
                                            default_mz_format, default_intensity_format,
                                            mz_is_compressed, int_is_compressed, global_mode)
         end
@@ -306,37 +342,46 @@ function parse_uncompressed(stream::IO, hIbd::IO, param_groups::Dict{String, Spe
                            width::Int32, height::Int32, num_spectra::Int32,
                            mz_format::DataType, intensity_format::DataType, 
                            mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
-    # Your existing working skip-based parser
+    
     println("DEBUG: Learning file structure from first spectrum...")
     start_of_spectra_xml = position(stream)
-    attr = get_spectrum_attributes(stream, hIbd)
+    
+    # Skip UUID at beginning of IBD file (from converter)
+    seek(hIbd, 16)
     current_ibd_offset = position(hIbd)
+    
+    attr = get_spectrum_attributes_v2(stream, hIbd)
     seek(stream, start_of_spectra_xml)
-    println("DEBUG: Initial IBD offset: $current_ibd_offset")
+    println("DEBUG: Initial IBD offset (after UUID): $current_ibd_offset")
 
     spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
     mz_is_first = attr[3] == 3
 
     for k in 1:num_spectra
-        # Store the start position of this spectrum for mode detection
         spectrum_start_pos = position(stream)
         
-        # Use skip values learned from the first spectrum
-        skip(stream, attr[5]) # Skip to X coordinate value
+        # Find X coordinate
+        line = readuntil(stream, "IMS:1000050")
+        if eof(stream)
+            error("Unexpected EOF while looking for X coordinate")
+        end
         val_tag_x = find_tag(stream, r"value=\"(\d+)\"")
         x = parse(Int32, val_tag_x.captures[1])
 
-        skip(stream, attr[6]) # Skip to Y coordinate value
+        # Find Y coordinate  
+        line = readuntil(stream, "IMS:1000051")
         val_tag_y = find_tag(stream, r"value=\"(\d+)\"")
         y = parse(Int32, val_tag_y.captures[1])
 
-        skip(stream, attr[7]) # Skip to array length value
+        # Find array length - look for external array length
+        line = readuntil(stream, "IMS:1000103")
         val_tag_len = find_tag(stream, r"value=\"(\d+)\"")
         nPoints = parse(Int32, val_tag_len.captures[1])
 
-        # For uncompressed data, use simple calculation
-        mz_len_bytes = nPoints * sizeof(mz_format)
-        int_len_bytes = nPoints * sizeof(intensity_format)
+        # CRITICAL FIX: Use the actual formats from the XML, not hardcoded values
+        # The converter writes Float64 for mz, Float32 for intensity
+        mz_len_bytes = nPoints * sizeof(Float64)  # Converter uses Float64 for mz
+        int_len_bytes = nPoints * sizeof(Float32) # Converter uses Float32 for intensity
 
         local mz_offset, int_offset
         if mz_is_first
@@ -347,7 +392,7 @@ function parse_uncompressed(stream::IO, hIbd::IO, param_groups::Dict{String, Spe
             mz_offset = int_offset + int_len_bytes
         end
 
-        # Mode detection from spectrum XML
+        # Mode detection
         current_pos = position(stream)
         seek(stream, spectrum_start_pos)
         spectrum_buffer = IOBuffer()
@@ -369,14 +414,16 @@ function parse_uncompressed(stream::IO, hIbd::IO, param_groups::Dict{String, Spe
         end
         seek(stream, current_pos)
 
-        # Create SpectrumAsset objects
-        mz_asset = SpectrumAsset(mz_format, mz_is_compressed, mz_offset, nPoints, :mz)
-        int_asset = SpectrumAsset(intensity_format, int_is_compressed, int_offset, nPoints, :intensity)
+        # CRITICAL FIX: Use correct data types that match the converter output
+        mz_asset = SpectrumAsset(Float64, mz_is_compressed, mz_offset, nPoints, :mz)
+        int_asset = SpectrumAsset(Float32, int_is_compressed, int_offset, nPoints, :intensity)
         
         spectra_metadata[k] = SpectrumMetadata(x, y, "", spectrum_mode, mz_asset, int_asset)
         
         current_ibd_offset += mz_len_bytes + int_len_bytes
-        skip(stream, attr[8]) # Skip to the end of the spectrum tag
+        
+        # Skip to next spectrum
+        line = readuntil(stream, "</spectrum>")
     end
 
     return spectra_metadata
@@ -385,8 +432,7 @@ end
 function parse_compressed(stream::IO, hIbd::IO, param_groups::Dict{String, SpecDim},
                          width::Int32, height::Int32, num_spectra::Int32,
                          default_mz_format::DataType, default_intensity_format::DataType, 
-                         mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)  # Changed Int64 to SpectrumMode
-    # New parser for compressed data
+                         mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
     spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
     
     # Use concrete type for array_data
@@ -480,29 +526,35 @@ function parse_compressed(stream::IO, hIbd::IO, param_groups::Dict{String, SpecD
         mz_data = filter(d -> d.is_mz, array_data)
         int_data = filter(d -> !d.is_mz, array_data)
         
+        # FIX: Handle empty spectra gracefully instead of throwing errors
+        current_ibd_pos = position(hIbd)
+        
         if length(mz_data) != 1 || length(int_data) != 1
-            error("Spectrum $k: Expected exactly one m/z and one intensity array")
+            # Create placeholder metadata for empty/invalid spectrum
+            println("DEBUG: Spectrum $k is empty or invalid - creating placeholder metadata")
+            mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, current_ibd_pos, 0, :mz)
+            int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, current_ibd_pos, 0, :intensity)
+        else
+            mz_info = mz_data[1]
+            int_info = int_data[1]
+
+            # DEBUG: Print first spectrum details
+            if k == 1
+                println("DEBUG First spectrum parsed:")
+                println("  Coordinates: x=$x, y=$y")
+                println("  Mode: $spectrum_mode")
+                println("  m/z array: array_length=$(mz_info.array_length), encoded_length=$(mz_info.encoded_length), offset=$(mz_info.offset)")
+                println("  intensity array: array_length=$(int_info.array_length), encoded_length=$(int_info.encoded_length), offset=$(int_info.offset)")
+                println("  Expected m/z bytes: $(mz_info.array_length * sizeof(default_mz_format))")
+                println("  Expected intensity bytes: $(int_info.array_length * sizeof(default_intensity_format))")
+            end
+
+            # Create SpectrumAsset objects
+            mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, mz_info.offset, 
+                                    mz_is_compressed ? mz_info.encoded_length : mz_info.array_length, :mz)
+            int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, int_info.offset,
+                                     int_is_compressed ? int_info.encoded_length : int_info.array_length, :intensity)
         end
-
-        mz_info = mz_data[1]
-        int_info = int_data[1]
-
-        # DEBUG: Print first spectrum details
-        if k == 1
-            println("DEBUG First spectrum parsed:")
-            println("  Coordinates: x=$x, y=$y")
-            println("  Mode: $spectrum_mode")
-            println("  m/z array: array_length=$(mz_info.array_length), encoded_length=$(mz_info.encoded_length), offset=$(mz_info.offset)")
-            println("  intensity array: array_length=$(int_info.array_length), encoded_length=$(int_info.encoded_length), offset=$(int_info.offset)")
-            println("  Expected m/z bytes: $(mz_info.array_length * sizeof(default_mz_format))")
-            println("  Expected intensity bytes: $(int_info.array_length * sizeof(default_intensity_format))")
-        end
-
-        # Create SpectrumAsset objects
-        mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, mz_info.offset, 
-                                mz_is_compressed ? mz_info.encoded_length : mz_info.array_length, :mz)
-        int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, int_info.offset,
-                                 int_is_compressed ? int_info.encoded_length : int_info.array_length, :intensity)
         
         spectra_metadata[k] = SpectrumMetadata(x, y, "", spectrum_mode, mz_asset, int_asset)
     end
@@ -514,7 +566,6 @@ function parse_neofx(stream::IO, hIbd::IO, param_groups::Dict{String, SpecDim},
                               width::Int32, height::Int32, num_spectra::Int32,
                               default_mz_format::DataType, default_intensity_format::DataType, 
                               mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
-    # New parser for compressed data
     spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
 
     array_data_type = @NamedTuple{is_mz::Bool, array_length::Int32, encoded_length::Int64, offset::Int64}
@@ -607,29 +658,35 @@ function parse_neofx(stream::IO, hIbd::IO, param_groups::Dict{String, SpecDim},
         mz_data = filter(d -> d.is_mz, array_data)
         int_data = filter(d -> !d.is_mz, array_data)
         
+        # FIX: Handle empty spectra gracefully instead of throwing errors
+        current_ibd_pos = position(hIbd)
+        
         if length(mz_data) != 1 || length(int_data) != 1
-            error("Spectrum $k: Expected exactly one m/z and one intensity array")
+            # Create placeholder metadata for empty/invalid spectrum
+            println("DEBUG: Spectrum $k is empty or invalid - creating placeholder metadata")
+            mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, current_ibd_pos, 0, :mz)
+            int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, current_ibd_pos, 0, :intensity)
+        else
+            mz_info = mz_data[1]
+            int_info = int_data[1]
+
+            # DEBUG: Print first spectrum details
+            if k == 1
+                println("DEBUG First spectrum parsed:")
+                println("  Coordinates: x=$x, y=$y")
+                println("  Mode: $spectrum_mode")
+                println("  m/z array: array_length=$(mz_info.array_length), encoded_length=$(mz_info.encoded_length), offset=$(mz_info.offset)")
+                println("  intensity array: array_length=$(int_info.array_length), encoded_length=$(int_info.encoded_length), offset=$(int_info.offset)")
+                println("  Expected m/z bytes: $(mz_info.array_length * sizeof(default_mz_format))")
+                println("  Expected intensity bytes: $(int_info.array_length * sizeof(default_intensity_format))")
+            end
+
+            # Create SpectrumAsset objects
+            mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, mz_info.offset, 
+                                    mz_is_compressed ? mz_info.encoded_length : mz_info.array_length, :mz)
+            int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, int_info.offset,
+                                     int_is_compressed ? int_info.encoded_length : int_info.array_length, :intensity)
         end
-
-        mz_info = mz_data[1]
-        int_info = int_data[1]
-
-        # DEBUG: Print first spectrum details
-        if k == 1
-            println("DEBUG First spectrum parsed:")
-            println("  Coordinates: x=$x, y=$y")
-            println("  Mode: $spectrum_mode")
-            println("  m/z array: array_length=$(mz_info.array_length), encoded_length=$(mz_info.encoded_length), offset=$(mz_info.offset)")
-            println("  intensity array: array_length=$(int_info.array_length), encoded_length=$(int_info.encoded_length), offset=$(int_info.offset)")
-            println("  Expected m/z bytes: $(mz_info.array_length * sizeof(default_mz_format))")
-            println("  Expected intensity bytes: $(int_info.array_length * sizeof(default_intensity_format))")
-        end
-
-        # Create SpectrumAsset objects
-        mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, mz_info.offset, 
-                                mz_is_compressed ? mz_info.encoded_length : mz_info.array_length, :mz)
-        int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, int_info.offset,
-                                 int_is_compressed ? int_info.encoded_length : int_info.array_length, :intensity)
         
         spectra_metadata[k] = SpectrumMetadata(x, y, "", spectrum_mode, mz_asset, int_asset)
     end
@@ -656,6 +713,11 @@ This optimized version uses binary search for efficiency.
 """
 function find_mass(mz_array::AbstractVector{<:Real}, intensity_array::AbstractVector{<:Real}, 
                    target_mass::Real, tolerance::Real)
+    # Fast-path rejection: if the array is empty or the target is out of range
+    if isempty(mz_array) || target_mass + tolerance < first(mz_array) || target_mass - tolerance > last(mz_array)
+        return 0.0
+    end
+
     lower_bound = target_mass - tolerance
     upper_bound = target_mass + tolerance
 
@@ -811,9 +873,12 @@ This is a highly performant function that iterates through the full dataset only
 function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, tolerance::Real; mask_path::Union{String, Nothing}=nothing)
     width, height = data.image_dims
     
+    # Sort masses to improve cache locality during search
+    sorted_masses = sort(masses)
+
     # 1. Initialize a dictionary to hold the output slice matrices
     slice_dict = Dict{Real, Matrix{Float64}}()
-    for mass in masses
+    for mass in sorted_masses
         slice_dict[mass] = zeros(Float64, height, width)
     end
 
@@ -836,7 +901,7 @@ function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, t
     indices_to_check = masked_indices === nothing ? (1:length(data.spectra_metadata)) : masked_indices
 
     # 3. Find all spectra that could contain *any* of the requested masses.
-    for mass in masses
+    for mass in sorted_masses
         target_min = mass - tolerance
         target_max = mass + tolerance
         for i in indices_to_check
@@ -858,7 +923,7 @@ function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, t
     _iterate_spectra_fast(data, collect(candidate_indices)) do idx, mz_array, intensity_array
         meta = data.spectra_metadata[idx]
         # For this single spectrum, check all masses of interest
-        for mass in masses
+        for mass in sorted_masses
             # Check if this spectrum's range actually covers the current mass
             # This is a finer-grained check than the initial filtering
             if !isempty(mz_array) && (mass + tolerance) >= first(mz_array) && (mass - tolerance) <= last(mz_array)
@@ -873,7 +938,7 @@ function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, t
     end
     
     # 5. Clean up and return
-    for mass in masses
+    for mass in sorted_masses
         replace!(slice_dict[mass], NaN => 0.0)
     end
     
@@ -1066,24 +1131,21 @@ within these bounds.
 function TrIQ(pixMap::AbstractMatrix{<:Real}, depth::Integer, prob::Real=0.98; mask_matrix::Union{BitMatrix, Nothing}=nothing)
     local values_for_thres
     if mask_matrix !== nothing
-        # Extract values only from the masked region for threshold calculation
         values_for_thres = pixMap[mask_matrix]
-        # Filter out only zeros created by the mask.
         filter!(x -> x != 0, values_for_thres)
     else
         values_for_thres = pixMap
     end
 
-    # If the relevant values are empty or all zero, return a zero matrix
     if isempty(values_for_thres) || all(iszero, values_for_thres)
         bounds = (0.0, 0.0)
+        quantized = zeros(UInt8, size(pixMap))
     else
-        # Compute new dynamic range from the (potentially filtered) values
         bounds = get_outlier_thres(values_for_thres, prob)
+        quantized = set_pixel_depth(pixMap, bounds, depth)
     end
     
-    # Set intensity dynamic range for the *entire* pixMap, using bounds derived from masked data
-    return set_pixel_depth(pixMap, bounds, depth)
+    return quantized, bounds  # Return both!
 end
 
 """
@@ -1134,22 +1196,18 @@ function quantize_intensity(slice::AbstractMatrix{<:Real}, levels::Integer=256; 
     end
 
     if max_val <= 0
-        return zeros(UInt8, size(slice))
+        bounds = (0.0, 0.0)
+        quantized = zeros(UInt8, size(slice))
+    else
+        bounds = (0.0, max_val)
+        quantized = similar(slice, UInt8)
+        scale = (levels - 1) / max_val
+        @inbounds for i in eachindex(slice)
+            quantized[i] = round(UInt8, clamp(slice[i] * scale, 0, levels - 1))
+        end
     end
     
-    # Scale relative to the absolute maximum value to preserve the zero point.
-    # The original logic used 'colorLevel' which was the max value (e.g., 255).
-    scale = (levels - 1) / max_val
-    
-    # Pre-allocate result for better performance
-    result = similar(slice, UInt8)
-    
-    # Use inbounds for faster access
-    @inbounds for i in eachindex(slice)
-        result[i] = round(UInt8, clamp(slice[i] * scale, 0, levels - 1))
-    end
-    
-    return result
+    return quantized, bounds  # Return both!
 end
 
 """
@@ -1523,28 +1581,25 @@ end
 # Viridis color palette (256 colors) - defined as constant
 const ViridisPalette = generate_palette(ColorSchemes.viridis)
 
-function generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String; use_triq::Bool=false, triq_prob::Float64=0.98, mask_path::Union{String, Nothing}=nothing)
-    # 1. Determine bounds based on whether TrIQ is used and if a mask is applied
-    local data_for_bounds
-    if mask_path !== nothing
-        height, width = size(slice_data)
-        mask_matrix = load_and_prepare_mask(mask_path, (width, height))
-        # Extract only the non-zero values within the mask to accurately calculate the range
-        data_for_bounds = slice_data[mask_matrix]
-        filter!(x -> x > 0, data_for_bounds)
-    else
-        data_for_bounds = vec(slice_data)
-    end
-
-    # Handle cases where data_for_bounds might be empty after filtering
-    if isempty(data_for_bounds)
-        min_val, max_val = 0.0, 1.0 # Default range if no data in ROI
-    else
-        min_val, max_val = if use_triq
-            get_outlier_thres(data_for_bounds, triq_prob)
+function generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String, 
+                               bounds::Tuple{Float64, Float64}; 
+                               use_triq::Bool=false, triq_prob::Float64=0.98, 
+                               mask_path::Union{String, Nothing}=nothing)
+    # Use the provided bounds instead of recalculating
+    min_val, max_val = bounds
+    
+    # If bounds are invalid, calculate fallback
+    if min_val == max_val == 0.0
+        local data_for_bounds
+        if mask_path !== nothing
+            height, width = size(slice_data)
+            mask_matrix = load_and_prepare_mask(mask_path, (width, height))
+            data_for_bounds = slice_data[mask_matrix]
+            filter!(x -> x > 0, data_for_bounds)
         else
-            extrema(data_for_bounds)
+            data_for_bounds = vec(slice_data)
         end
+        min_val, max_val = isempty(data_for_bounds) ? (0.0, 1.0) : extrema(data_for_bounds)
     end
 
     # 2. Replicate the tick calculation logic from plot_slices

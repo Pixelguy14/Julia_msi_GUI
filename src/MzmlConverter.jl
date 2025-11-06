@@ -5,7 +5,7 @@ into a proper .imzML/.ibd file pair, using a separate synchronization file.
 It replicates the functionality of the original R scripts that use MALDIquant.
 """
 
-using DataFrames, Printf, CSV
+using DataFrames, Printf, CSV, UUIDs, ProgressMeter
 
 # This file assumes that the main application file (e.g., app.jl) has already included
 # the necessary source files: MSIData.jl, mzML.jl, imzML.jl
@@ -396,6 +396,7 @@ This function handles three cases:
 - A tuple `(mz_array, intensity_array)` for the rendered pixel spectrum.
 """
 function RenderPixel(
+    intensity_buffer::Vector{Float32},
     pixel_info::AbstractVector{Int64}, 
     scans::AbstractMatrix{Int64}, 
     msi_data::MSIData, 
@@ -408,19 +409,32 @@ function RenderPixel(
     num_actions = last_scan - first_scan
 
     # Get reference m/z array from the first scan involved.
-    # This call remains type-unstable, but its impact is now isolated and only paid once.
     mz_array, _ = GetSpectrum(msi_data, first_scan)
     
     # If the first spectrum was empty, we can't do anything else.
     if isempty(mz_array)
-        return (mz_array, Float32[])
+        return (mz_array, view(intensity_buffer, 0:-1), UNKNOWN)
     end
     
-    new_intensity = zeros(Float32, length(mz_array))
+    # Determine the mode for the output spectrum. If any contributing scan is profile, the result is profile.
+    final_mode = CENTROID
+    for i in first_scan:last_scan
+        if msi_data.spectra_metadata[i].mode == PROFILE
+            final_mode = PROFILE
+            break
+        end
+    end
+
+    # Use the provided buffer instead of allocating a new one.
+    if length(intensity_buffer) < length(mz_array)
+        error("Provided intensity buffer is too small for spectrum of length $(length(mz_array))")
+    end
+    new_intensity = view(intensity_buffer, 1:length(mz_array))
+    fill!(new_intensity, 0.0f0)
 
     # SAFETY: Ensure we have valid scan indices
     if first_scan < 1 || last_scan > size(scans, 1) || first_scan > last_scan
-        return (mz_array, new_intensity)  # Return zero intensity for invalid ranges
+        return (mz_array, new_intensity, final_mode)  # Return zero intensity for invalid ranges
     end
 
     if num_actions == 0 # Single scan contributes to the pixel
@@ -469,7 +483,7 @@ function RenderPixel(
     # FINAL SAFETY: Clamp any negative values to zero
     new_intensity = max.(new_intensity, 0.0f0)
     
-    return (mz_array, new_intensity)
+    return (mz_array, new_intensity, final_mode)
 end
 
 """
@@ -498,84 +512,96 @@ function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing
         open(target_ibd_file, "w") do ibd_stream
             write(ibd_stream, zeros(UInt8, 16)) # UUID placeholder
         end
-        return BinaryMetadata[], Tuple{Int, Int}[], (0, 0), UNKNOWN
+        return BinaryMetadata[], Tuple{Int, Int}[], (0, 0), SpectrumMode[], uuid4()
     end
     
     width = maximum(timing_matrix[:, 1])
     height = maximum(timing_matrix[:, 2])
-
+    
     msi_data = OpenMSIData(source_file)
+    
+    local binary_meta_vec, coords_vec, pixel_modes, ibd_uuid
+    
+    try
+        precompute_analytics(msi_data)
+        max_points = isempty(msi_data.spectrum_stats_df.NumPoints) ? 0 : maximum(msi_data.spectrum_stats_df.NumPoints)
+        intensity_buffer = zeros(Float32, max_points)
 
-    source_mode = UNKNOWN
-    if !isempty(msi_data.spectra_metadata)
-        source_mode = msi_data.spectra_metadata[1].mode
-    end
-
-    scan_time_deltas = zeros(Int64, size(scans, 1))
-    if size(scans, 1) > 1
-        for i in 1:(size(scans, 1) - 1)
-            delta = scans[i+1, 2] - scans[i, 2]
-            scan_time_deltas[i] = max(1, delta)
-        end
-        scan_time_deltas[end] = max(1, scan_time_deltas[end-1])
-    end
-
-    pixel_time_deltas = zeros(Int64, size(timing_matrix, 1))
-    if size(timing_matrix, 1) > 1
-        for i in 1:(size(timing_matrix, 1) - 1)
-            delta = timing_matrix[i+1, 3] - timing_matrix[i, 3]
-            pixel_time_deltas[i] = max(1, delta)
-        end
-        pixel_time_deltas[end] = max(1, pixel_time_deltas[end-1])
-    end
-
-    binary_meta_vec = BinaryMetadata[]
-    sizehint!(binary_meta_vec, size(timing_matrix, 1))
-    coords_vec = Tuple{Int, Int}[]
-    sizehint!(coords_vec, size(timing_matrix, 1))
-    empty_pixel_count = 0
-
-    open(target_ibd_file, "w") do ibd_stream
-        write(ibd_stream, zeros(UInt8, 16)) # UUID placeholder
-
-        for i in 1:size(timing_matrix, 1)
-            pixel_info = timing_matrix[i, :]
-            x, y = pixel_info[1], pixel_info[2]
-            push!(coords_vec, (x, y))
-
-            first_scan = pixel_info[4]
-            last_scan = pixel_info[5]
-
-            if first_scan > last_scan || first_scan < 1 || last_scan > size(scans, 1)
-                empty_pixel_count += 1
-                # For empty pixels, offsets point to the current end of file, with zero length
-                current_pos = position(ibd_stream)
-                push!(binary_meta_vec, BinaryMetadata(current_pos, 0, current_pos, 0))
-                continue
+        scan_time_deltas = zeros(Int64, size(scans, 1))
+        if size(scans, 1) > 1
+            for i in 1:(size(scans, 1) - 1)
+                delta = scans[i+1, 2] - scans[i, 2]
+                scan_time_deltas[i] = max(1, delta)
             end
-
-            mz, intensity = RenderPixel(pixel_info, scans, msi_data, scan_time_deltas, pixel_time_deltas)
-            
-            # Write m/z array
-            mz_offset = position(ibd_stream)
-            for val in mz
-                write(ibd_stream, htol(Float32(val)))
-            end
-            mz_length = position(ibd_stream) - mz_offset
-
-            # Write intensity array
-            int_offset = position(ibd_stream)
-            for val in intensity
-                write(ibd_stream, htol(Float32(val)))
-            end
-            int_length = position(ibd_stream) - int_offset
-            
-            push!(binary_meta_vec, BinaryMetadata(mz_offset, mz_length, int_offset, int_length))
+            scan_time_deltas[end] = max(1, scan_time_deltas[end-1])
         end
-    end
 
-    @info "Found and processed $empty_pixel_count empty pixels out of $(size(timing_matrix, 1)) total."
-    return binary_meta_vec, coords_vec, (width, height), source_mode
+        pixel_time_deltas = zeros(Int64, size(timing_matrix, 1))
+        if size(timing_matrix, 1) > 1
+            for i in 1:(size(timing_matrix, 1) - 1)
+                delta = timing_matrix[i+1, 3] - timing_matrix[i, 3]
+                pixel_time_deltas[i] = max(1, delta)
+            end
+            pixel_time_deltas[end] = max(1, pixel_time_deltas[end-1])
+        end
+
+        binary_meta_vec = BinaryMetadata[]
+        sizehint!(binary_meta_vec, size(timing_matrix, 1))
+        coords_vec = Tuple{Int, Int}[]
+        sizehint!(coords_vec, size(timing_matrix, 1))
+        pixel_modes = SpectrumMode[]
+        sizehint!(pixel_modes, size(timing_matrix, 1))
+        empty_pixel_count = 0
+
+        open(target_ibd_file, "w") do ibd_stream
+            # Generate and write a valid UUID
+            ibd_uuid = uuid4()
+            write(ibd_stream, htol(ibd_uuid.value))
+
+            p = Progress(size(timing_matrix, 1), 1, "Converting pixels... ")
+
+            for i in 1:size(timing_matrix, 1)
+                pixel_info = timing_matrix[i, :]
+                x, y = pixel_info[1], pixel_info[2]
+                push!(coords_vec, (x, y))
+
+                first_scan = pixel_info[4]
+                last_scan = pixel_info[5]
+
+                if first_scan > last_scan || first_scan < 1 || last_scan > size(scans, 1)
+                    empty_pixel_count += 1
+                    current_pos = position(ibd_stream)
+                    push!(binary_meta_vec, BinaryMetadata(current_pos, 0, current_pos, 0))
+                    push!(pixel_modes, UNKNOWN) # Mode for empty pixel
+                    next!(p)
+                    continue
+                end
+
+                mz, intensity, pixel_mode = RenderPixel(intensity_buffer, pixel_info, scans, msi_data, scan_time_deltas, pixel_time_deltas)
+                push!(pixel_modes, pixel_mode)
+                
+                # Write m/z array (as Float64)
+                mz_offset = position(ibd_stream)
+                write(ibd_stream, htol.(mz)) # mz is Vector{Float64}
+                mz_length = position(ibd_stream) - mz_offset
+
+                # Write intensity array (as Float32)
+                int_offset = position(ibd_stream)
+                write(ibd_stream, htol.(intensity)) # intensity is Vector{Float32}
+                int_length = position(ibd_stream) - int_offset
+                
+                push!(binary_meta_vec, BinaryMetadata(mz_offset, mz_length, int_offset, int_length))
+                next!(p)
+            end
+        end
+
+        @info "Found and processed $empty_pixel_count empty pixels out of $(size(timing_matrix, 1)) total."
+        
+    finally
+        close(msi_data)
+    end
+    
+    return binary_meta_vec, coords_vec, (width, height), pixel_modes, ibd_uuid
 end
 
 """
@@ -595,7 +621,7 @@ experiment and data format.
 # Returns
 - `true` on success, `false` on failure.
 """
-function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, coords::Vector{Tuple{Int, Int}}, dims::Tuple{Int, Int}, mode::SpectrumMode)
+function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, coords::Vector{Tuple{Int, Int}}, dims::Tuple{Int, Int}, modes::Vector{SpectrumMode}, ibd_uuid::UUID)
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
     
     if isempty(binary_meta)
@@ -625,6 +651,7 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
       <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum"/>
       <cvParam cvRef="IMS" accession="IMS:1000080" name="mass spectrum"/>
       <cvParam cvRef="IMS" accession="IMS:1000031" name="processed"/>
+      <cvParam cvRef="IMS" accession="IMS:1000081" name="ibd uuid" value="$(ibd_uuid)"/>
     </fileContent>
   </fileDescription>
 """)
@@ -632,7 +659,7 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
     <referenceableParamGroup id="mzArray">
       <cvParam cvRef="MS" accession="MS:1000576" name="no compression"/>
       <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>
-      <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float"/>
+      <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float"/>
     </referenceableParamGroup>
     <referenceableParamGroup id="intensityArray">
       <cvParam cvRef="MS" accession="MS:1000576" name="no compression"/>
@@ -659,6 +686,8 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
       <cvParam cvRef="IMS" accession="IMS:1000043" name="max count of pixel y" value="$(dims[2])"/>
       <cvParam cvRef="IMS" accession="IMS:1000046" name="pixel size x" value="1" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
       <cvParam cvRef="IMS" accession="IMS:1000047" name="pixel size y" value="1" unitCvRef="UO" unitAccession="UO:0000017" unitName="micrometer"/>
+      <cvParam cvRef="IMS" accession="IMS:1000092" name="line scan sequence" value="line scan"/>
+      <cvParam cvRef="IMS" accession="IMS:1000093" name="spotsize" value="1"/>
     </scanSettings>
   </scanSettingsList>
 """)
@@ -702,16 +731,16 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
                 push!(spectrum_offsets, spectrum_start)
 
                 # Calculate number of points from byte length
-                mz_points = meta.mz_length ÷ sizeof(Float32)
+                mz_points = meta.mz_length ÷ sizeof(Float64)
                 int_points = meta.int_length ÷ sizeof(Float32)
 
                 write(imzml_stream, """      <spectrum id="Scan=$(i)" defaultArrayLength="$(mz_points)" index="$(i-1)">
         <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="1"/>
 """)
-                if mode == CENTROID
+                if modes[i] == CENTROID
                     write(imzml_stream, """        <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum"/>
 """)
-                else
+                elseif modes[i] == PROFILE
                     write(imzml_stream, """        <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum"/>
 """)
                 end
@@ -771,6 +800,10 @@ Main workflow function to convert a .mzML file to an .imzML file.
 * `img_height`: height dimention for the creation of the y axis
 """
 function ImportMzmlFile(source_file::String, sync_file::String, target_file::String; img_width::Int=0, img_height::Int=0)
+    if !isfile(source_file)
+        throw(ArgumentError("Source mzML file not found: $source_file"))
+    end
+
     println("Step 1: Getting scan times from .mzML file...")
     scans = GetMzmlScanTime(source_file)
 
@@ -779,13 +812,13 @@ function ImportMzmlFile(source_file::String, sync_file::String, target_file::Str
 
     println("Step 3: Converting spectra and writing .ibd file...")
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
-    binary_meta, coords, (width, height), source_mode = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans)
+    binary_meta, coords, (width, height), pixel_modes, ibd_uuid = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans)
 
     # Flip image vertically to match R script output
     flipped_coords = [(x, height - y + 1) for (x, y) in coords]
 
     println("Step 4: Exporting .imzML metadata file...")
-    success = ExportImzml(target_file, binary_meta, flipped_coords, (width, height), source_mode)
+    success = ExportImzml(target_file, binary_meta, flipped_coords, (width, height), pixel_modes, ibd_uuid)
 
     if success
         println("Conversion successful: $target_file")

@@ -36,10 +36,13 @@ determine the data type, compression, and axis type.
 function get_spectrum_asset_metadata(stream::IO)
     start_pos = position(stream)
     
-    bda_tag = find_tag(stream, r"<binaryDataArray\s+encodedLength=\"(\d+)\"" )
-    if bda_tag === nothing
-        error("Cannot find binaryDataArray")
-    end
+        bda_tag = find_tag(stream, r"<binaryDataArray\s+encodedLength=\"(\d+)\"")
+    
+        if bda_tag === nothing
+    
+            throw(FileFormatError("Cannot find binaryDataArray"))
+    
+        end
     encoded_length = parse(Int32, bda_tag.captures[1])
 
     # Initialize parameters as separate variables with concrete types
@@ -202,7 +205,7 @@ function find_index_offset(stream::IO)::Int64
     
     index_offset_match = match(r"<indexListOffset>(\d+)</indexListOffset>", footer)
     if index_offset_match === nothing
-        error("Could not find <indexListOffset>. File may not be an indexed mzML.")
+        throw(FileFormatError("Could not find <indexListOffset>. File may not be an indexed mzML."))
     end
     
     return parse(Int64, index_offset_match.captures[1])
@@ -235,14 +238,14 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         
         println("DEBUG: Searching for '<index name=\"spectrum\">'.")
         if find_tag(stream, r"<index\s+name=\"spectrum\"") === nothing
-            error("Could not find spectrum index.")
+            throw(FileFormatError("Could not find spectrum index."))
         end
         println("DEBUG: Found spectrum index tag.")
 
         println("DEBUG: Parsing spectrum offsets...")
         spectrum_offsets = parse_offset_list(stream)
         if isempty(spectrum_offsets)
-            error("No spectrum offsets found.")
+            throw(FileFormatError("No spectrum offsets found."))
         end
         num_spectra = length(spectrum_offsets)
         println("DEBUG: Found $num_spectra spectrum offsets.")

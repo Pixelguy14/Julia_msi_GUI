@@ -40,6 +40,7 @@ export FeatureMatrix,
        get_common_calibration_standards
 
 # Include all source files directly into the main module
+include("Common.jl")
 include("MSIData.jl")
 include("ParserHelpers.jl")
 include("mzML.jl")
