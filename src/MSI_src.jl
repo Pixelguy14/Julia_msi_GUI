@@ -6,18 +6,17 @@ module MSI_src
 export OpenMSIData, 
        GetSpectrum, 
        IterateSpectra, 
-       ImportMzmlFile, 
-       load_slices, 
+       ImportMzmlFile,
        plot_slices, 
        plot_slice, 
        get_total_spectrum, 
-       get_average_spectrum, 
-       LoadMzml, 
+       get_average_spectrum,
        precompute_analytics, 
        process_spectrum,
        generate_colorbar_image,
        process_image_pipeline,
-       load_and_prepare_mask
+       load_and_prepare_mask,
+       set_global_mz_range!
 
 # Export the public Preprocessing API
 export FeatureMatrix,
@@ -40,6 +39,7 @@ export FeatureMatrix,
        get_common_calibration_standards
 
 # Include all source files directly into the main module
+include("BloomFilters.jl")
 include("Common.jl")
 include("MSIData.jl")
 include("ParserHelpers.jl")

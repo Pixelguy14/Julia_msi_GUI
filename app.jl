@@ -19,9 +19,10 @@ using Base.Filesystem: mv # To rename files in the system
 using Printf # Required for @sprintf macro in colorbar generation
 using JSON
 using Dates
+using Base.Threads
 
 # Bring MSIData into App module's scope
-using .MSI_src: MSIData, OpenMSIData, process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile, generate_colorbar_image, load_and_prepare_mask
+using .MSI_src: MSIData, OpenMSIData, process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile, generate_colorbar_image, load_and_prepare_mask, set_global_mz_range!
 
 if !@isdefined(increment_image)
     include("./julia_imzML_visual.jl")
@@ -837,7 +838,7 @@ end
         end
     end
 
-    @onbutton createMeanPlot begin
+    @onbutton createMeanPlot @time begin
         if isempty(selected_folder_main)
             msg = "No dataset selected. Please process a file and select a folder first."
             warning_msg = true
@@ -862,12 +863,18 @@ end
             end
 
             if msi_data === nothing || full_route != target_path
+                if msi_data !== nothing
+                    close(msi_data)
+                end
                 msg = "Reloading $(basename(target_path)) for analysis..."
                 full_route = target_path
                 msi_data = OpenMSIData(target_path)
                 if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
-                    msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
-                    msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
+                    raw_min = entry["metadata"]["global_min_mz"]
+                    raw_max = entry["metadata"]["global_max_mz"]
+                    min_val = isa(raw_min, Dict) ? get(raw_min, "value", raw_min) : raw_min
+                    max_val = isa(raw_max, Dict) ? get(raw_max, "value", raw_max) : raw_max
+                    set_global_mz_range!(msi_data, convert(Float64, min_val), convert(Float64, max_val))
                 else
                     precompute_analytics(msi_data)
                 end
@@ -904,7 +911,7 @@ end
         end
     end
 
-    @onbutton createSumPlot begin
+    @onbutton createSumPlot @time begin
         if isempty(selected_folder_main)
             msg = "No dataset selected. Please process a file and select a folder first."
             warning_msg = true
@@ -914,32 +921,37 @@ end
         progressSpectraPlot = true
         btnPlotDisable = true
         btnStartDisable = true
-        msg = "Loading total spectrum plot for $(selected_folder_main)..."
-
-        try
-            sTime = time()
-            registry = load_registry(registry_path)
-            entry = registry[selected_folder_main]
-            target_path = entry["source_path"]
-
-            if target_path == "unknown (manually added)"
-                msg = "Dataset selected contained no route."
-                warning_msg = true
-                return
-            end
-
-            if msi_data === nothing || full_route != target_path
-                msg = "Reloading $(basename(target_path)) for analysis..."
-                full_route = target_path
-                msi_data = OpenMSIData(target_path)
-                if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
-                    msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
-                    msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
-                else
-                    precompute_analytics(msi_data)
-                end
-            end
-
+                    msg = "Loading total spectrum plot for $(selected_folder_main)..."
+        
+                    try
+                        sTime = time()
+                        registry = load_registry(registry_path)
+                        entry = registry[selected_folder_main]
+                        target_path = entry["source_path"]
+        
+                        if target_path == "unknown (manually added)"
+                            msg = "Dataset selected contained no route."
+                            warning_msg = true
+                            return
+                        end
+        
+                        if msi_data === nothing || full_route != target_path
+                            if msi_data !== nothing
+                                close(msi_data)
+                            end
+                            msg = "Reloading $(basename(target_path)) for analysis..."
+                            full_route = target_path
+                            msi_data = OpenMSIData(target_path)
+                            if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
+                                raw_min = entry["metadata"]["global_min_mz"]
+                                raw_max = entry["metadata"]["global_max_mz"]
+                                min_val = isa(raw_min, Dict) ? get(raw_min, "value", raw_min) : raw_min
+                                max_val = isa(raw_max, Dict) ? get(raw_max, "value", raw_max) : raw_max
+                                set_global_mz_range!(msi_data, convert(Float64, min_val), convert(Float64, max_val))
+                            else
+                                precompute_analytics(msi_data)
+                            end
+                        end
             local mask_path_for_plot::Union{String, Nothing} = nothing
             if maskEnabled && get(entry, "has_mask", false)
                 mask_path_for_plot = get(entry, "mask_path", "")
@@ -971,7 +983,7 @@ end
         end
     end
 
-    @onbutton createXYPlot begin
+    @onbutton createXYPlot @time begin
         if isempty(selected_folder_main)
             msg = "No dataset selected. Please process a file and select a folder first."
             warning_msg = true
@@ -1005,12 +1017,18 @@ end
             end
 
             if msi_data === nothing || full_route != target_path
+                if msi_data !== nothing
+                    close(msi_data)
+                end
                 msg = "Reloading $(basename(target_path)) for analysis..."
                 full_route = target_path
                 msi_data = OpenMSIData(target_path)
                 if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
-                    msi_data.global_min_mz = entry["metadata"]["global_min_mz"]
-                    msi_data.global_max_mz = entry["metadata"]["global_max_mz"]
+                    raw_min = entry["metadata"]["global_min_mz"]
+                    raw_max = entry["metadata"]["global_max_mz"]
+                    min_val = isa(raw_min, Dict) ? get(raw_min, "value", raw_min) : raw_min
+                    max_val = isa(raw_max, Dict) ? get(raw_max, "value", raw_max) : raw_max
+                    set_global_mz_range!(msi_data, convert(Float64, min_val), convert(Float64, max_val))
                 else
                     precompute_analytics(msi_data)
                 end
@@ -1351,6 +1369,9 @@ end
 
     # This handler will now correctly load the first image from the newly selected folder.
     @onchange selected_folder_main begin
+        if msi_data !== nothing
+            close(msi_data)
+        end
         msi_data = nothing
         log_memory_usage("Folder Changed (msi_data cleared)", msi_data)
         GC.gc()
@@ -1900,7 +1921,7 @@ end
 
     @mounted watchplots()
 
-    @onchange isready begin
+    @onchange isready @time begin
         if isready && !registry_init_done
             warmup_init()
             try

@@ -228,22 +228,22 @@ then parses the metadata for each spectrum without loading the binary data.
 """
 function load_mzml_lazy(file_path::String; cache_size::Int=100)
     println("DEBUG: Opening file stream for $file_path")
-    stream = open(file_path, "r")
+    ts_stream = ThreadSafeFileHandle(file_path, "r")
 
     try
         println("DEBUG: Finding index offset...")
-        index_offset = find_index_offset(stream)
+        index_offset = find_index_offset(ts_stream.handle)
         println("DEBUG: Seeking to index list at offset $index_offset.")
-        seek(stream, index_offset)
+        seek(ts_stream.handle, index_offset)
         
         println("DEBUG: Searching for '<index name=\"spectrum\">'.")
-        if find_tag(stream, r"<index\s+name=\"spectrum\"") === nothing
+        if find_tag(ts_stream.handle, r"<index\s+name=\"spectrum\"") === nothing
             throw(FileFormatError("Could not find spectrum index."))
         end
         println("DEBUG: Found spectrum index tag.")
 
         println("DEBUG: Parsing spectrum offsets...")
-        spectrum_offsets = parse_offset_list(stream)
+        spectrum_offsets = parse_offset_list(ts_stream.handle)
         if isempty(spectrum_offsets)
             throw(FileFormatError("No spectrum offsets found."))
         end
@@ -256,7 +256,7 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         
         # Use @inbounds for faster indexing in the loop
         @inbounds for i in 1:num_spectra
-            spectra_metadata[i] = parse_spectrum_metadata(stream, spectrum_offsets[i])
+            spectra_metadata[i] = parse_spectrum_metadata(ts_stream.handle, spectrum_offsets[i])
             
             # Progress reporting for large files
             if i % 1000 == 0
@@ -270,16 +270,17 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         mz_format = first_meta.mz_asset.format
         intensity_format = first_meta.int_asset.format
         
-        source = MzMLSource(stream, mz_format, intensity_format)
+        source = MzMLSource(ts_stream, mz_format, intensity_format)
         println("DEBUG: Creating MSIData object.")
         return MSIData(source, spectra_metadata, (0, 0), nothing, cache_size)
 
     catch e
-        close(stream) # Ensure stream is closed on error
+        close(ts_stream) # Ensure stream is closed on error
         rethrow(e)
     end
 end
 
+#=
 """
     LoadMzml(fileName::String)
 
@@ -320,7 +321,9 @@ function LoadMzml(fileName::String)
     
     return result_matrix
 end
+=#
 
+#=
 """
     load_mzml_batch(file_path::String, spectrum_indices::AbstractVector{Int})
 
@@ -348,7 +351,9 @@ function load_mzml_batch(file_path::String, spectrum_indices::AbstractVector{Int
     
     return results
 end
+=#
 
+#=
 """
     get_mzml_summary(file_path::String)::NamedTuple
 
@@ -358,21 +363,21 @@ Quickly extracts summary information from an mzML file without loading all metad
 - Named tuple with: num_spectra, mz_range, intensity_range, data_formats
 """
 function get_mzml_summary(file_path::String)::NamedTuple
-    stream = open(file_path, "r")
+    ts_stream = ThreadSafeFileHandle(file_path, "r")
     try
-        index_offset = find_index_offset(stream)
-        seek(stream, index_offset)
+        index_offset = find_index_offset(ts_stream.handle)
+        seek(ts_stream.handle, index_offset)
         
-        if find_tag(stream, r"<index\s+name=\"spectrum\"") === nothing
-            error("Could not find spectrum index.")
+        if find_tag(ts_stream.handle, r"<index\s+name=\"spectrum\"") === nothing
+            throw(FileFormatError("Could not find spectrum index."))
         end
         
-        spectrum_offsets = parse_offset_list(stream)
+        spectrum_offsets = parse_offset_list(ts_stream.handle)
         num_spectra = length(spectrum_offsets)
         
         # Sample first few spectra to determine formats and ranges
         sample_size = min(10, num_spectra)
-        sample_metadata = [parse_spectrum_metadata(stream, spectrum_offsets[i]) for i in 1:sample_size]
+        sample_metadata = [parse_spectrum_metadata(ts_stream.handle, spectrum_offsets[i]) for i in 1:sample_size]
         
         # Extract formats from sample
         mz_format = sample_metadata[1].mz_asset.format
@@ -383,10 +388,12 @@ function get_mzml_summary(file_path::String)::NamedTuple
                 intensity_format=intensity_format,
                 sample_spectra=sample_size)
     finally
-        close(stream)
+        close(ts_stream)
     end
 end
+=#
 
+#=
 # Performance optimization: Cache frequently used regex patterns
 const PRE_COMPILED_REGEX = (
     encoded_length = r"<binaryDataArray\s+encodedLength=\"(\d+)\"",
@@ -395,3 +402,4 @@ const PRE_COMPILED_REGEX = (
     index_list = r"<index\s+name=\"spectrum\"",
     index_offset = r"<indexListOffset>(\d+)</indexListOffset>"
 )
+=#

@@ -4,6 +4,7 @@ Pkg.activate(".")
 # Only instantiate in development mode
 if get(ENV, "GENIE_ENV", "dev") != "prod"
     @info "Development environment detected. Instantiating packages..."
+    Pkg.resolve()
     Pkg.instantiate()
 end
 Pkg.gc()
