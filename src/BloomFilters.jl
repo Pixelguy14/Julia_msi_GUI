@@ -37,9 +37,20 @@ mutable struct StreamingBloomFilter
 end
 
 """
-    BloomFilter(expected_elements::Int, false_positive_rate::Float64=0.01; seed::UInt64=0x12345678)
+    BloomFilter{T}(expected_elements::Int, false_positive_rate::Float64=0.01; kwargs...) -> Return type
 
 Creates a Bloom filter optimized for the expected number of elements and desired false positive rate.
+
+# Arguments
+
+- `expected_elements::Int`: Argument description
+- `false_positive_rate::Float64`: Argument description
+    (**Default**: `0.01`)
+
+# Keywords
+
+- `seed::Union{UInt32,UInt64}`: Keyword description
+    (**Default**: `0x12345678`)
 """
 function BloomFilter{T}(expected_elements::Int, false_positive_rate::Float64=0.01; seed::Union{UInt32,UInt64}=0x12345678) where T
     # Convert seed to UInt64 for consistency
@@ -56,9 +67,12 @@ end
 """
     optimal_bit_size(n::Int, p::Float64) -> Int
 
-Calculates the optimal number of bits for a Bloom filter given:
-- n: expected number of elements
-- p: desired false positive rate
+Calculates the optimal number of bits for a Bloom filter
+
+# Arguments
+
+- `n::Int`: Expected number of elements
+- `p::Float64`: Desired false positive rate
 """
 function optimal_bit_size(n::Int, p::Float64)::Int
     if p <= 0.0 || p >= 1.0
@@ -73,6 +87,11 @@ end
     optimal_hash_count(n::Int, m::Int) -> Int
 
 Calculates the optimal number of hash functions for a Bloom filter.
+    
+# Arguments
+
+- `n::Int`: Expected number of elements
+- `p::Float64`: Desired false positive rate
 """
 function optimal_hash_count(n::Int, m::Int)::Int
     if n <= 0 || m <= 0
@@ -109,6 +128,11 @@ end
     Base.push!(bf::BloomFilter{T}, item::T)
 
 Adds an element to the Bloom filter.
+
+# Arguments
+
+- `bf::BloomFilter{T}`: Argument description
+- `item::T`: Argument description
 """
 function Base.push!(bf::BloomFilter{T}, item::T) where T
     hashes = hash_functions(item, bf.hash_count, bf.size, bf.seed)
@@ -169,27 +193,39 @@ function false_positive_rate(bf::BloomFilter)::Float64
 end
 
 """
-    fill_ratio(bf::BloomFilter) -> Float64
+    fill_ratio(bf::BloomFilter)::Float64 return count(bf.bits) / length(bf.bits) end -> Return type
 
 Returns the fraction of bits that are set to 1.
+
+# Arguments
+
+- `bf::BloomFilter`: Argument description
 """
 function fill_ratio(bf::BloomFilter)::Float64
     return count(bf.bits) / length(bf.bits)
 end
 
 """
-    is_empty(bf::BloomFilter) -> Bool
+    is_empty(bf::BloomFilter)::Bool return bf.count == 0 end -> Return type
 
 Checks if the Bloom filter is empty (no elements added).
+
+# Arguments
+
+- `bf::BloomFilter`: Argument description
 """
 function is_empty(bf::BloomFilter)::Bool
     return bf.count == 0
 end
 
 """
-    reset!(bf::BloomFilter)
+    reset!(bf::BloomFilter) fill!(bf.bits, false) bf.count = 0 return bf end -> Return type
 
 Clears the Bloom filter, removing all elements.
+
+# Arguments
+
+- `bf::BloomFilter`: Argument description
 """
 function reset!(bf::BloomFilter)
     fill!(bf.bits, false)
@@ -198,6 +234,20 @@ function reset!(bf::BloomFilter)
 end
 
 # Specialized constructor for empty Bloom filters
+"""
+    BloomFilter{T}(; kwargs...) -> Return type
+
+Description of the function
+
+# Keywords
+
+- `size::Int`: Keyword description
+    (**Default**: `100`)
+- `hash_count::Int`: Keyword description
+    (**Default**: `3`)
+- `seed::Union{UInt32,UInt64}`: Keyword description
+    (**Default**: `0x12345678`)
+"""
 function BloomFilter{T}(;size::Int=100, hash_count::Int=3, seed::Union{UInt32,UInt64}=0x12345678) where T
     seed_uint64 = UInt64(seed)
     bits = falses(size)

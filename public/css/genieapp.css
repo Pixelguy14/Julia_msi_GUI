@@ -45,9 +45,10 @@
     color: #009f90;
 }
 
-#intDivStyle-left {
+#intDivStyle-left, #intDivStyle-right {
     border-radius: 10px;
     padding: 10px;
+    background-color: #fdfdfd; /* Add a background color to distinguish from the outer div */
 }
 
 /* Tab styling to match your theme */
@@ -81,13 +82,13 @@
     font-size: 0.9rem;
 }
 
-#intDivStyle-left .q-tab-panels {
-    height: 700px; /* Set this to accommodate your tallest content */
+#intDivStyle-left .q-tab-panels, #intDivStyle-right .q-tab-panels {
+    /* Removed fixed height */
 }
 
-#intDivStyle-left .q-tab-panel {
-    height: 100%;
-    overflow-y: auto; /* Add scroll if content overflows */
+#intDivStyle-left .q-tab-panel, #intDivStyle-right .q-tab-panel {
+    height: auto; /* Let content define height */
+    overflow-y: hidden; /* Remove scrollbar */
 }
 
 .pixelated-plot svg image {
@@ -98,4 +99,22 @@
 
 *{
     font-family: 'Roboto', 'Lato', sans-serif;
+}
+
+.q-card {
+    border-radius: 8px !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+    margin-bottom: 16px !important;
+}
+
+.q-card__section--dark {
+    background: #f7f7f7 !important;
+}
+
+.q-radio__label {
+    font-size: 1rem !important;
+}
+
+.q-option-group > div {
+    margin-bottom: 8px;
 }

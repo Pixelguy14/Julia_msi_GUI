@@ -666,10 +666,10 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     # Downsample for plotting performance
     mz_down, int_down = MSI_src.downsample_spectrum(mz, intensity)
 
-    trace = if spectrum_mode == MSI_src.PROFILE
-        PlotlyBase.scatter(x=mz_down, y=int_down, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
-    else
+    trace = if spectrum_mode == MSI_src.CENTROID
         PlotlyBase.stem(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    else
+        PlotlyBase.scatter(x=mz_down, y=int_down, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
     end
 
     plotdata = [trace]

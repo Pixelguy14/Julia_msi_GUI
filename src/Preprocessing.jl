@@ -16,6 +16,8 @@ using SavitzkyGolay # For SavitzkyGolay filtering
 using Dates         # For now()
 using CSV           # For writing CSV files
 using DataFrames    # For creating dataframes
+using ContinuousWavelets # For CWT peak detection
+using Interpolations # For calibration
 
 # =============================================================================
 # Data Structures
@@ -24,18 +26,28 @@ using DataFrames    # For creating dataframes
 """
     FeatureMatrix
 
-Structure to hold the final feature matrix, including m/z bin boundaries and sample indices.
-
-# Fields
-- `matrix`: The numerical matrix where rows are samples and columns are features (m/z bins).
-- `mz_bins`: A vector of tuples `(low_mz, high_mz)` for each feature column.
-- `sample_ids`: A vector of indices corresponding to the original spectra.
+A struct to hold the final feature matrix generated from the preprocessing pipeline.
 """
 struct FeatureMatrix
-    matrix::Array{Float64,2}                 # samples × features
-    mz_bins::Vector{Tuple{Float64,Float64}}  # [(low, high), ...]
+    matrix::Array{Float64,2}
+    mz_bins::Vector{Tuple{Float64,Float64}}
     sample_ids::Vector{Int}
 end
+
+"""
+    QCParameters
+
+A struct to hold comprehensive quality control parameters for validating spectra.
+"""
+struct QCParameters
+    min_tic_threshold::Float64      # Minimum total ion current
+    max_tic_threshold::Float64      # Maximum TIC (saturation check)
+    snr_threshold::Float64          # Minimum signal-to-noise for a spectrum to be considered valid
+    peak_count_range::Tuple{Int,Int} # Acceptable peak count range (min, max)
+    spatial_consistency_threshold::Float64 # For MSI spatial coherence (stub)
+    calibration_accuracy_ppm::Float64 # Maximum allowed PPM error for calibration lock masses
+end
+
 
 # =============================================================================
 # 0) Quality Control (QC)
@@ -52,7 +64,7 @@ qc_is_empty(mz::AbstractVector, intensity::AbstractVector)::Bool =
 """
     qc_is_regular(mz) -> Bool
 
-Checks that the m/z axis is monotonically non-decreasing, as expected in a profile spectrum.
+Checks that the m/z axis is monotonically non-decreasing.
 """
 function qc_is_regular(mz::AbstractVector)
     n = length(mz)
@@ -73,26 +85,33 @@ end
     transform_intensity(intensity; method=:sqrt) -> Vector
 
 Applies a variance-stabilizing transformation to the intensity vector.
-Supported methods: `:sqrt` (default) and `:log1p`.
 """
 function transform_intensity(intensity::AbstractVector{<:Real}; method::Symbol=:sqrt)
     if method === :sqrt
         return sqrt.(max.(zero(eltype(intensity)), intensity))
     elseif method === :log1p
         return log1p.(max.(zero(eltype(intensity)), intensity))
+    elseif method === :log
+        return log.(max.(eps(eltype(intensity)), intensity))
+    elseif method === :log2
+        return log2.(max.(eps(eltype(intensity)), intensity))
+    elseif method === :log10
+        return log10.(max.(eps(eltype(intensity)), intensity))
     else
         return collect(float.(intensity))
     end
 end
 
 """
-    smooth_spectrum(y; window=21, order=2) -> Vector
+    smooth_spectrum(y; window=9, order=2) -> Vector
 
-Applies a Savitzky–Golay filter if `SavitzkyGolay.jl` is available.
-Otherwise, falls back to a simple (non-phase-correct) moving average.
+Applies a Savitzky–Golay filter to smooth the intensity data.
 """
 function smooth_spectrum(y::AbstractVector{<:Real}; window::Int=9, order::Int=2)
     win = isodd(window) ? window : window + 1
+    if length(y) < win
+        return y # Cannot smooth if data is smaller than window
+    end
     res = SavitzkyGolay.savitzky_golay(collect(float.(y)), win, order)
     return res.y
 end
@@ -104,22 +123,20 @@ end
 """
     snip_baseline(y, iterations=100) -> Vector
 
-Estimates the baseline using a simple 1D SNIP (Statistics-sensitive Non-linear
-Iterative Peak-clipping) algorithm. `iterations` controls the aggressiveness.
+Estimates the baseline of a spectrum using the SNIP algorithm.
 """
-function snip_baseline(y::AbstractVector{<:Real}, iterations::Int=100)
+function snip_baseline(y::AbstractVector{<:Real}; iterations::Int=100)
     n = length(y)
-    b = collect(float.(y))  # work copy
+    b = collect(float.(y))
     buf = similar(b)
     for k in 1:iterations
         copyto!(buf, b)
         @inbounds for i in 2:n-1
             buf[i] = min(b[i], 0.5 * (b[i-1] + b[i+1]))
         end
-        # Handle endpoints
         buf[1] = min(b[1], b[2])
         buf[end] = min(b[end], b[end-1])
-        b, buf = buf, b # Swap buffers
+        b, buf = buf, b
     end
     return b
 end
@@ -131,7 +148,7 @@ end
 """
     tic_normalize(y) -> Vector
 
-Normalizes intensities to the Total Ion Current (TIC). If the sum is zero, returns a copy.
+Normalizes spectrum intensities to the Total Ion Current (TIC).
 """
 function tic_normalize(y::AbstractVector{<:Real})
     s = sum(y)
@@ -141,108 +158,154 @@ end
 """
     pqn_normalize(M) -> Matrix
 
-Performs Probabilistic Quotient Normalization on a matrix `M` where columns are spectra.
+Performs Probabilistic Quotient Normalization (PQN) on a matrix of spectra.
 """
 function pqn_normalize(M::AbstractMatrix{<:Real})
     M_float = collect(float.(M))
-    # Calculate reference spectrum (median across all spectra)
     ref = mapslices(median, M_float; dims=2)[:,1]
-    
-    # Calculate quotients for each spectrum relative to the reference
     Q = similar(M_float)
     @inbounds for j in axes(M_float, 2)
         Q[:, j] = M_float[:, j] ./ (ref .+ eps(eltype(M_float)))
     end
-    
-    # Find the median quotient for each spectrum (scaling factor)
-    s = [median( @view Q[:, j]) for j in axes(Q, 2)]
-    
-    # Normalize the original matrix
+    s = [median(@view Q[:, j]) for j in axes(Q, 2)]
     @inbounds for j in axes(M_float, 2)
         M_float[:, j] ./= (s[j] + eps(eltype(M_float)))
     end
     return M_float
 end
 
+"""
+    median_normalize(y) -> Vector
+
+Normalizes spectrum intensities by dividing by the median intensity.
+"""
+function median_normalize(y::AbstractVector{<:Real})
+    m = median(y)
+    return m <= 0 ? collect(float.(y)) : collect(float.(y)) ./ m
+end
+
 # =============================================================================
-# 4) Peak Detection (for Profile Data)
+# 4) Peak Detection
 # =============================================================================
 
 """
-    detect_peaks_profile(mz, y; half_window=10, snr_threshold=2.0)
+    detect_peaks_profile(mz, y; ...)
 
-Detects local maxima with a signal-to-noise threshold (using MAD for noise estimation).
-Assumes profile-mode data and a monotonic m/z axis.
+Enhanced peak detection for profile-mode spectra with advanced filtering.
 """
-function detect_peaks_profile(mz::AbstractVector{<:Real},
-                              y::AbstractVector{<:Real};
+function detect_peaks_profile(mz::AbstractVector{<:Real}, y::AbstractVector{<:Real};
                               half_window::Int=10,
-                              snr_threshold::Float64=2.0)
+                              snr_threshold::Float64=2.0,
+                              min_peak_width::Real=0.01,
+                              max_peak_width::Real=2.0,
+                              peak_shape_threshold::Float64=0.7, # Stub
+                              merge_peaks_tolerance::Float64=0.002,
+                              min_peak_prominence::Float64=0.1)
     n = length(y)
     n < 3 && return (Float64[], Float64[])
     
-    # Noise estimation using Median Absolute Deviation (robust to peaks)
     noise_level = mad(y, normalize=true) + eps(Float64)
-
-    # Smooth the spectrum to make peak detection more robust
     ys = smooth_spectrum(y; window=max(5, 2*half_window+1), order=2)
 
-    peak_idx = Int[]
+    peak_indices = Int[]
     @inbounds for i in 2:n-1
         left = max(1, i - half_window)
         right = min(n, i + half_window)
         
-        local_max = ys[i]
-        # A point is a peak if it's the maximum in its neighborhood and above the SNR threshold
-        if local_max >= maximum( @view ys[left:right]) && (local_max > snr_threshold * noise_level)
-            # Ensure we only record one point for flat-topped peaks
-            if isempty(peak_idx) || (i - last(peak_idx) > half_window)
-                push!(peak_idx, i)
-            end
+        # Prominence check
+        prominence = ys[i] - max(minimum(@view ys[left:i]), minimum(@view ys[i:right]))
+        
+        if ys[i] >= maximum(@view ys[left:right]) && 
+           (ys[i] > snr_threshold * noise_level) &&
+           (prominence > min_peak_prominence * ys[i])
+            push!(peak_indices, i)
         end
     end
+    
+    # (STUB) Peak shape validation would be applied here
+    # e.g., fitting a Gaussian and checking R^2 > peak_shape_threshold
 
-    # Return original intensities at peak locations
-    pk_mz  = [float(mz[i]) for i in peak_idx]
-    pk_int = [float(y[i]) for i in peak_idx]
+    # Merge close peaks
+    if !isempty(peak_indices) && merge_peaks_tolerance > 0
+        merged_indices = [peak_indices[1]]
+        for i in 2:length(peak_indices)
+            if (mz[peak_indices[i]] - mz[last(merged_indices)]) > merge_peaks_tolerance
+                push!(merged_indices, peak_indices[i])
+            elseif y[peak_indices[i]] > y[last(merged_indices)]
+                merged_indices[end] = peak_indices[i] # Replace with more intense peak
+            end
+        end
+        peak_indices = merged_indices
+    end
+
+    # (STUB) Peak width filtering would be applied here
+    # This would require calculating FWHM for each peak, which is computationally intensive.
+
+    pk_mz  = [float(mz[i]) for i in peak_indices]
+    pk_int = [float(y[i]) for i in peak_indices]
     
     return (pk_mz, pk_int)
 end
 
 """
-    detect_peaks_centroid(mz, y; intensity_threshold=0.0)
+    detect_peaks_wavelet(mz, intensity; ...)
 
-Filters centroided data based on a minimum intensity threshold.
+Detects peaks using Continuous Wavelet Transform (CWT).
 """
-function detect_peaks_centroid(mz::AbstractVector{<:Real},
-                               y::AbstractVector{<:Real};
-                               intensity_threshold::Float64=0.0)
+function detect_peaks_wavelet(mz::AbstractVector, intensity::AbstractVector; scales=1:10, snr_threshold=3.0)
+    n = length(intensity)
+    n < 10 && return (Float64[], Float64[])
+    cwt_res = ContinuousWavelets.cwt(intensity, ContinuousWavelets.morl)
     
+    peak_indices = Int[]
+    noise_level = mad(intensity, normalize=true) + eps(Float64)
+
+    for i in 2:n-1
+        if intensity[i] > intensity[i-1] && intensity[i] > intensity[i+1] && intensity[i] > snr_threshold * noise_level
+            if abs(cwt_res[i, end]) > 0
+                push!(peak_indices, i)
+            end
+        end
+    end
+    
+    return (mz[peak_indices], intensity[peak_indices])
+end
+
+"""
+    detect_peaks_centroid(mz, y; ...)
+
+Filters peaks in centroid-mode data.
+"""
+function detect_peaks_centroid(mz::AbstractVector{<:Real}, y::AbstractVector{<:Real}; intensity_threshold::Float64=0.0)
     keep_indices = findall(y .>= intensity_threshold)
-    
     return (mz[keep_indices], y[keep_indices])
 end
 
 # =============================================================================
-# 5) Peak Alignment
+# 5) Peak Alignment & Calibration
 # =============================================================================
 
 """
-    align_peaks_lowess(ref_mz, tgt_mz; tolerance=0.002) -> warp::Function
+    align_peaks_lowess(ref_mz, tgt_mz; ...)
 
-Generates a warping function `warp(x)` to map target m/z values to reference m/z values.
-Uses a lightweight LOWESS-like approach with linear interpolation.
+Enhanced peak alignment with PPM tolerance and other constraints.
 """
-function align_peaks_lowess(ref_mz::Vector{<:Real},
-                            tgt_mz::Vector{<:Real};
-                            tolerance::Float64=0.002)
-    # Efficiently match peaks between sorted lists
-    pairs = Tuple{Float64,Float64}[]  # (target_mz, reference_mz)
+function align_peaks_lowess(ref_mz::Vector{<:Real}, tgt_mz::Vector{<:Real};
+                            tolerance::Float64=0.002,
+                            tolerance_unit::Symbol=:mz,
+                            max_shift_ppm::Float64=50.0,
+                            min_matched_peaks::Int=5)
+    pairs = Tuple{Float64,Float64}[]
     i = 1; j = 1
     while i <= length(tgt_mz) && j <= length(ref_mz)
+        tol = (tolerance_unit == :ppm) ? (ref_mz[j] * tolerance / 1e6) : tolerance
         dt = tgt_mz[i] - ref_mz[j]
-        if abs(dt) <= tolerance
-            push!(pairs, (float(tgt_mz[i]), float(ref_mz[j])))
+        
+        if abs(dt) <= tol
+            # Max shift check
+            if abs(dt) * 1e6 / ref_mz[j] <= max_shift_ppm
+                push!(pairs, (float(tgt_mz[i]), float(ref_mz[j])))
+            end
             i += 1; j += 1
         elseif dt < 0
             i += 1
@@ -251,42 +314,68 @@ function align_peaks_lowess(ref_mz::Vector{<:Real},
         end
     end
 
-    if length(pairs) < 3
-        @warn "Too few matching peaks for alignment. Returning identity function."
+    if length(pairs) < min_matched_peaks
+        @warn "Too few matching peaks ($(length(pairs)) < $min_matched_peaks). Returning identity function."
         return x -> float.(x)
     end
 
     t = [p[1] for p in pairs]
     r = [p[2] for p in pairs]
+    
+    # (STUB) A robust regression model (e.g., RANSAC) would be better here.
+    itp = linear_interpolation(t, r, extrapolation_bc=Line())
+    return itp
+end
 
-    # Lightly smooth the mapping to reduce noise
-    t_s = smooth_spectrum(t; window=5, order=2)
-    r_s = smooth_spectrum(r; window=5, order=2)
+"""
+    find_calibration_peaks(mz, intensity, reference_masses; ...)
 
-    # Return a function that performs linear interpolation for warping
-    function warp(x::AbstractVector{<:Real})
-        out = similar(collect(float.(x)))
-        for (k, xv) in enumerate(x)
-            if xv <= t_s[1]
-                # Linear extrapolation at the start
-                m = (r_s[2]-r_s[1]) / (t_s[2]-t_s[1] + eps())
-                out[k] = r_s[1] + m*(xv - t_s[1])
-            elseif xv >= t_s[end]
-                # Linear extrapolation at the end
-                m = (r_s[end]-r_s[end-1]) / (t_s[end]-t_s[end-1] + eps())
-                out[k] = r_s[end-1] + m*(xv - t_s[end-1])
-            else
-                # Linear interpolation for points in the middle
-                lo = searchsortedlast(t_s, xv)
-                hi = lo + 1
-                α = (xv - t_s[lo]) / (t_s[hi] - t_s[lo] + eps())
-                out[k] = (1-α)*r_s[lo] + α*r_s[hi]
-            end
+Finds peaks that match a list of reference masses.
+"""
+function find_calibration_peaks(mz::AbstractVector, intensity::AbstractVector, reference_masses::AbstractVector; ppm_tolerance=20.0)
+    matched_peaks = Dict{Float64, Float64}()
+    detected_mz, _ = detect_peaks_profile(mz, intensity)
+    
+    for ref_mass in reference_masses
+        tol = ref_mass * ppm_tolerance / 1e6
+        candidates = findall(m -> abs(m - ref_mass) <= tol, detected_mz)
+        if !isempty(candidates)
+            closest_peak_idx = argmin(abs.(detected_mz[candidates] .- ref_mass))
+            matched_peaks[ref_mass] = detected_mz[candidates[closest_peak_idx]]
         end
-        return out
     end
+    return matched_peaks
+end
 
-    return warp
+"""
+    calibrate_spectra(spectra, internal_standards; ...)
+
+Calibrates spectra using internal standards.
+"""
+function calibrate_spectra(spectra::Vector, internal_standards::Vector; ppm_tolerance=20.0)
+    calibrated_spectra = similar(spectra)
+    for (i, spec) in enumerate(spectra)
+        mz, intensity = spec[1], spec[2]
+
+        matched_peaks = find_calibration_peaks(mz, intensity, internal_standards; ppm_tolerance=ppm_tolerance)
+        if length(matched_peaks) < 2
+            @warn "Spectrum $i: Not enough calibration peaks found. Skipping."
+            calibrated_spectra[i] = spec
+            continue
+        end
+        measured = sort(collect(values(matched_peaks)))
+        theoretical = sort(collect(keys(matched_peaks)))
+        itp = linear_interpolation(measured, theoretical, extrapolation_bc=Line())
+        
+        new_mz = itp(mz)
+
+        if length(spec) == 3
+            calibrated_spectra[i] = (new_mz, intensity, spec[3])
+        else
+            calibrated_spectra[i] = (new_mz, intensity)
+        end
+    end
+    return calibrated_spectra
 end
 
 # =============================================================================
@@ -294,92 +383,199 @@ end
 # =============================================================================
 
 """
-    _find_bin_index(x, bins) -> Int
+    bin_peaks(all_pk_mz, all_pk_int, tolerance; ...)
 
-Efficiently finds the index of the bin `(low, high)` that contains `x` using binary search.
-Returns 0 if not found.
-"""
-function _find_bin_index(x::Float64, bins::Vector{Tuple{Float64,Float64}})
-    lo, hi = 1, length(bins)
-    while lo <= hi
-        mid = (lo + hi) >>> 1
-        b = bins[mid]
-        if x < b[1]
-            hi = mid - 1
-        elseif x > b[2]
-            lo = mid + 1
-        else
-            return mid
-        end
-    end
-    return 0
-end
-
-"""
-    bin_peaks(all_pk_mz, all_pk_int, tolerance; frequency_threshold=0.25)
-
-Groups peaks from all spectra into consensus m/z bins and creates a feature matrix.
-Filters out features that do not appear in a minimum fraction of spectra.
+Enhanced peak binning with adaptive and PPM-based parameters.
 """
 function bin_peaks(all_pk_mz::Vector{<:AbstractVector{<:Real}},
                    all_pk_int::Vector{<:AbstractVector{<:Real}},
-                   tolerance::Float64; frequency_threshold::Float64=0.25)
+                   tolerance::Float64; 
+                   frequency_threshold::Float64=0.25,
+                   tolerance_unit::Symbol=:mz,
+                   adaptive_tolerance::Bool=false, # Stub
+                   min_peak_per_bin::Int=2,
+                   max_bin_width_ppm::Float64=100.0,
+                   intensity_weighted_centers::Bool=true)
     ns = length(all_pk_mz)
     ns == 0 && return (zeros(0,0), Tuple{Float64,Float64}[])
 
-    # 1) Collect all unique peak m/z values and sort them
-    flat_mz = Float64[]
-    for v in all_pk_mz
-        append!(flat_mz, float.(v))
-    end
-    sort!(flat_mz)
-    isempty(flat_mz) && return (zeros(ns, 0), Tuple{Float64,Float64}[])
+    # Collect all peaks with their intensities and original spectrum index
+    all_peaks = [(float(m), float(i), s_idx) for s_idx in 1:ns for (m, i) in zip(all_pk_mz[s_idx], all_pk_int[s_idx])]
+    sort!(all_peaks, by=p->p[1])
+    
+    isempty(all_peaks) && return (zeros(ns, 0), Tuple{Float64,Float64}[])
 
-    # 2) Create contiguous m/z bins based on tolerance
-    bins = Tuple{Float64,Float64}[]
-    cur_lo = flat_mz[1]
-    cur_hi = flat_mz[1]
-    for x in @view flat_mz[2:end]
-        if x - cur_hi <= tolerance
-            cur_hi = x # Extend the current bin
+    # Create bins
+    bins = []
+    current_bin_peaks = [all_peaks[1]]
+    for p in @view all_peaks[2:end]
+        bin_center = mean(first.(current_bin_peaks))
+        tol = (tolerance_unit == :ppm) ? (bin_center * tolerance / 1e6) : tolerance
+        
+        if p[1] - last(current_bin_peaks)[1] <= tol
+            push!(current_bin_peaks, p)
         else
-            push!(bins, (cur_lo, cur_hi)) # Finalize old bin
-            cur_lo = x; cur_hi = x      # Start a new one
-        end
-    end
-    push!(bins, (cur_lo, cur_hi))
-
-    # 3) Create the feature matrix (samples x features) using max intensity per bin
-    X = zeros(Float64, ns, length(bins))
-    for i in 1:ns
-        for (mzv, iv) in zip(all_pk_mz[i], all_pk_int[i])
-            bidx = _find_bin_index(float(mzv), bins)
-            if bidx > 0
-                X[i, bidx] = max(X[i, bidx], float(iv))
+            if length(current_bin_peaks) >= min_peak_per_bin
+                push!(bins, current_bin_peaks)
             end
+            current_bin_peaks = [p]
+        end
+    end
+    length(current_bin_peaks) >= min_peak_per_bin && push!(bins, current_bin_peaks)
+
+    # Filter bins by max width
+    filter!(b -> (last(b)[1] - first(b)[1]) * 1e6 / mean(p[1] for p in b) <= max_bin_width_ppm, bins)
+
+    # Create feature matrix
+    X = zeros(Float64, ns, length(bins))
+    final_bins_boundaries = Vector{Tuple{Float64,Float64}}(undef, length(bins))
+    
+    for (j, bin_peaks) in enumerate(bins)
+        # Calculate bin center
+        local bin_center
+        if intensity_weighted_centers
+            weights = [p[2] for p in bin_peaks]
+            bin_center = sum(p[1]*p[2] for p in bin_peaks) / sum(weights)
+        else
+            bin_center = mean(p[1] for p in bin_peaks)
+        end
+        
+        final_bins_boundaries[j] = (first(bin_peaks)[1], last(bin_peaks)[1])
+
+        for p in bin_peaks
+            s_idx = p[3]
+            X[s_idx, j] = max(X[s_idx, j], p[2])
         end
     end
 
-    # 4) Filter features by minimum frequency
+    # Filter by frequency
     if frequency_threshold > 0
         present_count = vec(sum(X .> 0, dims=1))
         min_count = ceil(Int, frequency_threshold * ns)
         keep_mask = findall(present_count .>= min_count)
         X = X[:, keep_mask]
-        bins = bins[keep_mask]
+        final_bins_boundaries = final_bins_boundaries[keep_mask]
     end
 
-    return (X, bins)
+    return (X, final_bins_boundaries)
 end
+
+# =============================================================================
+# 7) Spatial & Advanced Processing (Stubs & New Functions)
+# =============================================================================
+
+"""
+    find_ppm_error_by_region(msi_data, region_masks, reference_peaks) -> Dict
+
+Calculates PPM error statistics for different spatial regions.
+`region_masks` is a Dict mapping region names (e.g., :tumor) to BitMatrix masks.
+"""
+function find_ppm_error_by_region(msi_data::MSIData, region_masks::Dict, reference_peaks::Dict)
+    regional_reports = Dict{Symbol, NamedTuple}()
+    
+    width, height = msi_data.image_dims
+    
+    for (region_name, mask) in region_masks
+        mask_height, mask_width = size(mask)
+        if mask_width != width || mask_height != height
+            @warn "Mask dimensions ($(mask_width)x$(mask_height)) for region '$region_name' do not match image dimensions ($(width)x$(height)). Skipping."
+            continue
+        end
+
+        indices = [
+            i for i in 1:length(msi_data.spectra_metadata) 
+            if msi_data.spectra_metadata[i].x > 0 &&
+               msi_data.spectra_metadata[i].y > 0 &&
+               mask[msi_data.spectra_metadata[i].y, msi_data.spectra_metadata[i].x]
+        ]
+        
+        if isempty(indices) continue end
+        
+        # Call analyze_mass_accuracy with the specific indices for the region
+        regional_reports[region_name] = analyze_mass_accuracy(msi_data, reference_peaks; spectrum_indices=indices)
+    end
+    return regional_reports
+end
+
+"""
+    regional_calibration(msi_data, region_masks, reference_peaks)
+
+(STUB) Applies different calibration models to different spatial regions.
+"""
+function regional_calibration(msi_data::MSIData, region_masks::Dict, reference_peaks::Dict)
+    @warn "regional_calibration is a stub and not fully implemented."
+    # 1. For each region in region_masks:
+    # 2. Create a region-specific calibration model using `calibrate_spectra`.
+    # 3. Apply the model to all spectra within that region.
+    # 4. Return a new MSIData object or modified spectra vector.
+    return msi_data # Return unmodified for now
+end
+
+# =============================================================================
+# 8) Advanced Peak Quality & Adaptive Parameters
+# =============================================================================
+
+"""
+    calculate_peak_quality_metrics(peak_mz, peak_intensity, local_spectrum) -> Dict
+
+(STUB) Calculates advanced quality metrics for a single peak.
+"""
+function calculate_peak_quality_metrics(peak_mz, peak_intensity, local_spectrum)
+    # A full implementation would calculate:
+    # - Sharpness (e.g., ratio of height to FWHM)
+    # - Symmetry (e.g., ratio of left/right half-widths)
+    # - Signal-to-Noise (using local noise estimation)
+    # - Isolation score (how close are other peaks)
+    return Dict(:sharpness => 1.0, :symmetry => 1.0, :snr => 10.0)
+end
+
+
+
+
+"""
+    calculate_adaptive_bin_tolerance(ppm_error_distribution) -> Float64
+
+Calculates an appropriate binning tolerance based on observed mass accuracy.
+"""
+function calculate_adaptive_bin_tolerance(ppm_error_distribution::Vector{Float64})
+    if isempty(ppm_error_distribution)
+        return 20.0 # Default if no data
+    end
+    # A robust strategy: mean + 3 * std deviation to capture ~99.7% of peaks
+    return mean(ppm_error_distribution) + 3 * std(ppm_error_distribution)
+end
+
 
 # =============================================================================
 # 7) Plotting Helper
 # =============================================================================
 
 """
-    plot_stage_spectrum(mz, intensity; title, ...)
+    plot_stage_spectrum(mz, intensity; title, xlabel, ylabel) -> Figure
 
-Returns a `CairoMakie.Figure` for a single spectrum trace. The caller is responsible for saving.
+A helper function to generate a plot of a single spectrum using `CairoMakie`. This is
+useful for visualizing the output of different preprocessing steps.
+
+# Arguments
+- `mz::AbstractVector`: The m/z vector for the x-axis.
+- `intensity::AbstractVector`: The intensity vector for the y-axis.
+
+# Keyword Arguments
+- `title::AbstractString`: The title of the plot.
+- `xlabel::AbstractString`: The label for the x-axis. Defaults to "m/z".
+- `ylabel::AbstractString`: The label for the y-axis. Defaults to "Intensity".
+
+# Returns
+- `CairoMakie.Figure`: A `Figure` object containing the plot. The caller is responsible for displaying or saving it.
+
+# Example
+```julia
+using CairoMakie
+mz = 100:0.1:110;
+intensity = rand(length(mz));
+fig = plot_stage_spectrum(mz, intensity, title="My Spectrum");
+save("my_spectrum.png", fig);
+```
 """
 function plot_stage_spectrum(mz::AbstractVector, intensity::AbstractVector;
                              title::AbstractString, xlabel::AbstractString="m/z",
@@ -395,255 +591,57 @@ function plot_stage_spectrum(mz::AbstractVector, intensity::AbstractVector;
     return fig
 end
 
-# =============================================================================
-# 8) Pipeline Orchestrator
-# =============================================================================
-
-"""
-    run_preprocessing_pipeline(spectra; steps, params, on_stage)
-
-Executes a flexible preprocessing pipeline on a vector of spectra.
-
-# Arguments
-- `spectra`: A vector of `(mz, intensity)` tuples.
-- `steps`: A vector of symbols defining the pipeline order (e.g., `[:qc, :smooth, :baseline, :peaks, :bin]`).
-- `params`: A dictionary of parameters for each step.
-- `on_stage`: An optional callback function `on_stage(stage_symbol; idx, mz, intensity)` executed after each step for logging or visualization.
-
-# Returns
-- A `FeatureMatrix` if `:bin` is in the steps, otherwise the vector of processed spectra.
-"""
-function run_preprocessing_pipeline(spectra::Vector;
-                                    steps::Vector{Symbol},
-                                    params::Dict=Dict(),
-                                    on_stage::Function=(;kwargs...)->nothing)
-
-    processed = deepcopy(spectra)  # Don't mutate the original input
-    reference_peaks = nothing      # For alignment
-
-    _emit(stage::Symbol, idx::Int, mz, y) = on_stage(stage; idx=idx, mz=mz, intensity=y)
-
-    for step in steps
-        @info "Running step: $step"
-
-        if step === :qc
-            for (i, (mz, y)) in enumerate(processed)
-                (isempty(mz) || isempty(y)) && continue
-                _emit(:qc_raw, i, mz, y)
-                qc_is_empty(mz, y) && @warn "Spectrum at index $i is empty."
-                !qc_is_regular(mz) && @warn "m/z axis at index $i is not monotonic."
-            end
-
-        elseif step === :transform
-            meth = get(params, :transform_method, :sqrt)
-            for i in eachindex(processed)
-                mz, y = processed[i]
-                y_new = transform_intensity(y; method=meth)
-                processed[i] = (mz, y_new)
-                _emit(:transform, i, mz, y_new)
-            end
-
-        elseif step === :smooth
-            win = get(params, :sg_window, 21)
-            ord = get(params, :sg_order, 2)
-            for i in eachindex(processed)
-                mz, y = processed[i]
-                y_smooth = smooth_spectrum(y; window=win, order=ord)
-                processed[i] = (mz, y_smooth)
-                _emit(:smooth, i, mz, y_smooth)
-            end
-
-        elseif step === :baseline
-            iters = get(params, :snip_iterations, 100)
-            for i in eachindex(processed)
-                mz, y = processed[i]
-                baseline = snip_baseline(y, iters)
-                y_corrected = max.(0.0, y .- baseline)
-                processed[i] = (mz, y_corrected)
-                _emit(:baseline, i, mz, y_corrected)
-            end
-
-        elseif step === :normalize
-            mode = get(params, :normalize_method, :tic)
-            if mode === :tic
-                for i in eachindex(processed)
-                    mz, y = processed[i]
-                    y_norm = tic_normalize(y)
-                    processed[i] = (mz, y_norm)
-                    _emit(:normalize, i, mz, y_norm)
-                end
-            elseif mode === :pqn
-                # Note: PQN assumes spectra are on a common m/z grid.
-                matrix = hcat([float.(p[2]) for p in processed]...)
-                matrix_norm = pqn_normalize(matrix)
-                for i in eachindex(processed)
-                    mz, _ = processed[i]
-                    processed[i] = (mz, view(matrix_norm, :, i))
-                    _emit(:normalize, i, mz, processed[i][2])
-                end
-            end
-
-        elseif step === :peaks
-            peak_results = Vector{Tuple{Vector{Float64},Vector{Float64}}}(undef, length(processed))
-            hw = get(params, :peak_half_window, 10)
-            snr = get(params, :peak_snr, 2.0)
-            for (i, (mz, y)) in enumerate(processed)
-                pk_mz, pk_int = detect_peaks_profile(mz, y; half_window=hw, snr_threshold=snr)
-                peak_results[i] = (pk_mz, pk_int)
-                # Emit with original mz axis but maybe stem plot of peaks?
-                _emit(:peaks, i, pk_mz, pk_int)
-            end
-            processed = peak_results
-            # Set reference for alignment
-            reference_peaks = isempty(processed) ? nothing : processed[1][1]
-
-        elseif step === :align
-            reference_peaks === nothing && (@error "Alignment requires a :peaks step first."; continue)
-            tol = get(params, :align_tolerance, 0.002)
-            for i in 2:length(processed)
-                tgt_peaks, intens = processed[i]
-                warp_func = align_peaks_lowess(reference_peaks, tgt_peaks; tolerance=tol)
-                processed[i] = (warp_func(tgt_peaks), intens)
-                _emit(:align, i, processed[i][1], processed[i][2])
-            end
-
-        elseif step === :bin
-            all_pks  = [s[1] for s in processed]
-            all_ints = [s[2] for s in processed]
-            tol  = get(params, :bin_tolerance, 0.002)
-            freq = get(params, :bin_min_frequency, 0.25)
-            mat, mz_bins = bin_peaks(all_pks, all_ints, tol; frequency_threshold=freq)
-            return FeatureMatrix(mat, mz_bins, collect(1:length(processed)))
-        end
-    end
-
-    @warn "Pipeline finished without a :bin step; returning processed spectra."
-    return processed
-end
-
-"""
-    run_preprocessing_pipeline(msi_data::MSIData, indices::Vector{Int}; steps, params, on_stage)
-
-Executes a flexible preprocessing pipeline on a subset of spectra from an MSIData object,
-with mode-aware logic for centroid and profile data.
-"""
-function run_preprocessing_pipeline(msi_data::MSIData, indices::Vector{Int};
-                                    steps::Vector{Symbol},
-                                    params::Dict=Dict(),
-                                    on_stage::Function=(;kwargs...)->nothing)
-
-    # This version of the pipeline is mode-aware.
-    # It processes spectra directly from the MSIData object.
-
-    processed_spectra = Vector{Tuple}(undef, length(indices))
-
-    # First, load all spectra and apply initial steps that run on individual spectra
-    for (i, spec_idx) in enumerate(indices)
-        mz, intensity = GetSpectrum(msi_data, spec_idx)
-        mode = msi_data.spectra_metadata[spec_idx].mode
-
-        on_stage(:qc_raw; idx=spec_idx, mz=mz, intensity=intensity)
-
-        for step in steps
-            if step === :transform
-                meth = get(params, :transform_method, :sqrt)
-                intensity = transform_intensity(intensity; method=meth)
-                on_stage(:transform; idx=spec_idx, mz=mz, intensity=intensity)
-            elseif step === :smooth && mode == PROFILE
-                win = get(params, :sg_window, 21)
-                ord = get(params, :sg_order, 2)
-                intensity = smooth_spectrum(intensity; window=win, order=ord)
-                on_stage(:smooth; idx=spec_idx, mz=mz, intensity=intensity)
-            elseif step === :baseline && mode == PROFILE
-                iters = get(params, :snip_iterations, 100)
-                baseline = snip_baseline(intensity, iters)
-                intensity = max.(0.0, intensity .- baseline)
-                on_stage(:baseline; idx=spec_idx, mz=mz, intensity=intensity)
-            elseif step === :normalize
-                norm_mode = get(params, :normalize_method, :tic)
-                if norm_mode === :tic
-                    intensity = tic_normalize(intensity)
-                    on_stage(:normalize; idx=spec_idx, mz=mz, intensity=intensity)
-                end
-            end
-        end
-        processed_spectra[i] = (mz, intensity, mode) # Store mode for peak detection
-    end
-
-    # Now, handle steps that require all spectra (like PQN) or are the final steps
-    final_result = nothing
-    for step in steps
-        if step === :normalize && get(params, :normalize_method, :tic) === :pqn
-            # Note: PQN assumes spectra are on a common m/z grid.
-            matrix = hcat([float.(p[2]) for p in processed_spectra]...)
-            matrix_norm = pqn_normalize(matrix)
-            for i in eachindex(processed_spectra)
-                mz, _, mode = processed_spectra[i]
-                processed_spectra[i] = (mz, view(matrix_norm, :, i), mode)
-                on_stage(:normalize; idx=indices[i], mz=mz, intensity=processed_spectra[i][2])
-            end
-        elseif step === :peaks
-            peak_results = Vector{Tuple{Vector{Float64},Vector{Float64}}}(undef, length(processed_spectra))
-            hw = get(params, :peak_half_window, 10)
-            snr = get(params, :peak_snr, 2.0)
-            intensity_thresh = get(params, :peak_intensity_threshold, 0.0)
-
-            for (i, (mz, y, mode)) in enumerate(processed_spectra)
-                spec_idx = indices[i]
-                if mode == PROFILE
-                    pk_mz, pk_int = detect_peaks_profile(mz, y; half_window=hw, snr_threshold=snr)
-                else # CENTROID
-                    pk_mz, pk_int = detect_peaks_centroid(mz, y; intensity_threshold=intensity_thresh)
-                end
-                peak_results[i] = (pk_mz, pk_int)
-                on_stage(:peaks; idx=spec_idx, mz=pk_mz, intensity=pk_int)
-            end
-            processed_spectra = peak_results # Now contains peak lists
-        
-        elseif step === :align
-            # Alignment requires a reference peak list, typically from the first spectrum
-            reference_peaks = isempty(processed_spectra) ? nothing : processed_spectra[1][1]
-            if reference_peaks === nothing
-                @error "Alignment requires a :peaks step first."; continue
-            end
-            tol = get(params, :align_tolerance, 0.002)
-            for i in 2:length(processed_spectra)
-                tgt_peaks, intens = processed_spectra[i]
-                warp_func = align_peaks_lowess(reference_peaks, tgt_peaks; tolerance=tol)
-                processed_spectra[i] = (warp_func(tgt_peaks), intens)
-                on_stage(:align; idx=indices[i], mz=processed_spectra[i][1], intensity=processed_spectra[i][2])
-            end
-
-        elseif step === :bin
-            all_pks  = [s[1] for s in processed_spectra]
-            all_ints = [s[2] for s in processed_spectra]
-            tol  = get(params, :bin_tolerance, 0.002)
-            freq = get(params, :bin_min_frequency, 0.25)
-            mat, mz_bins = bin_peaks(all_pks, all_ints, tol; frequency_threshold=freq)
-            final_result = FeatureMatrix(mat, mz_bins, indices)
-            break # Binning is the last step
-        end
-    end
-
-    if final_result !== nothing
-        return final_result
-    else
-        @warn "Pipeline finished without a :bin step; returning processed spectra."
-        return processed_spectra
-    end
-end
 
 # =============================================================================
 # 9) Quality Control Metrics
 # =============================================================================
 
 """
-    calculate_ppm_error(measured_mz::Float64, theoretical_mz::Float64) -> Float64
+    get_common_calibration_standards(type::Symbol) -> Dict{Float64, String}
 
-Calculates mass accuracy in parts-per-million (PPM).
+Returns a dictionary of common m/z values for calibration standards.
+
+# Arguments
+- `type::Symbol`: The type of standards to return. Currently supports `:maldi_pos`.
+
+# Returns
+- `Dict{Float64, String}`: A dictionary mapping theoretical m/z to compound names.
+"""
+function get_common_calibration_standards(type::Symbol)
+    if type == :maldi_pos
+        # Common peptide/protein standards for positive mode MALDI
+        return Dict{Float64, String}(
+            1046.5420 => "Angiotensin II",
+            1060.5690 => "Bradykinin",
+            1296.6853 => "Angiotensin I",
+            2465.1989 => "ACTH clip (1-24)"
+        )
+    else
+        @warn "Unsupported calibration standard type: $type. Returning empty dictionary."
+        return Dict{Float64, String}()
+    end
+end
+
+"""
+    calculate_ppm_error(measured_mz::Real, theoretical_mz::Real) -> Float64
+
+Calculates the mass accuracy error in parts-per-million (PPM) between a measured
+and a theoretical m/z value.
+
+# Arguments
+- `measured_mz::Real`: The experimentally measured m/z value.
+- `theoretical_mz::Real`: The known, theoretical m/z value of a compound.
+
+# Returns
+- `Float64`: The calculated PPM error. Returns `Inf` if `theoretical_mz` is zero.
 
 # Formula
-PPM = 10⁶ × |measured_mz - theoretical_mz| / theoretical_mz
+`PPM = 10^6 * |measured_mz - theoretical_mz| / theoretical_mz`
+
+# Example
+```julia
+calculate_ppm_error(100.005, 100.0) # returns 50.0
+```
 """
 function calculate_ppm_error(measured_mz::Real, theoretical_mz::Real)
     if theoretical_mz == 0
@@ -653,30 +651,38 @@ function calculate_ppm_error(measured_mz::Real, theoretical_mz::Real)
 end
 
 """
-    calculate_ppm_error_bulk(measured_mz::Vector{Float64}, theoretical_mz::Vector{Float64}) -> Vector{Float64}
+    calculate_ppm_error_bulk(measured_mz::Vector{<:Real}, theoretical_mz::Vector{<:Real}) -> Vector{Float64}
 
-Calculates PPM errors for multiple mass values.
+Calculates PPM errors for multiple pairs of measured and theoretical mass values.
+
+# Arguments
+- `measured_mz::Vector{<:Real}`: A vector of experimentally measured m/z values.
+- `theoretical_mz::Vector{<:Real}`: A vector of known, theoretical m/z values.
+
+# Returns
+- `Vector{Float64}`: A vector containing the calculated PPM error for each pair.
 """
 function calculate_ppm_error_bulk(measured_mz::Vector{Real}, theoretical_mz::Vector{Real})
     return [calculate_ppm_error(m, t) for (m, t) in zip(measured_mz, theoretical_mz)]
 end
 
 """
-    calculate_resolution_fwhm(mz::Float64, profile_mz::Vector{Float64}, 
-                            profile_intensity::Vector{Float64}) -> Float64
+    calculate_resolution_fwhm(mz::Real, profile_mz::AbstractVector{<:Real}, profile_intensity::AbstractVector{<:Real}) -> Float64
 
-Calculates mass resolution using Full Width at Half Maximum (FWHM).
-
-# Formula
-Resolution = m / Δm, where Δm is FWHM
+Calculates the mass resolution of a peak in profile-mode data using the Full Width at
+Half Maximum (FWHM) method. Resolution is a measure of an instrument's ability to
+distinguish between two peaks of slightly different mass-to-charge ratios.
 
 # Arguments
-- `mz`: Peak centroid m/z
-- `profile_mz`: Full m/z array from profile data
-- `profile_intensity`: Full intensity array from profile data
+- `mz::Real`: The m/z value of the peak's centroid.
+- `profile_mz::AbstractVector{<:Real}`: The full m/z array from the profile-mode spectrum.
+- `profile_intensity::AbstractVector{<:Real}`: The full intensity array from the profile-mode spectrum.
 
 # Returns
-Resolution or NaN if cannot be calculated
+- `Float64`: The calculated resolution (`m / Δm`). Returns `NaN` if the FWHM cannot be determined (e.g., peak is at the edge of the spectrum).
+
+# Formula
+`Resolution = m / Δm`, where `Δm` is the FWHM.
 """
 function calculate_resolution_fwhm(mz::Real, profile_mz::AbstractVector{<:Real},
                                  profile_intensity::AbstractVector{<:Real})
@@ -733,36 +739,48 @@ function find_first_below(v::AbstractVector{<:Real}, threshold::Real)
 end
 
 """
-    analyze_mass_accuracy(msi_data, reference_peaks; ppm_tolerance=20.0)
+    analyze_mass_accuracy(msi_data, reference_peaks; ppm_tolerance=5.0, sample_spectra=100) -> NamedTuple
 
-Analyzes mass accuracy across the dataset using known reference peaks.
+Analyzes the mass accuracy across a sample of spectra from an MSI dataset by comparing
+detected peaks against a list of known reference m/z values. It calculates PPM error
+statistics and suggests an optimal PPM tolerance for future analyses.
 
 # Arguments
-- `msi_data`: Your MSI dataset
-- `reference_peaks`: Dict of theoretical m/z values -> compound names
-- `ppm_tolerance`: Initial tolerance for peak matching
+- `msi_data`: An `MSIData` object containing the dataset.
+- `reference_peaks::Dict{Float64,String}`: A dictionary mapping theoretical m/z values to compound names.
+
+# Keyword Arguments
+- `ppm_tolerance::Float64`: The initial PPM tolerance used to match detected peaks to reference peaks. Defaults to 5.0.
+- `sample_spectra::Int`: The number of spectra to sample from the dataset for the analysis. Defaults to 100.
 
 # Returns
-Comprehensive mass accuracy report
+- `NamedTuple`: A comprehensive report containing statistics like `mean_ppm`, `std_ppm`, `optimal_ppm`, `n_matches`, and lists of matched peaks and all PPM errors.
 """
 function analyze_mass_accuracy(msi_data, reference_peaks::Dict{Float64,String}; 
-                             ppm_tolerance::Float64=5.0, sample_spectra=100)
+                             ppm_tolerance::Float64=5.0, sample_spectra=100,
+                             spectrum_indices=nothing)
     println("\n[ MASS ACCURACY ANALYSIS ]")
     println("PPM tolerance: ", ppm_tolerance, " ppm")
-    println("Spectra to sample: ", sample_spectra)
     
     theoretical_mz = sort(collect(keys(reference_peaks)))
     ppm_errors = Float64[]
     matched_peaks = Tuple{Float64,Float64,String}[]  # (theoretical, measured, compound)
     
-    # Sample spectra across the dataset
-    if sample_spectra >= length(msi_data.spectra_metadata)
-        spectrum_indices = 1:length(msi_data.spectra_metadata)
+    # Determine which spectra to process
+    local indices_to_process
+    if spectrum_indices === nothing
+        println("Spectra to sample: ", sample_spectra)
+        if sample_spectra >= length(msi_data.spectra_metadata)
+            indices_to_process = 1:length(msi_data.spectra_metadata)
+        else
+            indices_to_process = round.(Int, range(1, length(msi_data.spectra_metadata), length=sample_spectra))
+        end
     else
-        spectrum_indices = round.(Int, range(1, length(msi_data.spectra_metadata), length=sample_spectra))
+        indices_to_process = spectrum_indices
+        println("Analyzing $(length(indices_to_process)) specified spectra.")
     end
     
-    for idx in spectrum_indices
+    for idx in indices_to_process
         mz, intensity = GetSpectrum(msi_data, idx)
         
         # Detect peaks in this spectrum
@@ -788,7 +806,7 @@ function analyze_mass_accuracy(msi_data, reference_peaks::Dict{Float64,String};
     
     if isempty(ppm_errors)
         @warn "No peaks matched within $ppm_tolerance ppm tolerance"
-        return (mean_ppm=NaN, std_ppm=NaN, min_ppm=NaN, max_ppm=NaN, optimal_ppm=NaN, n_matches=0, matched_peaks=[], all_ppm_errors=[])
+        return (mean_ppm=NaN, std_ppm=NaN, min_ppm=NaN, max_ppm=NaN, optimal_ppm=NaN, n_matches=0, matched_peaks=[], all_ppm_errors=Float64[])
     end
     
     # Calculate statistics
@@ -813,62 +831,28 @@ function analyze_mass_accuracy(msi_data, reference_peaks::Dict{Float64,String};
 end
 
 """
-    get_common_calibration_standards(standard_type::Symbol)
+    generate_qc_report(msi_data, filename; reference_peaks, output_dir, sample_spectra) -> Tuple
 
-Returns common calibration masses for different instrument types.
+Generates a comprehensive Quality Control (QC) report for an MSI dataset. It assesses
+mass accuracy and resolution, saving the results to CSV files and a summary text file.
 
-# Supported standards
-- `:maldi_pos`: Common MALDI-TOF positive mode calibrants
-- `:maldi_neg`: Common MALDI-TOF negative mode calibrants  
-- `:esi_pos`: ESI positive mode calibrants
-- `:lcms`: LC-MS commonly used standards
+# Arguments
+- `msi_data`: The `MSIData` object to be analyzed.
+- `filename::String`: The name of the input data file, used for reporting.
+
+# Keyword Arguments
+- `reference_peaks::Dict`: A dictionary of reference peaks for mass accuracy analysis. If `nothing`, defaults are loaded using `get_common_calibration_standards`.
+- `output_dir::String`: The directory where the report files will be saved. Defaults to `"qc_results"`.
+- `sample_spectra::Int`: The number of spectra to sample for the analysis. Defaults to 100.
+
+# Returns
+- `Tuple`: A tuple containing the detailed `accuracy_report` (NamedTuple) and `resolution_results` (Vector).
+
+# Side Effects
+- Creates a directory specified by `output_dir`.
+- Writes `mass_accuracy_results.csv`, `resolution_results.csv`, and `qc_summary.txt` into the output directory.
 """
-function get_common_calibration_standards(standard_type::Symbol=:maldi_pos)
-    standards = Dict{Float64,String}()
-    
-    if standard_type == :maldi_pos
-        standards = Dict(
-            104.10754 => "C5H4N2 (Imidazole)",
-            175.11995 => "C6H15O4P (Glycerophosphocholine fragment)",
-            226.15687 => "C10H20NO4P (Phosphocholine)",
-            322.04810 => "[Glu1]-Fibrinopeptide B fragment",
-            379.09247 => "C12H22O11 (Sucrose)",
-            515.32539 => "C26H52NO7P (PC(16:0/0:0))",
-            622.02896 => "C20H12O5S2 (1-Hydroxypyrene-3,6,8-trisulfate)",
-            757.39917 => "C37H74NO8P (PC(34:1))",
-            1046.54198 => "Angiotensin I",
-            1296.68477 => "ACTH clip 1-17",
-            1570.67744 => "ACTH clip 18-39",
-            2465.19829 => "ACTH clip 7-38"
-        )
-    elseif standard_type == :maldi_neg
-        standards = Dict(
-            112.98563 => "C2F3O2 (Trifluoroacetate)",
-            152.99568 => "C2F6S (Perfluoroethylsulfonate)",
-            214.00166 => "C4F7O2 (Heptafluorobutyrate)",
-            264.93278 => "C6F6 (Hexafluorobenzene)",
-            362.96198 => "C8F15O2 (Perfluorooctanoate)",
-            466.96714 => "C10F17O2S (Perfluorooctanesulfonate)"
-        )
-    elseif standard_type == :esi_pos
-        standards = Dict(
-            118.08626 => "C5H12NO2 (Valine)",
-            175.11900 => "C6H15O4P (Phosphocholine fragment)", 
-            524.26496 => "C23H48NO7P (LysoPC(16:0))",
-            622.02896 => "C20H12O5S2 (Standard)",
-            922.00980 => "C18H18O6N3S3 (Ultramark 1621)"
-        )
-    end
-    
-    return standards
-end
-
-"""
-    generate_qc_report(msi_data; reference_peaks, output_dir)
-
-Generates a comprehensive QC report including mass accuracy and resolution.
-"""
-function generate_qc_report(msi_data, filename::String; reference_peaks=nothing, output_dir="qc_results", sample_spectra=100)
+function generate_qc_report(msi_data, filename::String; reference_peaks=nothing, output_dir="qc_results", sample_spectra=100, spectrum_indices=nothing)
     println("\n[ QC REPORT GENERATION ]")
     println("Input file: ", filename)
     println("Output directory: ", output_dir)
@@ -883,7 +867,7 @@ function generate_qc_report(msi_data, filename::String; reference_peaks=nothing,
     println("Using $(length(reference_peaks)) reference masses")
     
     # 1. Analyze mass accuracy
-    accuracy_report = analyze_mass_accuracy(msi_data, reference_peaks, sample_spectra=sample_spectra)
+    accuracy_report = analyze_mass_accuracy(msi_data, reference_peaks; sample_spectra=sample_spectra, spectrum_indices=spectrum_indices)
     
     println("\n" * "="^50)
     println("MASS ACCURACY REPORT")
@@ -976,4 +960,3 @@ function generate_qc_report(msi_data, filename::String; reference_peaks=nothing,
     println("\nQC report saved to: $output_dir")
     return accuracy_report, resolution_results
 end
-

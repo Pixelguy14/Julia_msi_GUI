@@ -151,6 +151,7 @@ end
     @out available_folders = String[]
     @out image_available_folders = String[]
     @private registry_init_done = false
+    @in refetch_folders = false
 
     @out imgInt = "" # Path to current slice
     @out current_msi = ""
@@ -708,6 +709,23 @@ end
             @error "Save final mask failed" exception=(e, catch_backtrace())
             mask_editor_message = "Error saving final mask: $(sprint(showerror, e))"
             mask_editor_warning = true
+        end
+    end
+
+    @onbutton refetch_folders begin
+        # First, re-run the logic to populate the folder list
+        registry = load_registry(registry_path)
+        all_folders = sort(collect(keys(registry)), lt=natural)
+        img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+        
+        available_folders = deepcopy(all_folders)
+        image_available_folders = deepcopy(img_folders)
+
+        # Apply the logic to select the first item if none is selected
+        if !isempty(image_available_folders) && isempty(selected_folder_main)
+            # This ensures the list is up-to-date
+            image_available_folders = deepcopy(img_folders)
+            selected_folder_main = first(image_available_folders)
         end
     end
 

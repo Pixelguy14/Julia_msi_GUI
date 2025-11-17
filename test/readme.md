@@ -40,10 +40,10 @@ Before running the tests, you must edit the `test/run_tests.jl` file to point to
 2.  **Execute the Different Test Scripts**:
     Run the following command from the project's root directory. This will install the necessary dependencies and run the tests.
     ```bash
-    julia --project=. test/run_tests.jl
+    julia --threads auto --project=. test/run_tests.jl
     ```
     ```bash
-    julia --project=. test/run_preprocessing.jl
+    julia --threads auto --project=. test/run_preprocessing.jl
     ```
 
 3.  **Check the Results**:

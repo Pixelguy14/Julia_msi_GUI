@@ -15,7 +15,7 @@
             <div class="text-subtitle1 q-mt-md">Step 1: Select Slice</div>
             <div class="row items-center">
                 <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
-                    class="q-ma-sm col" standout="custom-standout" :disable="is_editing_mask"></q-select>
+                    class="q-ma-sm col" standout="custom-standout" :disable="is_editing_mask"  v-on:focus="refetch_folders = true"></q-select>
             </div>
             <p class="text-center" v-html="msgimg"></p>
 

@@ -213,6 +213,7 @@ end
 
     # == Batch Processing & Registry Variables ==
     @private registry_init_done = false
+    @in refetch_folders = false
     @in selected_files = String[]
     @in available_folders = String[]
     @in image_available_folders = String[]
@@ -1919,6 +1920,37 @@ end
         end
     end
 
+    @onbutton refetch_folders begin
+        # Re-load registry and update folder lists
+        registry = load_registry(registry_path)
+        all_folders = sort(collect(keys(registry)), lt=natural)
+        img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
+        
+        available_folders = deepcopy(all_folders)
+        image_available_folders = deepcopy(img_folders)
+
+        # For q-selects using image_available_folders
+        if !isempty(image_available_folders)
+            first_img_folder = first(image_available_folders)
+            if isempty(selected_folder_main)
+                selected_folder_main = first_img_folder
+            end
+            if isempty(selected_folder_compare_left)
+                selected_folder_compare_left = first_img_folder
+            end
+            if isempty(selected_folder_compare_right)
+                selected_folder_compare_right = first_img_folder
+            end
+        end
+
+        # For q-selects using available_folders
+        if !isempty(available_folders)
+            if isempty(selected_folder_metadata)
+                selected_folder_metadata = first(available_folders)
+            end
+        end
+    end
+
     @mounted watchplots()
 
     @onchange isready @time begin
@@ -1967,7 +1999,6 @@ end
                 image_available_folders = deepcopy(img_folders)
                 
                 println("UI lists updated. All: $(length(available_folders)), Images: $(length(image_available_folders))")
-
             catch e
                 @warn "Registry synchronization failed: $e"
                 available_folders = []

@@ -420,6 +420,12 @@ function read_binary_vector(data::MSIData, io::IO, asset::SpectrumAsset)
     return out_array
 end
 
+function read_binary_vector(data::MSIData, ts_handle::ThreadSafeFileHandle, asset::SpectrumAsset)
+    lock(ts_handle.lock) do
+        return read_binary_vector(data, ts_handle.handle, asset)
+    end
+end
+
 # Overload for different source types
 """
     read_spectrum_from_disk(source::ImzMLSource, meta::SpectrumMetadata)
