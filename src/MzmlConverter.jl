@@ -601,7 +601,7 @@ function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing
         close(msi_data)
     end
     
-    return binary_meta_vec, coords_vec, (width, height), pixel_modes, ibd_uuid
+    return binary_meta_vec, coords_vec, (width, height), pixel_modes, ibd_uuid, msi_data.instrument_metadata
 end
 
 """
@@ -621,7 +621,7 @@ experiment and data format.
 # Returns
 - `true` on success, `false` on failure.
 """
-function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, coords::Vector{Tuple{Int, Int}}, dims::Tuple{Int, Int}, modes::Vector{SpectrumMode}, ibd_uuid::UUID)
+function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, coords::Vector{Tuple{Int, Int}}, dims::Tuple{Int, Int}, modes::Vector{SpectrumMode}, ibd_uuid::UUID, instrument_meta::InstrumentMetadata)
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
     
     if isempty(binary_meta)
@@ -652,6 +652,15 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
       <cvParam cvRef="IMS" accession="IMS:1000080" name="mass spectrum"/>
       <cvParam cvRef="IMS" accession="IMS:1000031" name="processed"/>
       <cvParam cvRef="IMS" accession="IMS:1000081" name="ibd uuid" value="$(ibd_uuid)"/>
+$(
+    if instrument_meta.polarity == :positive
+        """      <cvParam cvRef="MS" accession="MS:1000130" name="positive scan"/>"""
+    elseif instrument_meta.polarity == :negative
+        """      <cvParam cvRef="MS" accession="MS:1000129" name="negative scan"/>"""
+    else
+        ""
+    end
+)
     </fileContent>
   </fileDescription>
 """)
@@ -693,12 +702,35 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
 """)
             write(imzml_stream, """  <instrumentConfigurationList count="1">
     <instrumentConfiguration id="instrument1">
+$(
+    if instrument_meta.instrument_model != "Not Available"
+        """      <cvParam cvRef="MS" accession="MS:1000031" name="instrument model" value="$(instrument_meta.instrument_model)"/>"""
+    else
+        ""
+    end
+)
+$(
+    if instrument_meta.resolution !== nothing
+        """      <cvParam cvRef="MS" accession="MS:1001496" name="mass resolving power" value="$(instrument_meta.resolution)"/>"""
+    else
+        ""
+    end
+)
       <componentList count="3">
         <source order="1">
           <cvParam cvRef="MS" accession="MS:1000075" name="MALDI source"/>
         </source>
         <analyzer order="2">
           <cvParam cvRef="MS" accession="MS:1000084" name="time-of-flight"/>
+$(
+    if instrument_meta.acquisition_mode == :centroid
+        """          <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum"/>"""
+    elseif instrument_meta.acquisition_mode == :profile
+        """          <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum"/>"""
+    else
+        ""
+    end
+)
         </analyzer>
         <detector order="3">
             <cvParam cvRef="MS" accession="MS:1000253" name="electron multiplier"/>
@@ -708,11 +740,23 @@ function ExportImzml(target_file::String, binary_meta::Vector{BinaryMetadata}, c
     </instrumentConfiguration>
   </instrumentConfigurationList>
 """)
-            write(imzml_stream, """  <dataProcessingList count="1">
+            write(imzml_stream, """  <dataProcessingList count="$(1 + (instrument_meta.vendor_preprocessing_steps !== nothing ? length(instrument_meta.vendor_preprocessing_steps) : 0))">
     <dataProcessing id="conversionProcessing">
       <processingMethod order="1" softwareRef="MSIConverter">
         <cvParam cvRef="MS" accession="MS:1000544" name="Conversion to imzML"/>
       </processingMethod>
+$(
+    if instrument_meta.vendor_preprocessing_steps !== nothing
+        join([
+            """      <processingMethod order="$(i + 1)" softwareRef="MSIConverter">
+        <cvParam cvRef="MS" accession="MS:1000589" name="data processing" value="$(step)"/>
+      </processingMethod>"""
+            for (i, step) in enumerate(instrument_meta.vendor_preprocessing_steps)
+        ], "\n")
+    else
+        ""
+    end
+)
     </dataProcessing>
   </dataProcessingList>
 """)
@@ -812,13 +856,13 @@ function ImportMzmlFile(source_file::String, sync_file::String, target_file::Str
 
     println("Step 3: Converting spectra and writing .ibd file...")
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
-    binary_meta, coords, (width, height), pixel_modes, ibd_uuid = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans)
+    binary_meta, coords, (width, height), pixel_modes, ibd_uuid, instrument_meta = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans)
 
     # Flip image vertically to match R script output
     flipped_coords = [(x, height - y + 1) for (x, y) in coords]
 
     println("Step 4: Exporting .imzML metadata file...")
-    success = ExportImzml(target_file, binary_meta, flipped_coords, (width, height), pixel_modes, ibd_uuid)
+    success = ExportImzml(target_file, binary_meta, flipped_coords, (width, height), pixel_modes, ibd_uuid, instrument_meta)
 
     if success
         println("Conversion successful: $target_file")

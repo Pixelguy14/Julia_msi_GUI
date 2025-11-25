@@ -1,371 +1,534 @@
-# test/run_preprocessing.jl
-
-# ===================================================================
-# Preprocessing Test Suite for JuliaMSI
-# ===================================================================
-# This script provides a customizable workflow to test and visualize
-# the effects of different preprocessing steps on individual spectra
-# from .mzML or .imzML files.
-#
-# Instructions:
-# 1. Configure the file paths and parameters in the "CONFIG" section.
-# 2. Run the script from the project's root directory:
-#    julia --threads auto --project=. test/run_preprocessing.jl
-# 3. Check the configured `RESULTS_DIR` for output plots and CSV files.
-# ===================================================================
+# run_preprocessing.jl
 
 using Printf
-using CairoMakie
-using DataFrames
-using CSV
-using Statistics
-using Interpolations
 import Pkg
+using CairoMakie
+using DataFrames    # For creating dataframes
+using CSV
 
 # --- Load the MSI_src Module ---
-# Activate the project environment at the parent directory of this test script
 Pkg.activate(joinpath(@__DIR__, ".."))
 using MSI_src
 
 
 # ===================================================================
-# CONFIG: CUSTOMIZE YOUR PREPROCESSING WORKFLOW HERE
+# CONFIG: PLEASE FILL IN YOUR FILE PATHS HERE
 # ===================================================================
 
-# --- Input and Output ---
-const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML" # Can be .mzML or .imzML
-const RESULTS_DIR = "test/results/preprocessing"
-const NUM_SPECTRA_TO_PROCESS = nothing # Set to `nothing` to process all spectra
+const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Thricoderma_etc/Imaging_interaccion_trichoderma_vs_streptomyces.imzML"
+# const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/set de datos MS/Atropina_tuneo_fraq_20ev.mzML"
+# const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML"
 
-# --- Internal Standards for Calibration and QC ---
-# replace these with m/z values of known compounds present in your dataset.
-const INTERNAL_STANDARDS = Dict(
-    "P13" => 432.6584,
-    "P15" => 464.6059,
-    "P17" => 526.5534,
-    "P21" => 650.4485,
-    "P25" => 774.3435,
-    "P29" => 898.2385,
-    "P31" => 950.1861,
-    "P33" => 1022.1336,
-    "P37" => 1146.0286,
-    "P45" => 1593.8187,
-    "Unknown 1" => 772.433,
-    "Unknown 2" => 772.5253
-)
+# const MASK_ROUTE = "/home/pixel/Documents/Cinvestav_2025/JuliaMSI/public/css/masks/Stomach_DHB_uncompressed.png"
+const MASK_ROUTE = "" 
 
-# --- Preprocessing Step Parameters ---
+const OUTPUT_DIR = "./test/results/preprocessing_results"
 
-# Step 0: Quality Control (QC)
-const QC_PARAMS = (
-    ppm_tolerance = 5.0, # PPM tolerance for matching internal standards
-)
-
-# Step 1: Calibration
-const CALIBRATION_PARAMS = (
-    enabled = true,
-    ppm_tolerance = 5.0, # PPM tolerance for finding calibration peaks
-)
-
-# Step 2: Smoothing
-# Note: Smoothing is less effective and often unnecessary for centroid data.
-const SMOOTHING_PARAMS = (
-    enabled = false,
-    window = 9,
-    order = 2,
-)
-
-# Step 3: Baseline Correction
-# Note: Baseline correction is less effective and often unnecessary for centroid data.
-const BASELINE_CORRECTION_PARAMS = (
-    enabled = false,
-    iterations = 100,
-)
-
-# Step 4: Normalization
-const NORMALIZATION_PARAMS = (
-    enabled = true,
-    method = :tic, # :tic, :median, or :none
-)
-
-# Step 5: Peak Detection
-const PEAK_DETECTION_PARAMS = (
-    enabled = true,
-    method = :centroid, # Use :centroid for centroided data, :profile for profile data
-    # --- Parameters for :centroid method ---
-    intensity_threshold = 0.0, # Filters out peaks below this absolute intensity
-    # --- Parameters for :profile method ---
-    half_window = 10,
-    snr_threshold = 3.0,
-    min_peak_prominence = 0.05,
-    merge_peaks_tolerance = 0.002,
-)
-
-# Step 6: Peak Alignment (Warping)
-# This is performed after collecting peaks from all spectra.
-const PEAK_ALIGNMENT_PARAMS = (
-    enabled = true,
-    tolerance = 0.002,
-    tolerance_unit = :mz, # :mz or :ppm
-    min_matched_peaks = 3, # Lowered for sparse centroid data
-)
-
-# Step 7: Peak Binning
-const PEAK_BINNING_PARAMS = (
-    enabled = true,
-    tolerance = 0.1,
-    tolerance_unit = :mz, # :mz or :ppm
-    frequency_threshold = 0.1, # Min fraction of spectra a peak must be in
+# Reference peaks for calibration and alignment
+const reference_peaks = Dict(
+    137.0244 => "DHB_fragment",
+    155.0349 => "DHB_M+H", 
+    177.0168 => "DHB_M+Na",
+    496.3398 => "PC_16:0_16:0",
+    520.3398 => "PC_16:0_18:1", 
+    760.5851 => "PC_16:0_18:1_Na",
+    391.2843 => "PDMS",
+    413.2662 => "PDMS_Na",
+    842.5092 => "Protein_standard",
+    1045.532 => "Protein_standard",
+    290.1747 => "Atropine [M+H]+", 
+    304.1903 => "Scopolamine [M+H]+",
+    124.0393 => "Tropine [M+H]+",
 )
 
 # ===================================================================
 # HELPER FUNCTIONS
 # ===================================================================
 
-"""
-    plot_spectrum_on_fig(fig_pos, mz, intensity, title)
-
-Helper function to plot a spectrum on a specific position of a CairoMakie figure.
-"""
-function plot_spectrum_on_fig(fig_pos, mz, intensity, title)
-    ax = Axis(fig_pos, title=title, xlabel="m/z", ylabel="Intensity")
-    lines!(ax, mz, intensity)
+function ensure_output_dir()
+    if !isdir(OUTPUT_DIR)
+        mkdir(OUTPUT_DIR)
+        println("Created output directory: $OUTPUT_DIR")
+    end
 end
 
+function plot_spectrum_step(mz, intensity, step_name; peaks=nothing, spectrum_index=1)
+    fig = Figure(size=(1200, 600))
+    ax = Axis(fig[1, 1], xlabel="m/z", ylabel="Intensity", title="Step: $step_name (Spectrum $spectrum_index)")
+    
+    lines!(ax, mz, intensity, color=:blue, linewidth=1)
+    
+    if peaks !== nothing && !isempty(peaks)
+        peak_mz = [p.mz for p in peaks]
+        peak_intensity = [p.intensity for p in peaks]
+        scatter!(ax, peak_mz, peak_intensity, color=:red, markersize=5)
+    end
+    
+    filename = joinpath(OUTPUT_DIR, "spectrum_$(step_name)_index_$spectrum_index.png")
+    save(filename, fig)
+    println("  - Saved plot: $(basename(filename))")
+end
+
+function print_step_header(step_name::String)
+    println("\n" * ">"^50)
+    println("APPLYING STEP: $step_name")
+    println(">"^50)
+end
 
 # ===================================================================
-# MAIN PROCESSING SCRIPT
+# PREPROCESSING PIPELINE FUNCTIONS (IN-PLACE)
 # ===================================================================
 
-function run_preprocessing_suite()
-    println("Starting Preprocessing Test Suite...")
-    mkpath(RESULTS_DIR)
+function apply_baseline_correction(spectra::Vector{MutableSpectrum}, params::Dict, msi_data::MSIData)
+    print_step_header("Baseline Correction")
+    
+    method = get(params, :method, :snip)
+    iterations = get(params, :iterations, 100)
+    window = get(params, :window, 20)
+    println("  Method: $method, Iterations: $iterations, Window: $window")
 
-    # --- Load Data ---
-    println("Loading data from: $TEST_FILE")
-    if !isfile(TEST_FILE)
-        println("ERROR: Test file not found. Please check the path in the CONFIG section.")
-        return
-    end
-    msi_data = @time OpenMSIData(TEST_FILE)
-    println("Data loaded successfully. Found $(length(msi_data.spectra_metadata)) spectra.")
-
-    # --- Determine which spectra to process ---
-    total_spectra = length(msi_data.spectra_metadata)
-    indices_to_process = if NUM_SPECTRA_TO_PROCESS === nothing
-        1:total_spectra
-    else
-        unique(round.(Int, range(1, total_spectra, length=min(NUM_SPECTRA_TO_PROCESS, total_spectra))))
-    end
-    println("Will process $(length(indices_to_process)) spectra.")
-
-    # --- Data storage for results ---
-    qc_results = DataFrame(spectrum_idx=Int[], metric=String[], value=Float64[], compound=String[])
-    all_processed_peaks_mz = Vector{Vector{Float64}}()
-    all_processed_peaks_int = Vector{Vector{Float64}}()
-    spectrum_indices_with_peaks = Int[]
-
-    # --- Main Loop: Process each spectrum individually ---
-    println("\n" * "="^20 * " Processing Individual Spectra " * "="^20)
-    for (i, idx) in enumerate(indices_to_process)
-        print("\rProcessing spectrum #$idx ($(i)/$(length(indices_to_process)))...")
-        
-        process_spectrum(msi_data, idx) do mz, intensity
-            if qc_is_empty(mz, intensity) || !qc_is_regular(mz)
-                # @warn "Skipping empty or irregular spectrum #$idx"
-                return
-            end
-
-            original_mz, original_intensity = copy(mz), copy(intensity)
-            processed_mz, processed_intensity = copy(mz), copy(intensity)
-
-            # --- Step 0: QC (PPM and Resolution) ---
-            # This happens before any modification to the m/z axis
-            let ref_masses = collect(values(INTERNAL_STANDARDS))
-                matched_peaks = find_calibration_peaks(processed_mz, processed_intensity, ref_masses, ppm_tolerance=QC_PARAMS.ppm_tolerance)
-                
-                for (compound, theoretical_mz) in INTERNAL_STANDARDS
-                    # Find the measured m/z that corresponds to this theoretical_mz
-                    measured_mz = 0.0
-                    for (theo, meas) in matched_peaks
-                        if theo == theoretical_mz
-                            measured_mz = meas
-                            break
-                        end
-                    end
-
-                    if measured_mz > 0
-                        # PPM Error
-                        ppm_error = calculate_ppm_error(measured_mz, theoretical_mz)
-                        push!(qc_results, (idx, "ppm_error", ppm_error, compound))
-                        
-                        # Resolution
-                        resolution = calculate_resolution_fwhm(measured_mz, processed_mz, processed_intensity)
-                        if !isnan(resolution)
-                            push!(qc_results, (idx, "resolution", resolution, compound))
-                        end
-                    end
-                end
-            end
-
-            # --- Step 1: Calibration ---
-            if CALIBRATION_PARAMS.enabled
-                ref_masses = collect(values(INTERNAL_STANDARDS))
-                matched_peaks = find_calibration_peaks(processed_mz, processed_intensity, ref_masses, ppm_tolerance=CALIBRATION_PARAMS.ppm_tolerance)
-                if length(matched_peaks) >= 2
-                    measured = sort(collect(values(matched_peaks)))
-                    theoretical = sort(collect(keys(matched_peaks)))
-                    itp = linear_interpolation(measured, theoretical, extrapolation_bc=Line())
-                    processed_mz = itp(processed_mz)
-                end
-            end
-
-            # --- Step 2: Smoothing ---
-            if SMOOTHING_PARAMS.enabled
-                processed_intensity = smooth_spectrum(processed_intensity, window=SMOOTHING_PARAMS.window, order=SMOOTHING_PARAMS.order)
-            end
-
-            # --- Step 3: Baseline Correction ---
-            if BASELINE_CORRECTION_PARAMS.enabled
-                baseline = snip_baseline(processed_intensity, iterations=BASELINE_CORRECTION_PARAMS.iterations)
-                processed_intensity .-= baseline
-                processed_intensity = max.(0, processed_intensity) # Ensure non-negativity
-            end
-
-            # --- Step 4: Normalization ---
-            if NORMALIZATION_PARAMS.enabled && NORMALIZATION_PARAMS.method != :none
-                if NORMALIZATION_PARAMS.method == :tic
-                    processed_intensity = tic_normalize(processed_intensity)
-                elseif NORMALIZATION_PARAMS.method == :median
-                    processed_intensity = median_normalize(processed_intensity)
-                end
-            end
-
-            # --- Step 5: Peak Detection ---
-            local pk_mz, pk_int
-            pk_mz, pk_int = Float64[], Float64[] # Initialize empty
-            if PEAK_DETECTION_PARAMS.enabled
-                if PEAK_DETECTION_PARAMS.method == :profile
-                    pk_mz, pk_int = detect_peaks_profile(processed_mz, processed_intensity,
-                        half_window=PEAK_DETECTION_PARAMS.half_window,
-                        snr_threshold=PEAK_DETECTION_PARAMS.snr_threshold,
-                        min_peak_prominence=PEAK_DETECTION_PARAMS.min_peak_prominence,
-                        merge_peaks_tolerance=PEAK_DETECTION_PARAMS.merge_peaks_tolerance)
-                elseif PEAK_DETECTION_PARAMS.method == :wavelet
-                    pk_mz, pk_int = detect_peaks_wavelet(processed_mz, processed_intensity)
-                else # :centroid
-                    pk_mz, pk_int = detect_peaks_centroid(processed_mz, processed_intensity)
-                end
-                
-                if !isempty(pk_mz)
-                    push!(all_processed_peaks_mz, pk_mz)
-                    push!(all_processed_peaks_int, pk_int)
-                    push!(spectrum_indices_with_peaks, idx)
-                end
-            end
-
-            # --- Visualization of a sample spectrum ---
-            if i == 1 # Only plot the first processed spectrum
-                println("\nGenerating example plots for spectrum #$idx...")
-                fig = Figure(size=(1200, 800))
-                
-                plot_spectrum_on_fig(fig[1,1], original_mz, original_intensity, "1. Original Spectrum")
-                plot_spectrum_on_fig(fig[2,1], processed_mz, processed_intensity, "2. After All Steps (Before Peak Picking)")
-                
-                # Plot detected peaks
-                ax = Axis(fig[3,1], title="3. Detected Peaks")
-                if !isempty(pk_mz)
-                    stem!(ax, pk_mz, pk_int)
-                end
-                
-                save(joinpath(RESULTS_DIR, "example_spectrum_processing.png"), fig)
-                println("Saved example processing plots.")
-            end
+    # Safely plot the first spectrum
+    if !isempty(spectra)
+        s = spectra[1]
+        if validate_spectrum(s.mz, s.intensity)
+            baseline = MSI_src.apply_baseline_correction(s.intensity; method=method, iterations=iterations, window=window)
+            corrected_intensity = max.(0.0, s.intensity .- baseline)
+            plot_spectrum_step(s.mz, corrected_intensity, "baseline_correction")
         end
     end
-    println("\nIndividual spectrum processing complete.")
 
-    # --- Save QC Results ---
-    if !isempty(qc_results)
-        println("\n" * "="^20 * " Generating QC Report " * "="^20)
-        CSV.write(joinpath(RESULTS_DIR, "qc_results.csv"), qc_results)
-        println("QC results saved to qc_results.csv")
-
-        # Generate summary plots for QC
-        fig = Figure(size=(1200, 600))
-        
-        # PPM Error Histogram
-        ppm_errors = filter(row -> row.metric == "ppm_error", qc_results).value
-        if !isempty(ppm_errors)
-            ax1 = Axis(fig[1,1], title="PPM Error Distribution", xlabel="PPM Error")
-            hist!(ax1, ppm_errors, bins=30)
+    Threads.@threads for s in spectra
+        if validate_spectrum(s.mz, s.intensity)
+            baseline = MSI_src.apply_baseline_correction(s.intensity; method=method, iterations=iterations, window=window)
+            s.intensity = max.(0.0, s.intensity .- baseline)
         end
+    end
+end
 
-        # Resolution Histogram
-        resolutions = filter(row -> row.metric == "resolution", qc_results).value
-        if !isempty(resolutions)
-            ax2 = Axis(fig[1,2], title="Resolution Distribution", xlabel="Resolution (FWHM)")
-            hist!(ax2, resolutions, bins=30)
+function apply_smoothing(spectra::Vector{MutableSpectrum}, params::Dict)
+    print_step_header("Smoothing")
+    
+    method = get(params, :method, :savitzky_golay)
+    window = get(params, :window, 9)
+    order = get(params, :order, 2)
+    println("  Method: $method, Window: $window, Order: $order")
+
+    # Safely plot the first spectrum
+    if !isempty(spectra)
+        s = spectra[1]
+        if validate_spectrum(s.mz, s.intensity)
+            smoothed_intensity = max.(0.0, smooth_spectrum(s.intensity; method=method, window=window, order=order))
+            plot_spectrum_step(s.mz, smoothed_intensity, "smoothing", spectrum_index=s.id)
         end
-        
-        save(joinpath(RESULTS_DIR, "qc_summary_plots.png"), fig)
-        println("QC summary plots saved.")
     end
 
-    if isempty(all_processed_peaks_mz)
-        @warn "No peaks were detected in any of the processed spectra. Skipping alignment and binning."
-        return
-    end
-
-    # --- Step 6: Peak Alignment ---
-    println("\n" * "="^20 * " Aligning Peaks " * "="^20)
-    aligned_peaks_mz = copy(all_processed_peaks_mz)
-    if PEAK_ALIGNMENT_PARAMS.enabled
-        # Create a reference peak list (e.g., from the spectrum with the most peaks)
-        ref_idx = argmax(length.(all_processed_peaks_mz))
-        reference_peaks = all_processed_peaks_mz[ref_idx]
-        println("Using spectrum $(spectrum_indices_with_peaks[ref_idx]) as alignment reference.")
-
-        for i in 1:length(aligned_peaks_mz)
-            if i == ref_idx continue end
-            alignment_func = align_peaks_lowess(reference_peaks, aligned_peaks_mz[i],
-                tolerance=PEAK_ALIGNMENT_PARAMS.tolerance,
-                tolerance_unit=PEAK_ALIGNMENT_PARAMS.tolerance_unit,
-                min_matched_peaks=PEAK_ALIGNMENT_PARAMS.min_matched_peaks)
-            
-            aligned_peaks_mz[i] = alignment_func(aligned_peaks_mz[i])
+    Threads.@threads for s in spectra
+        if validate_spectrum(s.mz, s.intensity)
+            smoothed_intensity = max.(0.0, smooth_spectrum(s.intensity; method=method, window=window, order=order))
+            s.intensity = smoothed_intensity
         end
-        println("Peak alignment complete.")
     end
+end
 
-    # --- Step 7: Peak Binning & Feature Matrix Generation ---
-    println("\n" * "="^20 * " Binning Peaks " * "="^20)
-    if PEAK_BINNING_PARAMS.enabled
-        feature_matrix, mz_bins = bin_peaks(aligned_peaks_mz, all_processed_peaks_int,
-            PEAK_BINNING_PARAMS.tolerance,
-            tolerance_unit=PEAK_BINNING_PARAMS.tolerance_unit,
-            frequency_threshold=PEAK_BINNING_PARAMS.frequency_threshold)
-        
-        if !isempty(feature_matrix)
-            df = DataFrame(feature_matrix, :auto)
-            rename!(df, ["bin_$(i)" for i in 1:size(df, 2)])
-            insertcols!(df, 1, :spectrum_idx => spectrum_indices_with_peaks)
-            
-            CSV.write(joinpath(RESULTS_DIR, "feature_matrix.csv"), df)
-            println("Feature matrix saved to feature_matrix.csv")
-            
-            # Save bin m/z ranges
-            bin_df = DataFrame(bin_index=1:length(mz_bins), mz_start=[b[1] for b in mz_bins], mz_end=[b[2] for b in mz_bins])
-            CSV.write(joinpath(RESULTS_DIR, "bin_definitions.csv"), bin_df)
-            println("Bin definitions saved to bin_definitions.csv")
+function apply_peak_picking(spectra::Vector{MutableSpectrum}, params::Dict)
+    print_step_header("Peak Picking")
+    
+    method = get(params, :method, :profile)
+    snr_threshold = get(params, :snr_threshold, 3.0)
+    half_window = get(params, :half_window, 10)
+    min_peak_prominence = get(params, :min_peak_prominence, 0.1)
+    merge_peaks_tolerance = get(params, :merge_peaks_tolerance, 0.002)
+    println("  Method: $method, SNR: $snr_threshold, Half Window: $half_window")
+
+    found_invalid_spectrum = Threads.Atomic{Bool}(false)
+
+    Threads.@threads for s in spectra
+        is_valid = validate_spectrum(s.mz, s.intensity)
+
+        if !is_valid && !found_invalid_spectrum[]
+            if Threads.atomic_xchg!(found_invalid_spectrum, true) == false
+                # Debug printing for the first invalid spectrum found
+            end
+        end
+
+        if is_valid
+            if method == :profile
+                s.peaks = detect_peaks_profile(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window, min_peak_prominence=min_peak_prominence, merge_peaks_tolerance=merge_peaks_tolerance)
+            elseif method == :wavelet
+                s.peaks = detect_peaks_wavelet(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window)
+            elseif method == :centroid
+                s.peaks = detect_peaks_centroid(s.mz, s.intensity; snr_threshold=snr_threshold)
+            else
+                s.peaks = detect_peaks_profile(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window)
+            end
         else
-            @warn "Feature matrix was empty after binning."
+            s.peaks = []
         end
     end
 
-    println("\nPreprocessing Test Suite finished successfully!")
+    # Safely plot the first spectrum
+    if !isempty(spectra)
+        s1 = findfirst(s -> s.id == 1, spectra)
+        if s1 !== nothing
+            plot_spectrum_step(spectra[s1].mz, spectra[s1].intensity, "peak_picking", peaks=spectra[s1].peaks)
+            println("  - Detected $(length(spectra[s1].peaks)) peaks in spectrum 1")
+        end
+    end
 end
 
+function apply_calibration(spectra::Vector{MutableSpectrum}, params::Dict, reference_peaks::Dict)
+    print_step_header("Calibration")
+    
+    method = get(params, :method, :none)
+    ppm_tolerance = get(params, :ppm_tolerance, 20.0)
+    println("  Method: $method, PPM Tolerance: $ppm_tolerance")
 
-# --- Execute ---
-run_preprocessing_suite()
+    if method == :none || isempty(reference_peaks)
+        println("  - Skipping calibration (no method or reference peaks)")
+        return
+    end
+
+    reference_masses = collect(keys(reference_peaks))
+    calibration_info = Vector{String}(undef, length(spectra))
+
+    Threads.@threads for i in 1:length(spectra)
+        s = spectra[i]
+        info_message = ""
+        if validate_spectrum(s.mz, s.intensity)
+            matched_peaks = find_calibration_peaks(s.mz, s.intensity, reference_masses; ppm_tolerance=ppm_tolerance)
+            if length(matched_peaks) >= 2
+                measured = sort(collect(values(matched_peaks)))
+                theoretical = sort(collect(keys(matched_peaks)))
+                itp = linear_interpolation(measured, theoretical, extrapolation_bc=Line())
+                s.mz = itp(s.mz) # Modify mz-axis in-place
+                info_message = "  - Spectrum $(s.id): calibrated using $(length(matched_peaks)) reference peaks"
+            else
+                info_message = "  - Spectrum $(s.id): insufficient reference peaks ($(length(matched_peaks)) found), skipping"
+            end
+        end
+        calibration_info[i] = info_message
+    end
+
+    # Print summary of results
+    printed_count = 0
+    for info in calibration_info
+        if !isempty(info) && printed_count < 5
+            println(info)
+            printed_count += 1
+        end
+    end
+end
+
+function apply_peak_alignment(spectra::Vector{MutableSpectrum}, params::Dict)
+    print_step_header("Peak Alignment")
+    
+    method = get(params, :method, :none)
+    tolerance = get(params, :tolerance, 0.002)
+    tolerance_unit = get(params, :tolerance_unit, :mz)
+    println("  Method: $method, Tolerance: $tolerance $tolerance_unit")
+
+    if method == :none
+        println("  - Skipping peak alignment")
+        return
+    end
+
+    ref_find_idx = findfirst(s -> !isempty(s.peaks), spectra)
+    if ref_find_idx === nothing
+        println("  - Insufficient spectra with peaks for alignment. Skipping.")
+        return
+    end
+
+    ref_spectrum = spectra[ref_find_idx]
+    ref_peaks_mz = [p.mz for p in ref_spectrum.peaks]
+    println("  - Using spectrum $(ref_spectrum.id) as reference with $(length(ref_peaks_mz)) peaks")
+
+    Threads.@threads for s in spectra
+        if s.id == ref_spectrum.id || isempty(s.peaks)
+            continue
+        end
+        
+        current_peaks_mz = [p.mz for p in s.peaks]
+        alignment_func = align_peaks_lowess(ref_peaks_mz, current_peaks_mz; method=method, tolerance=tolerance, tolerance_unit=tolerance_unit)
+        
+        s.mz = alignment_func.(s.mz) # Update m/z axis
+        
+        # Update peak m/z values
+        for i in 1:length(s.peaks)
+            old_peak = s.peaks[i]
+            aligned_peak_mz = alignment_func(old_peak.mz)
+            s.peaks[i] = (mz=aligned_peak_mz, intensity=old_peak.intensity, fwhm=old_peak.fwhm, shape_r2=old_peak.shape_r2, snr=old_peak.snr, prominence=old_peak.prominence)
+        end
+    end
+end
+
+function apply_normalization(spectra::Vector{MutableSpectrum}, params::Dict)
+    print_step_header("Normalization")
+    
+    method = get(params, :method, :tic)
+    println("  Method: $method")
+
+    # Safely plot the first spectrum
+    if !isempty(spectra)
+        s1 = findfirst(s -> s.id == 1, spectra)
+        if s1 !== nothing
+            s = spectra[s1]
+            if validate_spectrum(s.mz, s.intensity)
+                normalized_intensity = MSI_src.apply_normalization(s.intensity; method=method)
+                plot_spectrum_step(s.mz, normalized_intensity, "normalization")
+            end
+        end
+    end
+
+    Threads.@threads for s in spectra
+        if validate_spectrum(s.mz, s.intensity)
+            s.intensity = MSI_src.apply_normalization(s.intensity; method=method)
+        end
+    end
+end
+
+function apply_peak_binning(spectra::Vector{MutableSpectrum}, params::Dict)
+    print_step_header("Peak Binning")
+    
+    method = get(params, :method, :adaptive)
+    tolerance = get(params, :tolerance, 20.0)
+    tolerance_unit = get(params, :tolerance_unit, :ppm)
+    min_peak_per_bin = get(params, :min_peak_per_bin, 3)
+    max_bin_width_ppm = get(params, :max_bin_width_ppm, 150.0)
+    intensity_weighted_centers = get(params, :intensity_weighted_centers, true)
+    println("  Method: $method, Tolerance: $tolerance $tolerance_unit")
+
+    if isempty(spectra) || all(s -> isempty(s.peaks), spectra)
+        @warn "No peaks found for binning. Returning empty feature matrix."
+        return nothing, nothing
+    end
+    
+    println("  - Binning peaks from $(length(spectra)) spectra")
+    
+    binning_params = PeakBinningParams(
+        method=method,
+        tolerance=tolerance,
+        tolerance_unit=tolerance_unit,
+        min_peak_per_bin=min_peak_per_bin,
+        max_bin_width_ppm=max_bin_width_ppm,
+        intensity_weighted_centers=intensity_weighted_centers
+    )
+    
+    feature_matrix, bin_definitions = bin_peaks(spectra, binning_params)
+    
+    if feature_matrix !== nothing && bin_definitions !== nothing
+        println("  - Generated feature matrix: $(size(feature_matrix.matrix))")
+        println("  - Number of bins: $(length(bin_definitions))")
+    end
+    
+    return feature_matrix, bin_definitions
+end
+
+function save_feature_matrix(feature_matrix, bin_definitions)
+    print_step_header("Saving Results")
+    
+    # Save feature matrix as CSV
+    csv_path = joinpath(OUTPUT_DIR, "feature_matrix.csv")
+    
+    # Create column headers
+    bin_headers = ["bin_$(i)_$(round(def[1], digits=4))-$(round(def[2], digits=4))" 
+                         for (i, def) in enumerate(bin_definitions)]
+    
+    # Open file for writing
+    open(csv_path, "w") do io
+        # Write header row
+        write(io, "spectrum_index," * join(bin_headers, ",") * "\n")
+        
+        # Write data rows
+        for r_idx in 1:size(feature_matrix.matrix, 1)
+            write(io, "$(feature_matrix.sample_ids[r_idx]),")
+            for c_idx in 1:size(feature_matrix.matrix, 2)
+                write(io, "$(feature_matrix.matrix[r_idx, c_idx])")
+                if c_idx < size(feature_matrix.matrix, 2)
+                    write(io, ",")
+                end
+            end
+            write(io, "\n")
+        end
+    end
+    println("  - Saved feature matrix: $csv_path")
+    
+    # Save bin definitions (still using DataFrame as it's small)
+    bins_path = joinpath(OUTPUT_DIR, "bin_definitions.csv")
+    bins_df = DataFrame(
+        bin_index = 1:length(bin_definitions),
+        mz_start = [def[1] for def in bin_definitions],
+        mz_end = [def[2] for def in bin_definitions],
+        mz_center = [(def[1] + def[2])/2 for def in bin_definitions]
+    )
+    CSV.write(bins_path, bins_df)
+    println("  - Saved bin definitions: $bins_path")
+    
+    return csv_path, bins_path
+end
+
+# ===================================================================
+# USER OVERRIDES: Manually specify parameters here
+# ===================================================================
+# This dictionary allows you to override any auto-detected parameters.
+# The structure should match the output of `main_precalculation`.
+# Example: Force a less aggressive peak prominence threshold.
+const USER_OVERRIDES = Dict(
+    :PeakPicking => Dict(
+        #:snr_threshold => 1.5,
+        :half_window => 5,
+        :snr_threshold => 15.0,
+        #:merge_peaks_tolerance => 2.5,
+        #:half_window => 2
+    ),
+    # :Smoothing => Dict(
+    #     :window => 11
+    # )
+    #:PeakAlignment => Dict(
+    #    :tolerance => 0.01
+    #)
+    :PeakBinningParams => Dict(
+        :tolerance => 30.0
+    )
+)
+
+# ===================================================================
+# MAIN PREPROCESSING PIPELINE
+# ===================================================================
+
+function run_preprocessing_pipeline()
+    println("="^80)
+    println("MSI PREPROCESSING PIPELINE")
+    println("="^80)
+    
+    # Ensure output directory exists
+    ensure_output_dir()
+    
+    # Load data
+    println("\nLoading data: $(basename(TEST_FILE))")
+    msi_data = OpenMSIData(TEST_FILE)
+
+    # Precompute analytics
+    println("\nPrecomputing analytics...")
+    precompute_analytics(msi_data)
+    
+    # Run precalculation to get automatic parameters
+    println("\nRunning precalculation for automatic parameter determination...")
+    auto_params = main_precalculation(msi_data, reference_peaks=reference_peaks, mask_path=MASK_ROUTE)
+    
+    # --- Apply User Overrides ---
+    if !isempty(USER_OVERRIDES)
+        println("\nApplying user overrides...")
+        for (step, params) in USER_OVERRIDES
+            if haskey(auto_params, step)
+                for (param, value) in params
+                    @info "OVERRIDE: For step `:$step`, setting `:$param` to `$value` (was `$(get(auto_params[step], param, "not set"))`)"
+                end
+                merge!(auto_params[step], params)
+            else
+                @warn "User override for non-existent step `:$step` ignored."
+            end
+        end
+    end
+
+    # --- Final Parameter Summary ---
+    println("\n" * "-"^60)
+    println("FINAL PARAMETERS FOR PIPELINE RUN")
+    println("-"^60)
+    for (step, params) in sort(collect(pairs(auto_params)), by=p -> p.first)
+        println("  - Step: $step")
+        if isempty(params)
+            println("    (No parameters)")
+            continue
+        end
+        for (param, value) in sort(collect(pairs(params)), by=p -> p.first)
+            println("    - $(rpad(param, 25)): $value")
+        end
+    end
+    
+    # Define pipeline steps
+    pipeline_steps = [
+        "baseline_correction",
+        "smoothing", 
+        "peak_picking",
+        "calibration",
+        "peak_alignment",
+        "normalization",
+        "peak_binning"
+    ]
+    
+    println("\nPipeline steps: $(join(pipeline_steps, " -> "))")
+    
+    # Initialize `current_spectra` as a Vector of mutable structs for in-place modification
+    println("\nInitializing spectra data structure...")
+    num_spectra = length(msi_data.spectra_metadata)
+    current_spectra = Vector{MutableSpectrum}(undef, num_spectra)
+    _iterate_spectra_fast(msi_data) do idx, mz, intensity
+        current_spectra[idx] = MutableSpectrum(idx, mz, intensity, [])
+        
+        # Plot raw spectrum without masks
+        if idx == 1
+            plot_spectrum_step(mz, intensity, "raw_unmasked_spectrum")
+        end
+    end
+    
+    # These variables will be populated by the pipeline steps
+    feature_matrix = nothing
+    bin_definitions = nothing
+
+    # Apply pipeline steps, modifying `current_spectra` in-place
+    for step in pipeline_steps
+        println("\n" * "-"^60)
+        println("PROCESSING STEP: $step")
+        println("-"^60)
+        
+        if step == "baseline_correction"
+            @time apply_baseline_correction(current_spectra, auto_params[:BaselineCorrection], msi_data)
+            
+        elseif step == "smoothing"
+            apply_smoothing(current_spectra, auto_params[:Smoothing])
+            
+        elseif step == "peak_picking"
+            @time apply_peak_picking(current_spectra, auto_params[:PeakPicking])
+            
+        elseif step == "calibration"
+            @time apply_calibration(current_spectra, auto_params[:Calibration], reference_peaks)
+            
+        elseif step == "peak_alignment"
+            @time apply_peak_alignment(current_spectra, auto_params[:PeakAlignment])
+            
+        elseif step == "normalization"
+            @time apply_normalization(current_spectra, auto_params[:Normalization])
+            
+        elseif step == "peak_binning"
+            # This step is different as it generates the final matrix, not modifying spectra in-place
+            feature_matrix, bin_definitions = @time apply_peak_binning(current_spectra, auto_params[:PeakBinningParams])
+            
+            if feature_matrix !== nothing
+                @time save_feature_matrix(feature_matrix, bin_definitions)
+            end
+            
+        else
+            @warn "Unknown step: $step, skipping"
+        end
+        
+        # Print progress
+        println("✓ Completed step: $step")
+    end
+    
+    # Clean up
+    close(msi_data)
+    GC.gc()
+    
+    println("\n" * "="^80)
+    println("PREPROCESSING PIPELINE COMPLETED SUCCESSFULLY!")
+    println("Results saved to: $OUTPUT_DIR")
+    println("="^80)
+end
+
+# ===================================================================
+# EXECUTE PIPELINE
+# ===================================================================
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    @time run_preprocessing_pipeline()
+end

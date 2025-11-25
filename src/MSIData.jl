@@ -6,7 +6,7 @@ including caching and iteration logic, for handling large mzML and imzML dataset
 efficiently.
 """
 
-using Base64, Libz, Serialization, Printf, DataFrames, Base.Threads # For reading binary data
+using Base64, Libz, Serialization, Printf, DataFrames, Base.Threads, StatsBase # For reading binary data
 
 const FILE_HANDLE_LOCK = ReentrantLock()
 
@@ -28,21 +28,22 @@ function ThreadSafeFileHandle(path::String, mode::String="r")
     return ThreadSafeFileHandle(path, handle, ReentrantLock())
 end
 
-function Base.seek(tsfh::ThreadSafeFileHandle, pos::Integer)
+"""
+    read_at!(tsfh::ThreadSafeFileHandle, a::AbstractArray, pos::Integer)
+
+Atomically seeks to a position and reads data into an array. This is the thread-safe
+way to read from a specific offset in the file.
+"""
+function read_at!(tsfh::ThreadSafeFileHandle, a::AbstractArray, pos::Integer)
     lock(tsfh.lock) do
         seek(tsfh.handle, pos)
+        read!(tsfh.handle, a)
     end
 end
 
 function Base.read(tsfh::ThreadSafeFileHandle, n::Integer)
     lock(tsfh.lock) do
         return read(tsfh.handle, n)
-    end
-end
-
-function Base.read!(tsfh::ThreadSafeFileHandle, a::AbstractArray)
-    lock(tsfh.lock) do
-        return read!(tsfh.handle, a)
     end
 end
 
@@ -63,6 +64,20 @@ end
 function Base.filesize(tsfh::ThreadSafeFileHandle)
     lock(tsfh.lock) do
         return filesize(tsfh.handle)
+    end
+end
+
+# Overload Base.seek for ThreadSafeFileHandle
+function Base.seek(tsfh::ThreadSafeFileHandle, pos::Integer)
+    lock(tsfh.lock) do
+        seek(tsfh.handle, pos)
+    end
+end
+
+# Overload Base.read! for ThreadSafeFileHandle
+function Base.read!(tsfh::ThreadSafeFileHandle, a::AbstractArray)
+    lock(tsfh.lock) do
+        read!(tsfh.handle, a)
     end
 end
 
@@ -132,6 +147,50 @@ An enum representing the type of a spectrum's data.
 @enum SpectrumMode CENTROID=1 PROFILE=2 UNKNOWN=3
 
 """
+    InstrumentMetadata
+
+Contains metadata about the instrument configuration and acquisition parameters.
+This information is parsed from the file header and is crucial for guiding
+preprocessing steps.
+
+# Fields
+- `resolution`: Instrument resolution at a specific m/z, if available.
+- `acquisition_mode`: The overall data acquisition mode (`:profile`, `:centroid`, or `:mixed`).
+- `mz_axis_type`: The nature of the m/z axis (`:regular`, `:irregular`, `:mixed`).
+- `calibration_status`: The calibration state of the data (`:internal`, `:external`, `:uncalibrated`).
+- `instrument_model`: The vendor and model of the instrument.
+- `mass_accuracy_ppm`: Manufacturer-specified mass accuracy in parts-per-million.
+- `laser_settings`: A dictionary of MSI-specific laser parameters.
+- `polarity`: The polarity of the acquisition (`:positive`, `:negative`, `:unknown`).
+"""
+struct InstrumentMetadata
+    resolution::Union{Float64, Nothing}
+    acquisition_mode::Symbol
+    mz_axis_type::Symbol
+    calibration_status::Symbol
+    instrument_model::String
+    mass_accuracy_ppm::Union{Float64, Nothing}
+    laser_settings::Union{Dict, Nothing}
+    polarity::Symbol
+    vendor_preprocessing_steps::Union{Vector{String}, Nothing} # New field for provenance
+end
+
+# Default constructor for initializing with unknown values
+function InstrumentMetadata()
+    return InstrumentMetadata(
+        nothing,        # resolution
+        :unknown,       # acquisition_mode
+        :unknown,       # mz_axis_type
+        :uncalibrated,  # calibration_status
+        "Not Available",# instrument_model
+        nothing,        # mass_accuracy_ppm
+        nothing,        # laser_settings
+        :unknown,       # polarity
+        nothing         # vendor_preprocessing
+    )
+end
+
+"""
     SpectrumMetadata
 
 Contains all metadata for a single spectrum, common to both imzML and mzML formats.
@@ -150,6 +209,7 @@ struct SpectrumMetadata
     
     # For mzML
     id::String
+    type::Symbol # NEW: e.g., :sample, :blank, :qc
 
     mode::SpectrumMode
     # Common binary data info
@@ -180,6 +240,7 @@ efficient repeated access to spectra.
 mutable struct MSIData
     source::MSDataSource
     spectra_metadata::Vector{SpectrumMetadata}
+    instrument_metadata::Union{InstrumentMetadata, Nothing}
     image_dims::Tuple{Int, Int}
     coordinate_map::Union{Matrix{Int}, Nothing}
 
@@ -198,13 +259,14 @@ mutable struct MSIData
     spectrum_stats_df::Union{DataFrame, Nothing}
     bloom_filters::Union{Vector{<:BloomFilter}, Nothing}
     analytics_ready::AtomicFlag
+    preprocessing_hints::Union{Dict{Symbol, Any}, Nothing} # For auto-determined parameters
 
-    function MSIData(source, metadata, dims, coordinate_map, cache_size)
-        obj = new(source, metadata, dims, coordinate_map, 
+    function MSIData(source, metadata, instrument_meta, dims, coordinate_map, cache_size)
+        obj = new(source, metadata, instrument_meta, dims, coordinate_map, 
                   Dict(), [], cache_size, ReentrantLock(),
                   SimpleBufferPool(),
                   Threads.Atomic{Float64}(Inf), Threads.Atomic{Float64}(-Inf), 
-                  nothing, nothing, AtomicFlag())
+                  nothing, nothing, AtomicFlag(), nothing)
         
         # Ensure file handles are closed when the object is garbage collected
         finalizer(obj) do o
@@ -407,15 +469,16 @@ function read_binary_vector(data::MSIData, io::IO, asset::SpectrumAsset)
     
     # Calculate number of elements
     n_elements = length(decoded_bytes) ÷ sizeof(asset.format)
-    out_array = Vector{asset.format}(undef, n_elements)
-    
-    # Use unsafe_wrap to avoid copy - this is the critical optimization
-    temp_array = unsafe_wrap(Vector{asset.format}, pointer(decoded_bytes), n_elements)
-    
-    # Convert byte order in-place
-    @inbounds for i in 1:n_elements
-        out_array[i] = ltoh(temp_array[i])
+
+    if n_elements * sizeof(asset.format) != length(decoded_bytes)
+        throw(FileFormatError("Size of decoded byte array is not a multiple of the element size."))
     end
+    
+    # Reinterpret the byte array as an array of the target type. This does not copy.
+    reinterpreted_array = reinterpret(asset.format, decoded_bytes)
+    
+    # Allocate the final output array and convert byte order while copying.
+    out_array = [ltoh(x) for x in reinterpreted_array]
     
     return out_array
 end
@@ -442,28 +505,18 @@ and converting it from little-endian to the host's native byte order.
 - A tuple `(mz, intensity)` containing the two requested data arrays.
 """
 function read_spectrum_from_disk(source::ImzMLSource, meta::SpectrumMetadata)
-    # For imzML, the binary data is raw, not base64 encoded. 
+    # For imzML, the binary data is raw, not base64 encoded.
     # The `encoded_length` field in this case holds the number of points.
     mz = Array{source.mz_format}(undef, meta.mz_asset.encoded_length)
     intensity = Array{source.intensity_format}(undef, meta.int_asset.encoded_length)
 
-    # FIX: Read arrays in the order they appear in the file for efficiency,
-    # but ensure we seek to the correct offset for both.
-    if meta.mz_asset.offset < meta.int_asset.offset
-        seek(source.ibd_handle, meta.mz_asset.offset)
-        read!(source.ibd_handle, mz)
-        seek(source.ibd_handle, meta.int_asset.offset)
-        read!(source.ibd_handle, intensity)
-    else
-        seek(source.ibd_handle, meta.int_asset.offset)
-        read!(source.ibd_handle, intensity)
-        seek(source.ibd_handle, meta.mz_asset.offset)
-        read!(source.ibd_handle, mz)
-    end
+    # Use the new atomic read_at! method for thread-safety
+    read_at!(source.ibd_handle, mz, meta.mz_asset.offset)
+    read_at!(source.ibd_handle, intensity, meta.int_asset.offset)
 
     # imzML data is little-endian. Convert to host byte order.
     mz .= ltoh.(mz)
-    intensity .= ltoh.(intensity) # FIX: Added missing conversion for intensity
+    intensity .= ltoh.(intensity)
 
     validate_spectrum_data(mz, intensity, meta.id) 
 
@@ -733,6 +786,25 @@ function precompute_analytics(msi_data::MSIData)
         g_min_mz = minimum(thread_local_min_mz)
         g_max_mz = maximum(thread_local_max_mz)
 
+        # Only update if we found valid ranges
+        if isfinite(g_min_mz) && isfinite(g_max_mz) && g_min_mz < g_max_mz
+            Threads.atomic_xchg!(msi_data.global_min_mz, g_min_mz)
+            Threads.atomic_xchg!(msi_data.global_max_mz, g_max_mz)
+        else
+            # Fallback: calculate from first spectrum
+            try
+                if num_spectra > 0
+                    mz, _ = GetSpectrum(msi_data, 1)
+                    if !isempty(mz)
+                        Threads.atomic_xchg!(msi_data.global_min_mz, minimum(mz))
+                        Threads.atomic_xchg!(msi_data.global_max_mz, maximum(mz))
+                    end
+                end
+            catch e
+                @warn "Could not determine global m/z range from first spectrum: $e"
+            end
+        end
+        
         # Create results
         computed_stats_df = DataFrame(
             SpectrumID = 1:num_spectra,
@@ -744,10 +816,6 @@ function precompute_analytics(msi_data::MSIData)
             MaxMZ = max_mzs,
             Mode = modes
         )
-        
-        # Set atomic values
-        Threads.atomic_xchg!(msi_data.global_min_mz, g_min_mz)
-        Threads.atomic_xchg!(msi_data.global_max_mz, g_max_mz)
         
         # Set other data
         msi_data.spectrum_stats_df = computed_stats_df
@@ -1478,32 +1546,5 @@ function get_bloom_filter(data::MSIData, index::Int)::BloomFilter{Int}
         end
         
         return data.bloom_filters[index]
-    end
-end
-
-"""
-    monitor_memory_usage(phase::String)
-
-Utility function to print current memory usage (allocated bytes and RSS)
-at different phases of execution.
-
-# Arguments
-- `phase`: A string describing the current phase (e.g., "Initialization", "Processing chunk 1").
-"""
-function monitor_memory_usage(phase::String)
-    # Use Julia's internal memory tracking
-    bytes_allocated = Base.gc_bytes()
-    mb_allocated = bytes_allocated / 1024^2
-    
-    # Get process memory from system
-    if Sys.islinux()
-        proc_status = read("/proc/self/status", String)
-        vm_rss_match = match(r"VmRSS:\s*(\d+)\s*kB", proc_status)
-        if vm_rss_match !== nothing
-            vm_rss_mb = parse(Int, vm_rss_match[1]) / 1024
-            @printf "[%s] Memory: %.2f MB allocated, %.2f MB RSS\n" phase mb_allocated vm_rss_mb
-        end
-    else
-        @printf "[%s] Memory: %.2f MB allocated\n" phase mb_allocated
     end
 end

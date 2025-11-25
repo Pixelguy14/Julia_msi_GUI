@@ -19,6 +19,107 @@ const DATA_FORMAT_ACCESSIONS = Dict{String, DataType}(
     "MS:1000523" => Float64
 )
 
+function parse_instrument_metadata_mzml(stream::IO)
+    # Initialize with default values from the InstrumentMetadata constructor
+    instrument_meta = InstrumentMetadata()
+    
+    # Create temporary variables to hold parsed values
+    resolution = instrument_meta.resolution
+    instrument_model = instrument_meta.instrument_model
+    mass_accuracy_ppm = instrument_meta.mass_accuracy_ppm
+    polarity = instrument_meta.polarity
+    calibration_status = instrument_meta.calibration_status
+    laser_settings = Dict{String, Any}() # Use Any for heterogeneous values
+    vendor_preprocessing_steps = String[] # Initialize vendor_preprocessing_steps
+
+    try
+        # Reset stream and read a sufficiently large header block to find metadata.
+        seekstart(stream)
+        header_block = ""
+        header_read_limit = 50000 # Read up to 50KB of header
+        bytes_read = 0
+        
+        while !eof(stream) && bytes_read < header_read_limit
+            line_pos = position(stream)
+            line = readline(stream)
+            bytes_read += (position(stream) - line_pos)
+            
+            # Stop at the start of the main data section
+            if occursin("<run>", line) || occursin("<spectrumList>", line)
+                break
+            end
+            header_block *= line * "\n"
+        end
+
+        header_io = IOBuffer(header_block)
+        while !eof(header_io)
+            line = readline(header_io)
+            
+            if occursin("<cvParam", line)
+                accession_match = get_attribute(line, "accession")
+                value_match = get_attribute(line, "value")
+                name_match = get_attribute(line, "name") # For laser attributes and vendor_preprocessing names
+                
+                if accession_match !== nothing
+                    acc = accession_match.captures[1]
+                    val = (value_match !== nothing) ? value_match.captures[1] : ""
+                    name = (name_match !== nothing) ? name_match.captures[1] : "" # NEW: Get name for logging
+
+                    if acc == "MS:1000031" # instrument model
+                        instrument_model = val
+                    elseif acc == "MS:1001496" # mass resolving power (more specific)
+                        resolution = tryparse(Float64, val)
+                    elseif acc == "MS:1000011" && resolution === nothing # resolution (less specific)
+                        resolution = tryparse(Float64, val)
+                    elseif acc == "MS:1000016" # mass accuracy (ppm)
+                        mass_accuracy_ppm = tryparse(Float64, val)
+                    elseif acc == "MS:1000130" # positive scan
+                        polarity = :positive
+                    elseif acc == "MS:1000129" # negative scan
+                        polarity = :negative
+                    elseif acc == "MS:1000592" # external calibration
+                        calibration_status = :external
+                    elseif acc == "MS:1000593" # internal calibration
+                        calibration_status = :internal
+                    elseif acc == "MS:1000747" && calibration_status == :uncalibrated # instrument specific calibration
+                        calibration_status = :internal # Assume as a form of internal calibration
+                    elseif acc == "MS:1000867" # laser wavelength
+                        laser_settings["wavelength_nm"] = tryparse(Float64, val)
+                    elseif acc == "MS:1000868" # laser fluence
+                        laser_settings["fluence"] = tryparse(Float64, val)
+                    elseif acc == "MS:1000869" # laser repetition rate
+                        laser_settings["repetition_rate_hz"] = tryparse(Float64, val)
+                    # NEW: Vendor Preprocessing terms
+                    elseif acc == "MS:1000579" # baseline correction
+                        push!(vendor_preprocessing_steps, "Baseline Correction")
+                    elseif acc == "MS:1000580" # smoothing
+                        push!(vendor_preprocessing_steps, "Smoothing")
+                    elseif acc == "MS:1000578" # data transformation (e.g., centroiding)
+                        push!(vendor_preprocessing_steps, "Data Transformation: $(name)")
+                    elseif acc == "MS:1000800" # deisotoping
+                        push!(vendor_preprocessing_steps, "Deisotoping")
+                    end
+                end
+            end
+        end
+    catch e
+        @warn "Could not fully parse instrument metadata from mzML header. Using defaults. Error: $e"
+    end
+    
+    # Always return a valid object
+    return InstrumentMetadata(
+        resolution,
+        instrument_meta.acquisition_mode, # To be determined by load_mzml_lazy
+        instrument_meta.mz_axis_type,
+        calibration_status,
+        instrument_model,
+        mass_accuracy_ppm,
+        isempty(laser_settings) ? nothing : laser_settings,
+        polarity,
+        isempty(vendor_preprocessing_steps) ? nothing : vendor_preprocessing_steps # NEW field
+    )
+end
+
 """
     get_spectrum_asset_metadata(stream::IO)
 
@@ -149,7 +250,7 @@ function parse_spectrum_metadata(stream::IO, offset::Int64)
 
     # Create the new unified metadata object
     # For mzML, x and y coordinates are not applicable, so we use 0.
-    return SpectrumMetadata(Int32(0), Int32(0), id, mode, mz_asset, int_asset)
+    return SpectrumMetadata(Int32(0), Int32(0), id, :sample, mode, mz_asset, int_asset)
 end
 
 """
@@ -231,6 +332,22 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
     ts_stream = ThreadSafeFileHandle(file_path, "r")
 
     try
+        # --- NEW: Parse instrument metadata from header ---
+        println("DEBUG: Parsing instrument metadata from header...")
+        instrument_meta = parse_instrument_metadata_mzml(ts_stream.handle)
+
+        println("--- Extracted Instrument Metadata ---")
+        println("Resolution: ", instrument_meta.resolution)
+        println("Acquisition Mode (pre-check): ", instrument_meta.acquisition_mode)
+        println("Calibration Status: ", instrument_meta.calibration_status)
+        println("Instrument Model: ", instrument_meta.instrument_model)
+        println("Mass Accuracy (ppm): ", instrument_meta.mass_accuracy_ppm)
+        println("Laser Settings: ", instrument_meta.laser_settings)
+        println("Polarity: ", instrument_meta.polarity)
+        println("------------------------------------")
+
+        seekstart(ts_stream.handle) # Reset stream after header parsing
+
         println("DEBUG: Finding index offset...")
         index_offset = find_index_offset(ts_stream.handle)
         println("DEBUG: Seeking to index list at offset $index_offset.")
@@ -270,9 +387,36 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         mz_format = first_meta.mz_asset.format
         intensity_format = first_meta.int_asset.format
         
+        # --- NEW: Determine overall acquisition mode ---
+        modes = [meta.mode for meta in spectra_metadata]
+        num_centroid = count(m -> m == CENTROID, modes)
+        num_profile = count(m -> m == PROFILE, modes)
+        
+        acq_mode_symbol = if num_centroid > 0 && num_profile == 0
+            :centroid
+        elseif num_profile > 0 && num_centroid == 0
+            :profile
+        elseif num_centroid > 0 && num_profile > 0
+            :mixed
+        else
+            :unknown
+        end
+
+        final_instrument_meta = InstrumentMetadata(
+            instrument_meta.resolution,
+            acq_mode_symbol, # Update with parsed mode
+            instrument_meta.mz_axis_type,
+            instrument_meta.calibration_status,
+            instrument_meta.instrument_model,
+            instrument_meta.mass_accuracy_ppm,
+            instrument_meta.laser_settings,
+            instrument_meta.polarity,
+            instrument_meta.vendor_preprocessing_steps # Add this new field
+        )
+
         source = MzMLSource(ts_stream, mz_format, intensity_format)
         println("DEBUG: Creating MSIData object.")
-        return MSIData(source, spectra_metadata, (0, 0), nothing, cache_size)
+        return MSIData(source, spectra_metadata, final_instrument_meta, (0, 0), nothing, cache_size)
 
     catch e
         close(ts_stream) # Ensure stream is closed on error

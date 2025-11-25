@@ -17,6 +17,134 @@ Core Functions:
 #
 # ============================================================================
 
+function parse_imzml_header(stream::IO)
+    # Initialize all return values and temporary variables
+    instrument_meta = InstrumentMetadata()
+    param_groups = Dict{String, SpecDim}()
+    img_dims = zeros(Int32, 3)
+    vendor_preprocessing_steps = String[] # Initialize vendor_preprocessing_steps
+
+    # Temp vars for parsing
+    resolution = instrument_meta.resolution
+    instrument_model = instrument_meta.instrument_model
+    mass_accuracy_ppm = instrument_meta.mass_accuracy_ppm
+    polarity = instrument_meta.polarity
+    calibration_status = instrument_meta.calibration_status
+    laser_settings = Dict{String, Any}()
+
+    try
+        seekstart(stream)
+        
+        in_scan_settings = false
+        dim_axes_found = 0
+        found_spectrum_count = false
+
+        # This loop performs a single pass to get most metadata
+        while !eof(stream)
+            line = readline(stream)
+
+            # State-machine like logic to enter/exit sections
+            if occursin("<scanSettings", line)
+                in_scan_settings = true
+            elseif occursin("</scanSettings>", line)
+                in_scan_settings = false
+            end
+            
+            # --- Parse Scan Settings for Image Dimensions ---
+            if in_scan_settings && occursin("<cvParam", line) && dim_axes_found < 2
+                accession_match = get_attribute(line, "accession")
+                if accession_match !== nothing
+                    accession = accession_match.captures[1]
+                    if accession == "IMS:1000042" || accession == "IMS:1000043" # max dimension x or y
+                        value_match = get_attribute(line, "value")
+                        if value_match !== nothing
+                            axis_idx = (accession == "IMS:1000042") ? 1 : 2
+                            img_dims[axis_idx] = parse(Int32, value_match.captures[1])
+                            dim_axes_found += 1
+                        end
+                    end
+                end
+            end
+
+            # --- Parse Spectrum List for total count ---
+            if occursin("<spectrumList", line)
+                count_match = get_attribute(line, "count")
+                if count_match !== nothing
+                    img_dims[3] = parse(Int32, count_match.captures[1])
+                    found_spectrum_count = true
+                end
+            end
+
+            # --- Parse general CV params for InstrumentMetadata ---
+            if occursin("<cvParam", line)
+                accession_match = get_attribute(line, "accession")
+                value_match = get_attribute(line, "value")
+                name_match = get_attribute(line, "name") # For laser attributes and vendor_preprocessing names
+                
+                if accession_match !== nothing
+                    acc = accession_match.captures[1]
+                    val = (value_match !== nothing) ? value_match.captures[1] : ""
+                    cv_name = (name_match !== nothing) ? name_match.captures[1] : "" # Use cv_name to avoid conflict
+
+                    if acc == "MS:1000031" # instrument model
+                        instrument_model = val
+                    elseif acc == "MS:1001496" # mass resolving power (more specific)
+                        resolution = tryparse(Float64, val)
+                    elseif acc == "MS:1000011" && resolution === nothing # resolution (less specific)
+                        resolution = tryparse(Float64, val)
+                    elseif acc == "MS:1000016" # mass accuracy (ppm)
+                        mass_accuracy_ppm = tryparse(Float64, val)
+                    elseif acc == "MS:1000130" # positive scan
+                        polarity = :positive
+                    elseif acc == "MS:1000129" # negative scan
+                        polarity = :negative
+                    elseif acc == "MS:1000592" # external calibration
+                        calibration_status = :external
+                    elseif acc == "MS:1000593" # internal calibration
+                        calibration_status = :internal
+                    elseif acc == "MS:1000747" && calibration_status == :uncalibrated # instrument specific calibration
+                        calibration_status = :internal # Assume as a form of internal calibration
+                    elseif acc == "MS:1000867" # laser wavelength
+                        laser_settings["wavelength_nm"] = tryparse(Float64, val)
+                    elseif acc == "MS:1000868" # laser fluence
+                        laser_settings["fluence"] = tryparse(Float64, val)
+                    elseif acc == "MS:1000869" # laser repetition rate
+                        laser_settings["repetition_rate_hz"] = tryparse(Float64, val)
+                    # NEW: Vendor Preprocessing terms
+                    elseif acc == "MS:1000579" # baseline correction
+                        push!(vendor_preprocessing_steps, "Baseline Correction")
+                    elseif acc == "MS:1000580" # smoothing
+                        push!(vendor_preprocessing_steps, "Smoothing")
+                    elseif acc == "MS:1000578" # data transformation (e.g., centroiding)
+                        push!(vendor_preprocessing_steps, "Data Transformation: $(cv_name)") # Use cv_name here
+                    elseif acc == "MS:1000800" # deisotoping
+                        push!(vendor_preprocessing_steps, "Deisotoping")
+                    end
+                end
+            end
+            
+            if found_spectrum_count && dim_axes_found == 2
+                 break
+            end
+        end
+    catch e
+        @warn "Could not fully parse imzML header in single pass. Error: $e"
+    end
+
+    # The axes_config_img logic is complex to merge; we run it as a second, small pass.
+    seekstart(stream)
+    param_groups = axes_config_img(stream)
+
+    final_instrument_meta = InstrumentMetadata(
+        resolution, :unknown, :unknown, calibration_status,
+        instrument_model, mass_accuracy_ppm,
+        isempty(laser_settings) ? nothing : laser_settings,
+        polarity,
+        isempty(vendor_preprocessing_steps) ? nothing : vendor_preprocessing_steps # NEW field
+    )
+    return (final_instrument_meta, param_groups, img_dims)
+end
+
 """
     axes_config_img(stream)
 
@@ -42,40 +170,6 @@ function axes_config_img(stream::IO)
         end
     end
     return param_groups
-end
-
-"""
-    get_img_dimensions(stream)
-
-Reads the maximum X and Y dimensions and total spectrum count from the metadata.
-"""
-function get_img_dimensions(stream::IO)
-    find_tag(stream, r"^\s*<(scanSettings )")
-    n = 2
-    dim = zeros(Int32, 3)
-
-    while n > 0 && !eof(stream)
-        currLine = readline(stream)
-        if occursin("<cvParam", currLine)
-            accession_match = get_attribute(currLine, "accession")
-            if accession_match !== nothing
-                accession = accession_match.captures[1]
-                if accession == "IMS:1000042" || accession == "IMS:1000043"
-                    value_match = get_attribute(currLine, "value")
-                    if value_match !== nothing
-                        axis_idx = (accession == "IMS:1000042") ? 1 : 2
-                        dim[axis_idx] = parse(Int32, value_match.captures[1])
-                        n -= 1
-                    end
-                end
-            end
-        end
-    end
-
-    count_tag = find_tag(stream, r"^\s*<spectrumList(.+)")
-    count_match = get_attribute(count_tag.captures[1], "count")
-    dim[3] = parse(Int32, count_match.captures[1])
-    return dim
 end
 
 """
@@ -176,16 +270,12 @@ function determine_parser(stream::IO, mz_is_compressed::Bool, int_is_compressed:
                                 occursin("IMS:1000103", spectrum_xml)
 
     if has_neofx_markers
-        return :neofx
-    end
-    
-    if mz_is_compressed || int_is_compressed || has_external_data_markers
-        return :compressed
-    end
-
-    return :uncompressed
-end
-
+                    return :neofx
+                end
+                
+                # If not neofx, it must be compressed (as uncompressed path is no longer supported)
+                return :compressed 
+            end
 function load_imzml_lazy(file_path::String; cache_size::Int=100)
     println("DEBUG: Checking for .imzML file at $file_path")
     if !isfile(file_path)
@@ -203,10 +293,21 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
     ts_hIbd = ThreadSafeFileHandle(ibd_path)
 
     try
-        println("DEBUG: Configuring axes...")
-        param_groups = axes_config_img(stream)
-        println("DEBUG: Getting image dimensions...")
-        imgDim = get_img_dimensions(stream)
+        # --- NEW: Parse all header information in a more efficient single pass ---
+        println("DEBUG: Parsing imzML header...")
+        (instrument_meta, param_groups, imgDim) = parse_imzml_header(stream)
+        # The header parser will have reset the stream for the next step (spectrum parsing)
+
+        println("--- Extracted Instrument Metadata ---")
+        println("Resolution: ", instrument_meta.resolution)
+        println("Acquisition Mode (pre-check): ", instrument_meta.acquisition_mode)
+        println("Calibration Status: ", instrument_meta.calibration_status)
+        println("Instrument Model: ", instrument_meta.instrument_model)
+        println("Mass Accuracy (ppm): ", instrument_meta.mass_accuracy_ppm)
+        println("Laser Settings: ", instrument_meta.laser_settings)
+        println("Polarity: ", instrument_meta.polarity)
+        println("------------------------------------")
+
         width, height, num_spectra = imgDim
         println("DEBUG: Image dimensions: $(width)x$(height), $num_spectra spectra.")
 
@@ -251,19 +352,6 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
             spectra_metadata = parse_neofx(stream, ts_hIbd, param_groups, width, height, num_spectra, 
                                            default_mz_format, default_intensity_format, 
                                            mz_is_compressed, int_is_compressed, global_mode)
-        #=
-        elseif parser_type == :compressed
-            println("DEBUG: Using compressed parser.")
-            spectra_metadata = parse_compressed(stream, hIbd, param_groups, width, height, num_spectra,
-                                           default_mz_format, default_intensity_format,
-                                           mz_is_compressed, int_is_compressed, global_mode)
-        else # :uncompressed
-            println("DEBUG: Using uncompressed parser.")
-            spectra_metadata = parse_uncompressed(stream, hIbd, param_groups, width, height, num_spectra,
-                                           default_mz_format, default_intensity_format,
-                                           mz_is_compressed, int_is_compressed, global_mode)
-        end
-        =#
         else
             println("DEBUG: Using compressed parser.")
             spectra_metadata = parse_compressed(stream, ts_hIbd, param_groups, width, height, num_spectra,
@@ -286,9 +374,30 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
         end
         println("DEBUG: Coordinate map built.")
 
+        # --- NEW: Update acquisition mode based on spectrum parsing ---
+        acq_mode_symbol = if global_mode == CENTROID
+            :centroid
+        elseif global_mode == PROFILE
+            :profile
+        else
+            :unknown
+        end
+        
+        final_instrument_meta = InstrumentMetadata(
+            instrument_meta.resolution,
+            acq_mode_symbol, # Update with parsed mode
+            instrument_meta.mz_axis_type,
+            instrument_meta.calibration_status,
+            instrument_meta.instrument_model,
+            instrument_meta.mass_accuracy_ppm,
+            instrument_meta.laser_settings,
+            instrument_meta.polarity,
+            instrument_meta.vendor_preprocessing_steps # Add this new field
+        )
+
         source = ImzMLSource(ts_hIbd, default_mz_format, default_intensity_format)
         println("DEBUG: Creating MSIData object.")
-        msi_data = MSIData(source, spectra_metadata, (width, height), coordinate_map, cache_size)
+        msi_data = MSIData(source, spectra_metadata, final_instrument_meta, (width, height), coordinate_map, cache_size)
 
         # Close the XML stream as it's no longer needed
         close(stream)
@@ -301,99 +410,6 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
         rethrow(e)
     end
 end
-
-#=
-function parse_uncompressed(stream::IO, hIbd::IO, param_groups::Dict{String, SpecDim}, 
-                           width::Int32, height::Int32, num_spectra::Int32,
-                           mz_format::DataType, intensity_format::DataType, 
-                           mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
-    
-    println("DEBUG: Learning file structure from first spectrum...")
-    start_of_spectra_xml = position(stream)
-    
-    # Skip UUID at beginning of IBD file (from converter)
-    seek(hIbd, 16)
-    current_ibd_offset = position(hIbd)
-    
-    attr = get_spectrum_attributes(stream, hIbd)
-    seek(stream, start_of_spectra_xml)
-    println("DEBUG: Initial IBD offset (after UUID): $current_ibd_offset")
-
-    spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
-    mz_is_first = attr[3] == 3
-
-    for k in 1:num_spectra
-        spectrum_start_pos = position(stream)
-        
-        # Find X coordinate
-        line = readuntil(stream, "IMS:1000050")
-        if eof(stream)
-            throw(FileFormatError("Unexpected EOF while looking for X coordinate"))
-        end
-        val_tag_x = find_tag(stream, r"value=\"(\d+)\"")
-        x = parse(Int32, val_tag_x.captures[1])
-
-        # Find Y coordinate  
-        line = readuntil(stream, "IMS:1000051")
-        val_tag_y = find_tag(stream, r"value=\"(\d+)\"")
-        y = parse(Int32, val_tag_y.captures[1])
-
-        # Find array length - look for external array length
-        line = readuntil(stream, "IMS:1000103")
-        val_tag_len = find_tag(stream, r"value=\"(\d+)\"")
-        nPoints = parse(Int32, val_tag_len.captures[1])
-
-        # CRITICAL FIX: Use the actual formats from the XML, not hardcoded values
-        # The converter writes Float64 for mz, Float32 for intensity
-        mz_len_bytes = nPoints * sizeof(Float64)  # Converter uses Float64 for mz
-        int_len_bytes = nPoints * sizeof(Float32) # Converter uses Float32 for intensity
-
-        local mz_offset, int_offset
-        if mz_is_first
-            mz_offset = current_ibd_offset
-            int_offset = mz_offset + mz_len_bytes
-        else
-            int_offset = current_ibd_offset
-            mz_offset = int_offset + int_len_bytes
-        end
-
-        # Mode detection
-        current_pos = position(stream)
-        seek(stream, spectrum_start_pos)
-        spectrum_buffer = IOBuffer()
-        line = ""
-        while !eof(stream)
-            line = readline(stream)
-            write(spectrum_buffer, line)
-            if occursin("</spectrum>", line)
-                break
-            end
-        end
-        spectrum_xml = String(take!(spectrum_buffer))
-        
-        spectrum_mode = global_mode
-        if occursin("MS:1000127", spectrum_xml) 
-            spectrum_mode = CENTROID
-        elseif occursin("MS:1000128", spectrum_xml)
-            spectrum_mode = PROFILE
-        end
-        seek(stream, current_pos)
-
-        # CRITICAL FIX: Use correct data types that match the converter output
-        mz_asset = SpectrumAsset(Float64, mz_is_compressed, mz_offset, nPoints, :mz)
-        int_asset = SpectrumAsset(Float32, int_is_compressed, int_offset, nPoints, :intensity)
-        
-        spectra_metadata[k] = SpectrumMetadata(x, y, "", spectrum_mode, mz_asset, int_asset)
-        
-        current_ibd_offset += mz_len_bytes + int_len_bytes
-        
-        # Skip to next spectrum
-        line = readuntil(stream, "</spectrum>")
-    end
-
-    return spectra_metadata
-end
-=#
 
 function parse_compressed(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_groups::Dict{String, SpecDim},
                          width::Int32, height::Int32, num_spectra::Int32,
@@ -532,7 +548,7 @@ function parse_compressed(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, par
                                      int_is_compressed ? int_info.encoded_length : int_info.array_length, :intensity)
         end
         
-        spectra_metadata[k] = SpectrumMetadata(x, y, "", spectrum_mode, mz_asset, int_asset)
+        spectra_metadata[k] = SpectrumMetadata(x, y, "", :sample, spectrum_mode, mz_asset, int_asset)
     end
 
     return spectra_metadata
@@ -675,7 +691,7 @@ function parse_neofx(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_gr
                                      int_is_compressed ? int_info.encoded_length : int_info.array_length, :intensity)
         end
         
-        spectra_metadata[k] = SpectrumMetadata(x, y, "", spectrum_mode, mz_asset, int_asset)
+        spectra_metadata[k] = SpectrumMetadata(x, y, "", :sample, spectrum_mode, mz_asset, int_asset)
     end
 
     return spectra_metadata
