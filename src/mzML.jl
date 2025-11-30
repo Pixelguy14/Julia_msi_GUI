@@ -20,6 +20,7 @@ const DATA_FORMAT_ACCESSIONS = Dict{String, DataType}(
 )
 
 function parse_instrument_metadata_mzml(stream::IO)
+    println("DEBUG: Starting mzML instrument metadata parsing...")
     # Initialize with default values from the InstrumentMetadata constructor
     instrument_meta = InstrumentMetadata()
     
@@ -67,37 +68,53 @@ function parse_instrument_metadata_mzml(stream::IO)
 
                     if acc == "MS:1000031" # instrument model
                         instrument_model = val
+                        #println("DEBUG: Instrument model: $instrument_model")
                     elseif acc == "MS:1001496" # mass resolving power (more specific)
                         resolution = tryparse(Float64, val)
+                        #println("DEBUG: Resolution (specific): $resolution")
                     elseif acc == "MS:1000011" && resolution === nothing # resolution (less specific)
                         resolution = tryparse(Float64, val)
+                        #println("DEBUG: Resolution (less specific): $resolution")
                     elseif acc == "MS:1000016" # mass accuracy (ppm)
                         mass_accuracy_ppm = tryparse(Float64, val)
+                        #println("DEBUG: Mass accuracy (ppm): $mass_accuracy_ppm")
                     elseif acc == "MS:1000130" # positive scan
                         polarity = :positive
+                        #println("DEBUG: Polarity: positive")
                     elseif acc == "MS:1000129" # negative scan
                         polarity = :negative
+                        #println("DEBUG: Polarity: negative")
                     elseif acc == "MS:1000592" # external calibration
                         calibration_status = :external
+                        #println("DEBUG: Calibration status: external")
                     elseif acc == "MS:1000593" # internal calibration
                         calibration_status = :internal
+                        #println("DEBUG: Calibration status: internal")
                     elseif acc == "MS:1000747" && calibration_status == :uncalibrated # instrument specific calibration
                         calibration_status = :internal # Assume as a form of internal calibration
+                        #println("DEBUG: Calibration status: instrument specific (internal)")
                     elseif acc == "MS:1000867" # laser wavelength
                         laser_settings["wavelength_nm"] = tryparse(Float64, val)
+                        #println("DEBUG: Laser wavelength: $(laser_settings["wavelength_nm"]) nm")
                     elseif acc == "MS:1000868" # laser fluence
                         laser_settings["fluence"] = tryparse(Float64, val)
+                        #println("DEBUG: Laser fluence: $(laser_settings["fluence"])")
                     elseif acc == "MS:1000869" # laser repetition rate
                         laser_settings["repetition_rate_hz"] = tryparse(Float64, val)
+                        #println("DEBUG: Laser repetition rate: $(laser_settings["repetition_rate_hz"]) Hz")
                     # NEW: Vendor Preprocessing terms
                     elseif acc == "MS:1000579" # baseline correction
                         push!(vendor_preprocessing_steps, "Baseline Correction")
+                        #println("DEBUG: Vendor preprocessing step: Baseline Correction")
                     elseif acc == "MS:1000580" # smoothing
                         push!(vendor_preprocessing_steps, "Smoothing")
+                        #println("DEBUG: Vendor preprocessing step: Smoothing")
                     elseif acc == "MS:1000578" # data transformation (e.g., centroiding)
                         push!(vendor_preprocessing_steps, "Data Transformation: $(name)")
+                        #println("DEBUG: Vendor preprocessing step: Data Transformation: $(name)")
                     elseif acc == "MS:1000800" # deisotoping
                         push!(vendor_preprocessing_steps, "Deisotoping")
+                        #println("DEBUG: Vendor preprocessing step: Deisotoping")
                     end
                 end
             end
@@ -105,6 +122,8 @@ function parse_instrument_metadata_mzml(stream::IO)
     catch e
         @warn "Could not fully parse instrument metadata from mzML header. Using defaults. Error: $e"
     end
+    
+    println("DEBUG: Finished mzML instrument metadata parsing.")
     
     # Always return a valid object
     return InstrumentMetadata(
@@ -137,14 +156,15 @@ determine the data type, compression, and axis type.
 function get_spectrum_asset_metadata(stream::IO)
     start_pos = position(stream)
     
-        bda_tag = find_tag(stream, r"<binaryDataArray\s+encodedLength=\"(\d+)\"")
-    
-        if bda_tag === nothing
-    
-            throw(FileFormatError("Cannot find binaryDataArray"))
-    
-        end
+    #println("DEBUG: Entering get_spectrum_asset_metadata to parse binaryDataArray...")
+
+    bda_tag = find_tag(stream, r"<binaryDataArray\s+encodedLength=\"(\d+)\"")
+
+    if bda_tag === nothing
+        throw(FileFormatError("Cannot find binaryDataArray"))
+    end
     encoded_length = parse(Int32, bda_tag.captures[1])
+    #println("DEBUG:   Encoded length: $encoded_length")
 
     # Initialize parameters as separate variables with concrete types
     data_format::DataType = Float64
@@ -166,14 +186,19 @@ function get_spectrum_asset_metadata(stream::IO)
             # Use constant comparisons and dictionary lookup for better performance
             if acc_str == MZ_AXIS_ACCESSION
                 axis = :mz
+                #println("DEBUG:   Axis type identified as: m/z")
             elseif acc_str == INTENSITY_AXIS_ACCESSION
                 axis = :intensity
+                #println("DEBUG:   Axis type identified as: intensity")
             elseif haskey(DATA_FORMAT_ACCESSIONS, acc_str)
                 data_format = DATA_FORMAT_ACCESSIONS[acc_str]
+                #println("DEBUG:   Data format identified as: $data_format")
             elseif acc_str == COMPRESSION_ACCESSION
                 compression_flag = true
+                #println("DEBUG:   Compression: true")
             elseif acc_str == NO_COMPRESSION_ACCESSION
                 compression_flag = false
+                #println("DEBUG:   Compression: false")
             end
         end
     end
@@ -181,9 +206,11 @@ function get_spectrum_asset_metadata(stream::IO)
     seek(stream, start_pos)
     readuntil(stream, "<binary>")
     binary_offset = position(stream)
+    #println("DEBUG:   Binary data offset: $binary_offset")
 
     # Move stream to the end of the binary data array for the next iteration
     readuntil(stream, "</binaryDataArray>")
+    #println("DEBUG: Exiting get_spectrum_asset_metadata.")
 
     # Create SpectrumAsset directly from the variables
     return SpectrumAsset(data_format, compression_flag, binary_offset, encoded_length, axis)
@@ -223,13 +250,16 @@ function parse_spectrum_metadata(stream::IO, offset::Int64)
 
     id_match = match(r"<spectrum\s+index=\"\d+\"\s+id=\"([^\"]+)", spectrum_xml)
     id = id_match === nothing ? "" : id_match.captures[1]
+    #println("DEBUG:   Parsing spectrum ID: $id")
 
     # Determine mode from the XML block
     mode = UNKNOWN
     if occursin("MS:1000127", spectrum_xml)
         mode = CENTROID
+        #println("DEBUG:   Spectrum mode: CENTROID")
     elseif occursin("MS:1000128", spectrum_xml)
         mode = PROFILE
+        #println("DEBUG:   Spectrum mode: PROFILE")
     end
 
     # Find where the binary data list starts to parse assets
@@ -247,6 +277,10 @@ function parse_spectrum_metadata(stream::IO, offset::Int64)
     else
         (asset2, asset1)
     end
+
+    #println("DEBUG:     m/z Asset - Format: $(mz_asset.format), Compressed: $(mz_asset.is_compressed), Offset: $(mz_asset.offset), Encoded Length: $(mz_asset.encoded_length)")
+    #println("DEBUG:     Intensity Asset - Format: $(int_asset.format), Compressed: $(int_asset.is_compressed), Offset: $(int_asset.offset), Encoded Length: $(int_asset.encoded_length)")
+    #println("DEBUG:   Finished parsing spectrum ID: $id metadata.")
 
     # Create the new unified metadata object
     # For mzML, x and y coordinates are not applicable, so we use 0.
@@ -380,12 +414,14 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
                 println("DEBUG: Processed $i/$num_spectra spectra")
             end
         end
-        println("DEBUG: Metadata parsing complete.")
+        println("DEBUG: Metadata parsing complete for all $num_spectra spectra.")
 
         # Assuming uniform data formats, take from the first spectrum
         first_meta = spectra_metadata[1]
         mz_format = first_meta.mz_asset.format
         intensity_format = first_meta.int_asset.format
+        println("DEBUG: Inferred global m/z format: $mz_format")
+        println("DEBUG: Inferred global intensity format: $intensity_format")
         
         # --- NEW: Determine overall acquisition mode ---
         modes = [meta.mode for meta in spectra_metadata]
@@ -401,6 +437,7 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         else
             :unknown
         end
+        println("DEBUG: Inferred overall acquisition mode: $acq_mode_symbol (Centroid: $num_centroid, Profile: $num_profile)")
 
         final_instrument_meta = InstrumentMetadata(
             instrument_meta.resolution,

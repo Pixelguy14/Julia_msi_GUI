@@ -252,23 +252,6 @@ end
     @in peak_selection_frequency_threshold = ""
     @in peak_selection_correlation_threshold = ""
 
-    # == Pipeline Step Order and Mask Route Variables ==
-    @in pipeline_step_order = [
-        Dict("name" => "stabilization", "label" => "Stabilization", "enabled" => true),
-        Dict("name" => "smoothing", "label" => "Smoothing", "enabled" => true),
-        Dict("name" => "baseline_correction", "label" => "Baseline Correction", "enabled" => true),
-        Dict("name" => "peak_picking", "label" => "Peak Picking", "enabled" => true),
-        Dict("name" => "peak_selection", "label" => "Peak Selection", "enabled" => true),
-        Dict("name" => "calibration", "label" => "Calibration", "enabled" => true),
-        Dict("name" => "peak_alignment", "label" => "Peak Alignment", "enabled" => true),
-        Dict("name" => "normalization", "label" => "Normalization", "enabled" => true),
-        Dict("name" => "peak_binning", "label" => "Peak Binning", "enabled" => true)
-    ]
-    @in preprocessing_mask_route = ""
-    @in selected_spectrum_id_for_plot = 1
-    @in feature_matrix_result = nothing
-    @in bin_info_result = nothing
-
     @in reference_peaks_list = [
         Dict("mz" => 137.0244, "label" => "DHB_fragment"),
         Dict("mz" => 155.0349, "label" => "DHB_M+H"),
@@ -285,27 +268,17 @@ end
         reference_peaks_list = deepcopy(reference_peaks_list) # Force reactivity
     end
 
-    # Step reordering functions
-    function moveStepUp(index::Int)
-        if index > 1
-            pipeline_step_order = deepcopy(pipeline_step_order)
-            temp = pipeline_step_order[index]
-            pipeline_step_order[index] = pipeline_step_order[index-1]
-            pipeline_step_order[index-1] = temp
-            pipeline_step_order = pipeline_step_order  # Force reactivity
-        end
-    end
-
-    function moveStepDown(index::Int)
-        if index < length(pipeline_step_order)
-            pipeline_step_order = deepcopy(pipeline_step_order)
-            temp = pipeline_step_order[index]
-            pipeline_step_order[index] = pipeline_step_order[index+1]
-            pipeline_step_order[index+1] = temp
-            pipeline_step_order = pipeline_step_order  # Force reactivity
-        end
-    end
-    @in save_feature_matrix_btn = false
+    # Individual step enable/disable flags
+    @in enable_stabilization = true
+    @in enable_smoothing = true
+    @in enable_baseline = true
+    @in enable_normalization = true
+    @in enable_standards = true
+    @in enable_alignment = true
+    @in enable_peak_picking = true
+    @in enable_binning = true
+    @in enable_calibration = true
+    @in enable_peak_selection = true
 
     # Trigger for running the full pipeline
     @in run_full_pipeline = false
@@ -460,8 +433,6 @@ end
     # Create conection to frontend
     @out plotdata=[traceSpectra]
     @out plotlayout=layoutSpectra
-
-    @in idSpectrum=0
     @in xCoord=0
     @in yCoord=0
     @out xSpectraMz = Vector{Float64}()
@@ -849,8 +820,6 @@ end
 
     @onbutton export_params_btn begin
         params_to_export = Dict(
-            "pipeline_step_order" => pipeline_step_order,
-            "enable_standards" => enable_standards, # Export global flag
             "stabilization_method" => stabilization_method,
             "smoothing_method" => smoothing_method,
             "smoothing_window" => smoothing_window,
@@ -914,10 +883,6 @@ end
                 for (key, value) in params
                     if key == "reference_peaks_list"
                         reference_peaks_list = value
-                    elseif key == "pipeline_step_order"
-                        pipeline_step_order = value
-                    elseif key == "enable_standards" # Import global flag
-                        enable_standards = value
                     else
                         # Use getfield and setproperty! to update reactive variables by name
                         if hasfield(typeof(@__MODULE__), Symbol(key))
@@ -937,160 +902,85 @@ end
 
     @onbutton run_full_pipeline begin
         progressPrep = true
-        current_pipeline_step = "Initializing..."
-        
+        msg = "Running preprocessing pipeline..."
         try
-            # 1. Data Preparation
-            if isempty(selected_folder_main)
-                msg = "No dataset selected. Please process a file first."
+            # 1. Get data from "before" plot
+            if isempty(plotdata_before.traces) || isempty(plotdata_before.traces[1].x)
+                msg = "Please generate a spectrum plot first (e.g., Mean, Sum, or X,Y)."
                 warning_msg = true
                 return
             end
-
-            registry = load_registry(registry_path)
-            entry = registry[selected_folder_main]
-            target_path = entry["source_path"]
-
-            if msi_data === nothing || full_route != target_path
-                if msi_data !== nothing
-                    close(msi_data)
-                end
-                full_route = target_path
-                msi_data = OpenMSIData(target_path)
-            end
-
-            # Apply mask if enabled
-            spectrum_indices_to_process = collect(1:length(msi_data.spectra_metadata))
-            if maskEnabled && !isempty(preprocessing_mask_route) && isfile(preprocessing_mask_route)
-                current_pipeline_step = "Loading mask..."
-                mask_matrix = load_and_prepare_mask(preprocessing_mask_route, msi_data.image_dims)
-                masked_indices_set = get_masked_spectrum_indices(msi_data, mask_matrix)
-                spectrum_indices_to_process = collect(masked_indices_set)
-            end
-
-            # Initialize spectra data structure
-            current_pipeline_step = "Loading spectra..."
-            current_spectra = Vector{MutableSpectrum}(undef, length(spectrum_indices_to_process))
             
-            Threads. @threads for i in 1:length(spectrum_indices_to_process)
-                original_idx = spectrum_indices_to_process[i]
-                mz, intensity = GetSpectrum(msi_data, original_idx)
-                current_spectra[i] = MutableSpectrum(original_idx, mz, intensity, [])
-            end
+            mz_data = plotdata_before.traces[1].x
+            intensity_data = plotdata_before.traces[1].y
+            
+            # 2. Create a temporary MutableSpectrum
+            temp_spectrum = MutableSpectrum(mz_data, intensity_data, [], 1) # id=1 is arbitrary
+            
+            # 3. Run the pipeline
+            pipeline_spectra = [temp_spectrum]
 
-            # 2. Parameter Assembly
-            current_pipeline_step = "Configuring parameters..."
-            final_params = Dict(
-                :Stabilization => Dict(:method => Symbol(stabilization_method)),
-                :Smoothing => Dict(
-                    :method => Symbol(smoothing_method),
-                    :window => parse(Int, smoothing_window),
-                    :order => parse(Int, smoothing_order)
-                ),
-                :BaselineCorrection => Dict(
-                    :method => Symbol(baseline_method),
-                    :iterations => parse(Int, baseline_iterations),
-                    :window => parse(Int, baseline_window)
-                ),
-                :Normalization => Dict(:method => Symbol(normalization_method)),
-                :PeakPicking => Dict(
-                    :method => Symbol(peak_picking_method),
+            if enable_stabilization
+                current_pipeline_step = "Stabilizing..."
+                params = Dict(:method => Symbol(stabilization_method))
+                apply_intensity_transformation(pipeline_spectra, params)
+            end
+            if enable_smoothing
+                current_pipeline_step = "Smoothing..."
+                params = Dict(:method => Symbol(smoothing_method), :window => parse(Int, smoothing_window), :order => parse(Int, smoothing_order))
+                apply_smoothing(pipeline_spectra, params)
+            end
+            if enable_baseline
+                current_pipeline_step = "Correcting baseline..."
+                params = Dict(:method => Symbol(baseline_method), :iterations => parse(Int, baseline_iterations), :window => parse(Int, baseline_window))
+                apply_baseline_correction(pipeline_spectra, params)
+            end
+            if enable_normalization
+                current_pipeline_step = "Normalizing..."
+                params = Dict(:method => Symbol(normalization_method))
+                apply_normalization(pipeline_spectra, params)
+            end
+            if enable_standards && enable_calibration
+                current_pipeline_step = "Calibrating..."
+                ref_peaks = Dict(p["mz"] => p["label"] for p in reference_peaks_list)
+                params = Dict(:ppm_tolerance => parse(Float64, calibration_ppm_tolerance), :fit_order => parse(Int, calibration_fit_order))
+                apply_calibration(pipeline_spectra, params)
+            end
+            if enable_alignment
+                 # Alignment is a no-op for a single spectrum, but we call it for completeness
+                current_pipeline_step = "Aligning (skipped for single spectrum)..."
+            end
+            if enable_peak_picking
+                current_pipeline_step = "Picking peaks..."
+                params = Dict(
+                    :method => Symbol(peak_picking_method), 
                     :snr_threshold => parse(Float64, peak_picking_snr_threshold),
                     :half_window => parse(Int, peak_picking_half_window),
                     :min_peak_prominence => parse(Float64, peak_picking_min_peak_prominence),
                     :merge_peaks_tolerance => parse(Float64, peak_picking_merge_peaks_tolerance)
-                ),
-                :PeakSelection => Dict(
-                    :min_snr => parse(Float64, peak_selection_min_snr),
-                    :min_fwhm_ppm => parse(Float64, peak_selection_min_fwhm_ppm),
-                    :max_fwhm_ppm => parse(Float64, peak_selection_max_fwhm_ppm),
-                    :min_shape_r2 => parse(Float64, peak_selection_min_shape_r2)
-                ),
-                :Calibration => Dict(
-                    :method => :internal_standards,
-                    :ppm_tolerance => parse(Float64, calibration_ppm_tolerance),
-                    :fit_order => parse(Int, calibration_fit_order)
-                ),
-                :PeakAlignment => Dict(
-                    :method => Symbol(alignment_method),
-                    :tolerance => parse(Float64, alignment_tolerance),
-                    :tolerance_unit => Symbol(alignment_tolerance_unit)
-                ),
-                :PeakBinning => Dict(
-                    :method => Symbol(binning_method),
-                    :tolerance => parse(Float64, binning_tolerance),
-                    :tolerance_unit => Symbol(binning_tolerance_unit),
-                    :min_peak_per_bin => parse(Int, binning_min_peak_per_bin)
                 )
-            )
+                apply_peak_picking(pipeline_spectra, params)
+            end
 
-            # Build pipeline steps from enabled steps in order
-            pipeline_stp = [step["name"] for step in pipeline_step_order if step["enabled"]]
+            # 4. Update "After" plot
+            processed_spectrum = pipeline_spectra[1]
             
-            # Convert reference peaks
-            ref_peaks = Dict(p["mz"] => p["label"] for p in reference_peaks_list)
-
-            # 3. Execute Pipeline
-            current_pipeline_step = "Running preprocessing pipeline..."
-            feature_matrix_result, bin_info_result = execute_full_preprocessing(
-                current_spectra,
-                final_params,
-                pipeline_stp,
-                ref_peaks,
-                maskEnabled ? preprocessing_mask_route : nothing
-            ) do step
-                current_pipeline_step = "Processing: $step"
-            end
-
-            # 4. Update Results Display
-            current_pipeline_step = "Updating results..."
+            # Main spectrum trace
+            after_trace = PlotlyBase.scatter(x=processed_spectrum.mz, y=processed_spectrum.intensity, mode="lines", name="Processed Spectrum")
             
-            # Find the spectrum to display in "after" plot
-            display_spectrum_idx = findfirst(s -> s.id == selected_spectrum_id_for_plot, current_spectra)
-            if display_spectrum_idx !== nothing
-                processed_spectrum = current_spectra[display_spectrum_idx]
-                
-                # Create "after" plot data
-                after_trace = PlotlyBase.scatter(
-                    x=processed_spectrum.mz, 
-                    y=processed_spectrum.intensity, 
-                    mode="lines", 
-                    name="Processed Spectrum"
-                )
-                
-                traces_after = [after_trace]
+            traces_after = [after_trace]
 
-                # Add peaks if they exist
-                if !isempty(processed_spectrum.peaks)
-                    peak_mzs = [p.mz for p in processed_spectrum.peaks]
-                    peak_intensities = [p.intensity for p in processed_spectrum.peaks] # Fixed: Should be peak.intensity
-                    peak_trace = PlotlyBase.scatter(
-                        x=peak_mzs, 
-                        y=peak_intensities, 
-                        mode="markers", 
-                        name="Picked Peaks", 
-                        marker=attr(color="red", size=8)
-                    )
-                    push!(traces_after, peak_trace)
-                end
-                
-                plotdata_after = traces_after
-                plotlayout_after = PlotlyBase.Layout(
-                    title="After Preprocessing (Spectrum $selected_spectrum_id_for_plot)",
-                    xaxis_title="m/z",
-                    yaxis_title="Intensity"
-                )
+            # Add peaks if they exist
+            if !isempty(processed_spectrum.peaks)
+                peak_mzs = [p.mz for p in processed_spectrum.peaks]
+                peak_intensities = [p.intensity for p in processed_spectrum.peaks]
+                peak_trace = PlotlyBase.scatter(x=peak_mzs, y=peak_intensities, mode="markers", name="Picked Peaks", marker=attr(color="red", size=8))
+                push!(traces_after, peak_trace)
             end
-
-            # Save feature matrix if binning was performed
-            if feature_matrix_result !== nothing
-                output_dir = joinpath("public", selected_folder_main, "preprocessing_results")
-                mkpath(output_dir)
-                save_feature_matrix(feature_matrix_result, bin_info_result, output_dir)
-                msg = "Pipeline completed successfully. Feature matrix saved."
-            else
-                msg = "Pipeline completed successfully."
-            end
+            
+            plotdata_after = traces_after
+            plotlayout_after = PlotlyBase.Layout(title="After Preprocessing")
+            msg = "Pipeline finished."
 
         catch e
             msg = "Error during pipeline execution: $e"
@@ -1099,7 +989,6 @@ end
         finally
             progressPrep = false
             current_pipeline_step = ""
-            GC.gc()
         end
     end
 
@@ -1171,66 +1060,6 @@ end
         end
     end
 
-    @onchange btnSearchMzml, btnSearchSync begin
-        if btnSearchMzml
-            picked_route = pick_file(; filterlist="mzML,mzml")
-            if !isempty(picked_route)
-                mzml_full_route = picked_route
-            end
-            btnSearchMzml = false # Reset the button
-        end
-
-        if btnSearchSync
-            picked_route = pick_file(; filterlist="txt")
-            if !isempty(picked_route)
-                sync_full_route = picked_route
-            end
-            btnSearchSync = false # Reset the button
-        end
-
-        # Enable button only if both files are selected
-        btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
-    end
-
-    @onbutton convert_process begin
-        if isempty(mzml_full_route) || isempty(sync_full_route)
-            msg_conversion = "Please select both an .mzML file and a .txt sync file."
-            warning_msg = true
-            return
-        end
-
-        progress_conversion = true
-        btnConvertDisable = true
-        msg_conversion = "Starting conversion process..."
-
-        try
-            sTime = time()
-            target_imzml = replace(mzml_full_route, r"\.(mzml|mzML)$" => ".imzML")
-            
-            msg_conversion = "Converting $(basename(mzml_full_route)) to $(basename(target_imzml))... This may take a while."
-
-            success = ImportMzmlFile(mzml_full_route, sync_full_route, target_imzml)
-
-            fTime = time()
-            eTime = round(fTime - sTime, digits=3)
-
-            if success
-                msg_conversion = "Conversion successful in $(eTime) seconds. Output file: $(basename(target_imzml))"
-            else
-                msg_conversion = "Conversion failed after $(eTime) seconds. Check console for errors."
-                warning_msg = true
-            end
-
-        catch e
-            msg_conversion = "An error occurred during conversion: $e"
-            warning_msg = true
-            @error "Conversion failed" exception=(e, catch_backtrace())
-        finally
-            progress_conversion = false
-            # Re-enable button if files are still selected
-            btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
-        end
-    end
     
     @onbutton mainProcess @time begin
         # --- UI State Update ---
@@ -1588,7 +1417,6 @@ end
             sTime = time()
             registry = load_registry(registry_path)
             
-            # Add error handling for registry access
             if !haskey(registry, selected_folder_main)
                 msg = "Dataset '$(selected_folder_main)' not found in registry."
                 warning_msg = true
@@ -1631,14 +1459,11 @@ end
                 end
             end
 
-            # Convert to positive coordinates for processing
             y_positive = yCoord < 0 ? abs(yCoord) : yCoord
             plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
             
-            # Update coordinates based on actual plot title
-            # Extract title text from the Dict safely
             actual_title = if plotlayout.title isa Dict && haskey(plotlayout.title, :text)
                 plotlayout.title[:text]
             elseif plotlayout.title isa Dict && haskey(plotlayout.title, "text")
@@ -1686,940 +1511,6 @@ end
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
             end
         end
-    end
-
-    # --- Main View Handlers ---
-    @onbutton imgMinus begin
-        if isempty(selected_folder_main) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_main)
-        # Check if folder exists to prevent errors
-        if !isdir(folder_path) return end
-        
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=decrement_image(current_msi, msi_bmp)
-        new_col_msi=decrement_image(current_col_msi, col_msi_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_msi = new_msi
-            current_col_msi = new_col_msi
-            imgInt = "/$(selected_folder_main)/$(current_msi)?t=$(timestamp)"
-            colorbar = "/$(selected_folder_main)/$(current_col_msi)?t=$(timestamp)"
-            text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
-            msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
-            btnOpticalDisable = false
-        end
-    end
-    @onbutton imgPlus begin
-        if isempty(selected_folder_main) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_main)
-        if !isdir(folder_path) return end
-
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-        
-        new_msi=increment_image(current_msi, msi_bmp)
-        new_col_msi=increment_image(current_col_msi, col_msi_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_msi = new_msi
-            current_col_msi = new_col_msi
-            imgInt = "/$(selected_folder_main)/$(current_msi)?t=$(timestamp)"
-            colorbar = "/$(selected_folder_main)/$(current_col_msi)?t=$(timestamp)"
-            text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
-            msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
-            btnOpticalDisable = false
-        end
-    end
-
-    @onbutton imgMinusT begin
-        if isempty(selected_folder_main) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_main)
-        if !isdir(folder_path) return end
-
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=decrement_image(current_triq, triq_bmp)
-        new_col_msi=decrement_image(current_col_triq, col_triq_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_triq = new_msi
-            current_col_triq = new_col_msi
-            imgIntT = "/$(selected_folder_main)/$(current_triq)?t=$(timestamp)"
-            colorbarT = "/$(selected_folder_main)/$(current_col_triq)?t=$(timestamp)"
-            text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
-            msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
-            btnOpticalDisable = false
-        end
-    end
-    @onbutton imgPlusT begin
-        if isempty(selected_folder_main) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_main)
-        if !isdir(folder_path) return end
-
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=increment_image(current_triq, triq_bmp)
-        new_col_msi=increment_image(current_col_triq, col_triq_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_triq = new_msi
-            current_col_triq = new_col_msi
-            imgIntT = "/$(selected_folder_main)/$(current_triq)?t=$(timestamp)"
-            colorbarT = "/$(selected_folder_main)/$(current_col_triq)?t=$(timestamp)"
-            text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
-            msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
-            btnOpticalDisable = false
-        end
-    end
-
-    # --- Compare View Handlers ---
-    @onbutton imgMinusCompLeft begin
-        if isempty(selected_folder_compare_left) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_left)
-        if !isdir(folder_path) return end
-
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=decrement_image(current_msiCompLeft, msi_bmp)
-        new_col_msi=decrement_image(current_col_msiCompLeft, col_msi_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_msiCompLeft = new_msi
-            current_col_msiCompLeft = new_col_msi
-            imgIntCompLeft = "/$(selected_folder_compare_left)/$(current_msiCompLeft)?t=$(timestamp)"
-            colorbarCompLeft = "/$(selected_folder_compare_left)/$(current_col_msiCompLeft)?t=$(timestamp)"
-            text_nmass = replace(current_msiCompLeft, r"MSI_|.bmp" => "")
-            msgimgCompLeft = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgCompLeft, plotlayoutImgCompLeft, _, _ = loadImgPlot(imgIntCompLeft)
-        end
-    end
-
-    @onbutton imgPlusCompLeft begin
-        if isempty(selected_folder_compare_left) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_left)
-        if !isdir(folder_path) return end
-
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-        
-        new_msi=increment_image(current_msiCompLeft, msi_bmp)
-        new_col_msi=increment_image(current_col_msiCompLeft, col_msi_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_msiCompLeft = new_msi
-            current_col_msiCompLeft = new_col_msi
-            imgIntCompLeft = "/$(selected_folder_compare_left)/$(current_msiCompLeft)?t=$(timestamp)"
-            colorbarCompLeft = "/$(selected_folder_compare_left)/$(current_col_msiCompLeft)?t=$(timestamp)"
-            text_nmass = replace(current_msiCompLeft, r"MSI_|.bmp" => "")
-            msgimgCompLeft = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgCompLeft, plotlayoutImgCompLeft, _, _ = loadImgPlot(imgIntCompLeft)
-        end
-    end
-
-    @onbutton imgMinusTCompLeft begin
-        if isempty(selected_folder_compare_left) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_left)
-        if !isdir(folder_path) return end
-
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=decrement_image(current_triqCompLeft, triq_bmp)
-        new_col_msi=decrement_image(current_col_triqCompLeft, col_triq_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_triqCompLeft = new_msi
-            current_col_triqCompLeft = new_col_msi
-            imgIntTCompLeft = "/$(selected_folder_compare_left)/$(current_triqCompLeft)?t=$(timestamp)"
-            colorbarTCompLeft = "/$(selected_folder_compare_left)/$(current_col_triqCompLeft)?t=$(timestamp)"
-            text_nmass = replace(current_triqCompLeft, r"TrIQ_|.bmp" => "")
-            msgtriqCompLeft = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgTCompLeft, plotlayoutImgTCompLeft, _, _ = loadImgPlot(imgIntTCompLeft)
-        end
-    end
-
-    @onbutton imgPlusTCompLeft begin
-        if isempty(selected_folder_compare_left) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_left)
-        if !isdir(folder_path) return end
-
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=increment_image(current_triqCompLeft, triq_bmp)
-        new_col_msi=increment_image(current_col_triqCompLeft, col_triq_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_triqCompLeft = new_msi
-            current_col_triqCompLeft = new_col_msi
-            imgIntTCompLeft = "/$(selected_folder_compare_left)/$(current_triqCompLeft)?t=$(timestamp)"
-            colorbarTCompLeft = "/$(selected_folder_compare_left)/$(current_col_triqCompLeft)?t=$(timestamp)"
-            text_nmass = replace(current_triqCompLeft, r"TrIQ_|.bmp" => "")
-            msgtriqCompLeft = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgTCompLeft, plotlayoutImgTCompLeft, _, _ = loadImgPlot(imgIntTCompLeft)
-        end
-    end
-
-    @onbutton imgMinusCompRight begin
-        if isempty(selected_folder_compare_right) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_right)
-        if !isdir(folder_path) return end
-
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=decrement_image(current_msiCompRight, msi_bmp)
-        new_col_msi=decrement_image(current_col_msiCompRight, col_msi_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_msiCompRight = new_msi
-            current_col_msiCompRight = new_col_msi
-            imgIntCompRight = "/$(selected_folder_compare_right)/$(current_msiCompRight)?t=$(timestamp)"
-            colorbarCompRight = "/$(selected_folder_compare_right)/$(current_col_msiCompRight)?t=$(timestamp)"
-            text_nmass = replace(current_msiCompRight, r"MSI_|.bmp" => "")
-            msgimgCompRight = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgCompRight, plotlayoutImgCompRight, _, _ = loadImgPlot(imgIntCompRight)
-        end
-    end
-
-    @onbutton imgPlusCompRight begin
-        if isempty(selected_folder_compare_right) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_right)
-        if !isdir(folder_path) return end
-
-        msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-        
-        new_msi=increment_image(current_msiCompRight, msi_bmp)
-        new_col_msi=increment_image(current_col_msiCompRight, col_msi_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_msiCompRight = new_msi
-            current_col_msiCompRight = new_col_msi
-            imgIntCompRight = "/$(selected_folder_compare_right)/$(current_msiCompRight)?t=$(timestamp)"
-            colorbarCompRight = "/$(selected_folder_compare_right)/$(current_col_msiCompRight)?t=$(timestamp)"
-            text_nmass = replace(current_msiCompRight, r"MSI_|.bmp" => "")
-            msgimgCompRight = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgCompRight, plotlayoutImgCompRight, _, _ = loadImgPlot(imgIntCompRight)
-        end
-    end
-
-    @onbutton imgMinusTCompRight begin
-        if isempty(selected_folder_compare_right) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_right)
-        if !isdir(folder_path) return end
-
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=decrement_image(current_triqCompRight, triq_bmp)
-        new_col_msi=decrement_image(current_col_triqCompRight, col_triq_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_triqCompRight = new_msi
-            current_col_triqCompRight = new_col_msi
-            imgIntTCompRight = "/$(selected_folder_compare_right)/$(current_triqCompRight)?t=$(timestamp)"
-            colorbarTCompRight = "/$(selected_folder_compare_right)/$(current_col_triqCompRight)?t=$(timestamp)"
-            text_nmass = replace(current_triqCompRight, r"TrIQ_|.bmp" => "")
-            msgtriqCompRight = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgTCompRight, plotlayoutImgTCompRight, _, _ = loadImgPlot(imgIntTCompRight)
-        end
-    end
-
-    @onbutton imgPlusTCompRight begin
-        if isempty(selected_folder_compare_right) return end
-        timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_right)
-        if !isdir(folder_path) return end
-
-        triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
-        col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)),lt=natural)
-
-        new_msi=increment_image(current_triqCompRight, triq_bmp)
-        new_col_msi=increment_image(current_col_triqCompRight, col_triq_png)
-        if new_msi !== nothing && new_col_msi !== nothing
-            current_triqCompRight = new_msi
-            current_col_triqCompRight = new_col_msi
-            imgIntTCompRight = "/$(selected_folder_compare_right)/$(current_triqCompRight)?t=$(timestamp)"
-            colorbarTCompRight = "/$(selected_folder_compare_right)/$(current_col_triqCompRight)?t=$(timestamp)"
-            text_nmass = replace(current_triqCompRight, r"TrIQ_|.bmp" => "")
-            msgtriqCompRight = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-            plotdataImgTCompRight, plotlayoutImgTCompRight, _, _ = loadImgPlot(imgIntTCompRight)
-        end
-    end
-
-    # This handler will now correctly load the first image from the newly selected folder.
-    @onchange selected_folder_main begin
-        if msi_data !== nothing
-            close(msi_data)
-        end
-        msi_data = nothing
-        log_memory_usage("Folder Changed (msi_data cleared)", msi_data)
-        GC.gc() # Trigger garbage collection
-        if Sys.islinux()
-            ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
-        end
-
-        if !isempty(selected_folder_main)
-            folder_path = joinpath("public", selected_folder_main)
-            if !isdir(folder_path) 
-                imgInt = ""
-                colorbar = ""
-                imgIntT = ""
-                colorbarT = ""
-                msgimg = "Folder not found."
-                msgtriq = "Folder not found."
-                plotdataImg = [traceImg]
-                plotlayoutImg = layoutImg
-                plotdataImgT = [traceImg]
-                plotlayoutImgT = layoutImg
-                imgWidth, imgHeight = 0, 0
-                return
-            end
-
-            # Handle normal images
-            msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)), lt=natural)
-            col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(folder_path)), lt=natural)
-            
-            if !isempty(msi_bmp)
-                current_msi = first(msi_bmp)
-                imgInt = "/$(selected_folder_main)/$(current_msi)"
-                plotdataImg, plotlayoutImg, w, h = loadImgPlot(imgInt)
-                imgWidth, imgHeight = w, h
-                text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
-                msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-                if !isempty(col_msi_png)
-                    current_col_msi = first(col_msi_png)
-                    colorbar = "/$(selected_folder_main)/$(current_col_msi)"
-                else
-                    colorbar = ""
-                end
-            else
-                imgInt = ""
-                colorbar = ""
-                msgimg = "No MSI images found in this dataset."
-                plotdataImg = [traceImg]
-                plotlayoutImg = layoutImg
-            end
-
-            # Handle TrIQ images
-            triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)), lt=natural)
-            col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(folder_path)), lt=natural)
-
-            if !isempty(triq_bmp)
-                current_triq = first(triq_bmp)
-                imgIntT = "/$(selected_folder_main)/$(current_triq)"
-                plotdataImgT, plotlayoutImgT, w, h = loadImgPlot(imgIntT)
-                # If no MSI image was loaded, dimensions from TrIQ image are used.
-                if isempty(msi_bmp)
-                    imgWidth, imgHeight = w, h
-                end
-                text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
-                msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-                if !isempty(col_triq_png)
-                    current_col_triq = first(col_triq_png)
-                    colorbarT = "/$(selected_folder_main)/$(current_col_triq)"
-                else
-                    colorbarT = ""
-                end
-            else
-                imgIntT = ""
-                colorbarT = ""
-                msgtriq = "No TrIQ images found in this dataset."
-                plotdataImgT = [traceImg]
-                plotlayoutImgT = layoutImg
-            end
-
-            if isempty(msi_bmp) && isempty(triq_bmp)
-                imgWidth, imgHeight = 0, 0
-            end
-        end
-    end
-
-    @onchange selected_folder_compare_left begin
-        if !isempty(selected_folder_compare_left)
-            timestamp = string(time_ns())
-            folder_path = joinpath("public", selected_folder_compare_left)
-            
-            if !isdir(folder_path)
-                imgIntCompLeft, colorbarCompLeft, imgIntTCompLeft, colorbarTCompLeft = "", "", "", ""
-                msgimgCompLeft, msgtriqCompLeft = "Folder not found.", "Folder not found."
-                return
-            end
-
-            # Handle normal images
-            msi_bmp = sort(filter(f -> startswith(f, "MSI_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
-            col_msi_png = sort(filter(f -> startswith(f, "colorbar_MSI_") && endswith(f, ".png"), readdir(folder_path)), lt=natural)
-            
-            if !isempty(msi_bmp)
-                current_msiCompLeft = first(msi_bmp)
-                imgIntCompLeft = "/$(selected_folder_compare_left)/$(current_msiCompLeft)?t=$(timestamp)"
-                plotdataImgCompLeft, plotlayoutImgCompLeft, _, _ = loadImgPlot(imgIntCompLeft)
-                text_nmass = replace(current_msiCompLeft, r"MSI_|.bmp" => "")
-                msgimgCompLeft = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-                
-                if !isempty(col_msi_png)
-                    current_col_msiCompLeft = first(col_msi_png)
-                    colorbarCompLeft = "/$(selected_folder_compare_left)/$(current_col_msiCompLeft)?t=$(timestamp)"
-                else
-                    colorbarCompLeft = ""
-                end
-            else
-                imgIntCompLeft, colorbarCompLeft, msgimgCompLeft = "", "", "No MSI images."
-            end
-
-            # Handle TrIQ images
-            triq_bmp = sort(filter(f -> startswith(f, "TrIQ_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
-            col_triq_png = sort(filter(f -> startswith(f, "colorbar_TrIQ_") && endswith(f, ".png"), readdir(folder_path)), lt=natural)
-
-            if !isempty(triq_bmp)
-                current_triqCompLeft = first(triq_bmp)
-                imgIntTCompLeft = "/$(selected_folder_compare_left)/$(current_triqCompLeft)?t=$(timestamp)"
-                plotdataImgTCompLeft, plotlayoutImgTCompLeft, _, _ = loadImgPlot(imgIntTCompLeft)
-                text_nmass = replace(current_triqCompLeft, r"TrIQ_|.bmp" => "")
-                msgtriqCompLeft = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-
-                if !isempty(col_triq_png)
-                    current_col_triqCompLeft = first(col_triq_png)
-                    colorbarTCompLeft = "/$(selected_folder_compare_left)/$(current_col_triqCompLeft)?t=$(timestamp)"
-                else
-                    colorbarTCompLeft = ""
-                end
-            else
-                imgIntTCompLeft, colorbarTCompLeft, msgtriqCompLeft = "", "", "No TrIQ images."
-            end
-        end
-    end
-
-    @onchange selected_folder_compare_right begin
-        if !isempty(selected_folder_compare_right)
-            timestamp = string(time_ns())
-            folder_path = joinpath("public", selected_folder_compare_right)
-            if !isdir(folder_path) 
-                imgIntCompRight, colorbarCompRight, imgIntTCompRight, colorbarTCompRight = "", "", "", ""
-                msgimgCompRight, msgtriqCompRight = "Folder not found.", "Folder not found."
-                return
-            end
-
-            # Handle normal images
-            msi_bmp = sort(filter(f -> startswith(f, "MSI_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
-            col_msi_png = sort(filter(f -> startswith(f, "colorbar_MSI_") && endswith(f, ".png"), readdir(folder_path)), lt=natural)
-            
-            if !isempty(msi_bmp)
-                current_msiCompRight = first(msi_bmp)
-                imgIntCompRight = "/$(selected_folder_compare_right)/$(current_msiCompRight)?t=$(timestamp)"
-                plotdataImgCompRight, plotlayoutImgCompRight, _, _ = loadImgPlot(imgIntCompRight)
-                text_nmass = replace(current_msiCompRight, r"MSI_|.bmp" => "")
-                msgimgCompRight = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-                
-                if !isempty(col_msi_png)
-                    current_col_msiCompRight = first(col_msi_png)
-                    colorbarCompRight = "/$(selected_folder_compare_right)/$(current_col_msiCompRight)?t=$(timestamp)"
-                else
-                    colorbarCompRight = ""
-                end
-            else
-                imgIntCompRight, colorbarCompRight, msgimgCompRight = "", "", "No MSI images."
-            end
-
-            # Handle TrIQ images
-            triq_bmp = sort(filter(f -> startswith(f, "TrIQ_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
-            col_triq_png = sort(filter(f -> startswith(f, "colorbar_TrIQ_") && endswith(f, ".png"), readdir(folder_path)), lt=natural)
-
-            if !isempty(triq_bmp)
-                current_triqCompRight = first(triq_bmp)
-                imgIntTCompRight = "/$(selected_folder_compare_right)/$(current_triqCompRight)?t=$(timestamp)"
-                plotdataImgTCompRight, plotlayoutImgTCompRight, _, _ = loadImgPlot(imgIntTCompRight)
-                text_nmass = replace(current_triqCompRight, r"TrIQ_|.bmp" => "")
-                msgtriqCompRight = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
-
-                if !isempty(col_triq_png)
-                    current_col_triqCompRight = first(col_triq_png)
-                    colorbarTCompRight = "/$(selected_folder_compare_right)/$(current_col_triqCompRight)?t=$(timestamp)"
-                else
-                    colorbarTCompRight = ""
-                end
-            else
-                imgIntTCompRight, colorbarTCompRight, msgtriqCompRight = "", "", "No TrIQ images."
-            end
-        end
-    end
-
-    
-    # 3d plot
-    @onbutton image3dPlot begin
-        msg = "Image 3D plot selected"
-        cleaned_imgInt = replace(imgInt, r"\?.*" => "")
-        cleaned_imgInt = lstrip(cleaned_imgInt, '/')
-        var = joinpath("./public", cleaned_imgInt)
-
-        if !isfile(var)
-            msg = "Image could not be 3d plotted"
-            warning_msg = true
-            return
-        end
-
-        progressPlot = true
-        btnPlotDisable = true
-        btnStartDisable = true
-        btnSpectraDisable = true
-
-        try
-            # --- Get Mask Path ---
-            local mask_path_for_plot::Union{String, Nothing} = nothing
-            if maskEnabled && !isempty(selected_folder_main)
-                registry = load_registry(registry_path)
-                entry = get(registry, selected_folder_main, nothing)
-                if entry !== nothing && get(entry, "has_mask", false)
-                    mask_path_candidate = get(entry, "mask_path", "")
-                    if isfile(mask_path_candidate)
-                        mask_path_for_plot = mask_path_candidate
-                    else
-                        @warn "Mask enabled but file not found: $(mask_path_candidate). Plotting without mask."
-                    end
-                end
-            end
-            # ---
-
-            sTime = time()
-            if mask_path_for_plot !== nothing
-                plotdata3d, plotlayout3d = loadSurfacePlot(imgInt, mask_path_for_plot)
-            else
-                plotdata3d, plotlayout3d = loadSurfacePlot(imgInt)
-            end
-
-            selectedTab = "tab4"
-            fTime = time()
-            eTime = round(fTime - sTime, digits=3)
-            msg = "Plot loaded in $(eTime) seconds"
-            log_memory_usage("Mean Plot Generated", msi_data)
-        catch e
-            msg = "Failed to load and process image: $e"
-            warning_msg = true
-            @error "3D plot generation failed" exception=(e, catch_backtrace())
-        finally
-            progressPlot=false
-            btnPlotDisable=false
-            btnStartDisable=false
-            btnSpectraDisable=false
-            SpectraEnabled=true
-            GC.gc() # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
-            end
-        end
-    end
-    
-    @onbutton triq3dPlot begin
-        msg = "TrIQ 3D plot selected"
-        cleaned_imgIntT = replace(imgIntT, r"\?.*" => "")
-        cleaned_imgIntT = lstrip(cleaned_imgIntT, '/')
-        var = joinpath("./public", cleaned_imgIntT)
-
-        if !isfile(var)
-            msg = "Image could not be 3d plotted"
-            warning_msg = true
-            return
-        end
-
-        progressPlot = true
-        btnPlotDisable = true
-        btnStartDisable = true
-        btnSpectraDisable = true
-
-        try
-            # --- Get Mask Path ---
-            local mask_path_for_plot::Union{String, Nothing} = nothing
-            if maskEnabled && !isempty(selected_folder_main)
-                registry = load_registry(registry_path)
-                entry = get(registry, selected_folder_main, nothing)
-                if entry !== nothing && get(entry, "has_mask", false)
-                    mask_path_candidate = get(entry, "mask_path", "")
-                    if isfile(mask_path_candidate)
-                        mask_path_for_plot = mask_path_candidate
-                    else
-                        @warn "Mask enabled but file not found: $(mask_path_candidate). Plotting without mask."
-                    end
-                end
-            end
-            # ---
-
-            sTime = time()
-            if mask_path_for_plot !== nothing
-                plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT, mask_path_for_plot)
-            else
-                plotdata3d, plotlayout3d = loadSurfacePlot(imgIntT)
-            end
-
-            selectedTab = "tab4"
-            fTime = time()
-            eTime = round(fTime - sTime, digits=3)
-            msg = "Plot loaded in $(eTime) seconds"
-            log_memory_usage("Mean Plot Generated", msi_data)
-        catch e
-            msg = "Failed to load and process image: $e"
-            warning_msg = true
-            @error "3D TrIQ plot generation failed" exception=(e, catch_backtrace())
-        finally
-            progressPlot=false
-            btnPlotDisable=false
-            btnStartDisable=false
-            btnSpectraDisable=false
-            SpectraEnabled=true
-            GC.gc() # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
-            end
-        end
-    end
-
-    # Contour 2d plot
-    @onbutton imageCPlot begin
-        msg="Image 2D plot selected"
-        cleaned_imgInt=replace(imgInt, r"\?.*" => "")
-        cleaned_imgInt=lstrip(cleaned_imgInt, '/')
-        var=joinpath("./public", cleaned_imgInt)
-        
-        if !isfile(var)
-            msg="Image could not be 2D plotted"
-            warning_msg=true
-            return
-        end
-
-        progressPlot=true
-        btnPlotDisable=true
-        btnStartDisable=true
-        btnSpectraDisable=true
-        
-        try
-            sTime=time()
-            plotdataC,plotlayoutC=loadContourPlot(imgInt)
-            GC.gc()  # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
-            end
-            selectedTab="tab3"
-            fTime=time()
-            eTime=round(fTime-sTime,digits=3)
-            msg="Plot loaded in $(eTime) seconds"
-        catch e
-            msg="Failed to load and process image: $e"
-            warning_msg=true
-        finally
-            progressPlot=false
-            btnPlotDisable=false
-            btnStartDisable=false
-            btnSpectraDisable=false
-            SpectraEnabled=true
-            GC.gc()
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0)
-            end
-        end
-    end
-    # Contour 2d plot for TrIQ
-    @onbutton triqCPlot begin
-        msg="Image 2D plot selected"
-        cleaned_imgIntT=replace(imgIntT, r"\?.*" => "")
-        cleaned_imgIntT=lstrip(cleaned_imgIntT, '/')
-        var=joinpath("./public", cleaned_imgIntT)
-        
-        if !isfile(var)
-            msg="Image could not be 2D plotted"
-            warning_msg=true
-            return
-        end
-
-        progressPlot=true
-        btnPlotDisable=true
-        btnStartDisable=true
-        btnSpectraDisable=true
-        
-        try
-            sTime=time()
-            plotdataC,plotlayoutC=loadContourPlot(imgIntT)
-            GC.gc()  # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0)  # Ensure Julia returns the freed memory to OS
-            end
-            selectedTab="tab3"
-            fTime=time()
-            eTime=round(fTime-sTime,digits=3)
-            msg="Plot loaded in $(eTime) seconds"
-        catch e
-            msg="Failed to load and process image: $e"
-            warning_msg=true
-        finally
-            progressPlot=false
-            btnPlotDisable=false
-            btnStartDisable=false
-            btnSpectraDisable=false
-            SpectraEnabled=true
-            GC.gc()
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0)
-            end
-        end
-    end
-
-    @onbutton compareBtn begin
-        CompareDialog=true
-    end
-
-    # To include a visualization in the spectrum plot indicating where is the selected mass
-    @onchange Nmass begin
-        if !isempty(xSpectraMz)
-            df = msi_data.spectrum_stats_df
-            profile_count = 0
-            if df !== nothing && hasproperty(df, :Mode)
-                profile_count = count(==(MSI_src.PROFILE), df.Mode)
-            end
-
-            if profile_count > 0
-                # Main spectrum trace
-                traceSpectra = PlotlyBase.scatter(
-                    x=xSpectraMz, 
-                    y=ySpectraMz, 
-                    marker=attr(size=1, color="blue", opacity=0.5), 
-                    name="Spectrum", 
-                    hoverinfo="x", 
-                    hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>", 
-                    showlegend=false
-                )
-            else
-                # Main spectrum trace
-                traceSpectra = PlotlyBase.stem(
-                    x=xSpectraMz, 
-                    y=ySpectraMz, 
-                    marker=attr(size=1, color="blue", opacity=0.5), 
-                    name="Spectrum", 
-                    hoverinfo="x", 
-                    hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>", 
-                    showlegend=false
-                )
-            end
-            
-            # Parse all valid masses from the comma-separated string
-            mass_strs = split(Nmass, ',', keepempty=false)
-            mass_traces = [traceSpectra]  # Start with the main spectrum
-            
-            valid_masses = Float64[]
-            for (idx, mass_str) in enumerate(mass_strs)
-                try
-                    mass_val = parse(Float64, strip(mass_str))
-                    if mass_val > 0  # Only add valid positive masses
-                        push!(valid_masses, mass_val)
-                        
-                        # Create a vertical line for this mass (Plotly will auto-assign colors)
-                        mass_trace = PlotlyBase.scatter(
-                            x=[mass_val, mass_val], 
-                            y=[0, maximum(ySpectraMz)], 
-                            mode="lines", 
-                            line=attr(width=1.5, dash="dash"),
-                            name="m/z $(round(mass_val, digits=4))",
-                            showlegend=false,
-                            hoverinfo="x+name",
-                            hovertemplate="<b>%{data.name}</b><extra></extra>"
-                        )
-                        push!(mass_traces, mass_trace)
-                    end
-                catch e
-                    # Skip invalid entries, continue with next
-                    continue
-                end
-            end
-            
-            # Update the plot data
-            plotdata = mass_traces
-        end
-    end
-
-    # Event detection for clicking on the images
-    @onchange data_click begin
-        if selectedTab == "tab1" || selectedTab == "tab0"
-            # This is for the image heatmaps
-            cursor_data = get(data_click, "cursor", nothing)
-            if cursor_data === nothing
-                return
-            end
-
-            x_val = get(cursor_data, "x", nothing)
-            y_val = get(cursor_data, "y", nothing)
-
-            if x_val === nothing || y_val === nothing
-                return # Do nothing if coordinates are not provided by the event
-            end
-
-            x = Int32(round(x_val))
-            y = Int32(round(y_val)) # y is negative in the UI
-
-            # Update the reactive coordinates, which will trigger the crosshair update
-            xCoord = clamp(x, 1, imgWidth)
-            yCoord = clamp(y, -imgHeight, -1)
-        end
-    end
-
-    @onchange xCoord, yCoord begin 
-        if selectedTab == "tab1"
-            main_trace = plotdataImgT[1]  # The heatmap/image trace
-            trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
-            plotdataImgT = [main_trace, trace1, trace2]  # Fresh array every time
-        elseif selectedTab == "tab0"
-            main_trace = plotdataImg[1]  # The heatmap/image trace
-            trace1, trace2 = crossLinesPlot(xCoord, yCoord, imgWidth, -imgHeight)
-            plotdataImg = [main_trace, trace1, trace2]
-        end
-    end
-
-    @onbutton btnOptical begin
-        imgRoute=pick_file(; filterlist="png,bmp,jpg,jpeg")
-        if imgRoute==""
-            msg="No optical image selected"
-        else
-            selectedTab="tab0"
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
-            img=load(imgRoute)
-            save("./public/css/imgOver.png",img)
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
-        end
-        
-    end
-
-    @onbutton btnOpticalT begin
-        imgRoute=pick_file(; filterlist="png,bmp,jpg,jpeg")
-        if imgRoute==""
-            msg="No optical image selected"
-        else
-            selectedTab="tab1"
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-            img=load(imgRoute)
-            save("./public/css/imgOver.png",img)
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT,"/css/imgOver.png",imgTrans)
-            opticalOverTriq=true
-        end
-    end
-
-    @onchange imgTrans begin
-        if !opticalOverTriq && imgRoute!=""
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
-        elseif opticalOverTriq && imgRoute!=""
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT,"/css/imgOver.png",imgTrans)
-        end
-    end
-
-    @onchange opticalOverTriq begin
-        if !opticalOverTriq && imgRoute!=""
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT)
-            selectedTab="tab0"
-        elseif opticalOverTriq && imgRoute!=""
-            plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt)
-            plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT,"/css/imgOver.png",imgTrans)
-            selectedTab="tab1"
-        end
-    end
-
-    @onbutton refetch_folders begin
-        # Re-load registry and update folder lists
-        registry = load_registry(registry_path)
-        all_folders = sort(collect(keys(registry)), lt=natural)
-        img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
-        
-        available_folders = deepcopy(all_folders)
-        image_available_folders = deepcopy(img_folders)
-
-        # For q-selects using image_available_folders
-        if !isempty(image_available_folders)
-            first_img_folder = first(image_available_folders)
-            if isempty(selected_folder_main)
-                selected_folder_main = first_img_folder
-            end
-            if isempty(selected_folder_compare_left)
-                selected_folder_compare_left = first_img_folder
-            end
-            if isempty(selected_folder_compare_right)
-                selected_folder_compare_right = first_img_folder
-            end
-        end
-
-        # For q-selects using available_folders
-        if !isempty(available_folders)
-            if isempty(selected_folder_metadata)
-                selected_folder_metadata = first(available_folders)
-            end
-        end
-    end
-
-    @mounted watchplots()
-
-    @onchange isready @time begin
-        if isready && !registry_init_done
-            initialization_message = "Pre-compiling functions at startup..."
-            warmup_init()
-            initialization_message = "Pre-compilation finished."
-            try
-                initialization_message = "Synchronizing registry with filesystem on backend init..."
-                reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
-                registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
-
-                public_dirs = isdir("public") ? readdir("public") : []
-                ignored_dirs = ["css", "masks"]
-                
-                dataset_dirs = filter(d -> isdir(joinpath("public", d)) && !(d in ignored_dirs), public_dirs)
-                
-                registry_keys = Set(keys(registry))
-                folder_set = Set(dataset_dirs)
-
-                new_folders = setdiff(folder_set, registry_keys)
-                for folder in new_folders
-                    println("Found new folder: $folder")
-                    registry[folder] = Dict(
-                        "source_path" => "unknown (manually added)",
-                        "processed_date" => "unknown",
-                        "metadata" => Dict(),
-                        "is_imzML" => true # Assume folder contains images if found this way
-                    )
-                end
-
-                removed_folders = setdiff(registry_keys, folder_set)
-                for folder in removed_folders
-                    delete!(registry, folder)
-                end
-
-                if !isempty(new_folders) || !isempty(removed_folders)
-                    initialization_message = "Registry changed, saving..."
-                    save_registry(reg_path, registry)
-                end
-                
-                all_folders = sort(collect(keys(registry)), lt=natural)
-                img_folders = filter(folder -> get(get(registry, folder, Dict()), "is_imzML", false), all_folders)
-
-                available_folders = deepcopy(all_folders)
-                image_available_folders = deepcopy(img_folders)
-                
-                println("UI lists updated. All: $(length(available_folders)), Images: $(length(image_available_folders))")
-            catch e
-                @warn "Registry synchronization failed: $e"
-                available_folders = []
-                image_available_folders = []
-                selected_files = String[]
-            finally
-                registry_init_done = true
-                is_initializing = false # Hide loading screen when initialization is complete
-            end
-        end
-        is_initializing = false # Hide loading screen when initialization is complete (current code is hidden due to incompatibility)
-        initialization_message = "Done."
-        log_memory_usage("App Ready", msi_data)
     end
 
     GC.gc() # Trigger garbage collection

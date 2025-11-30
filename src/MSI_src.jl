@@ -30,19 +30,31 @@ export run_preprocessing_analysis,
        BaselineCorrection,
        Normalization,
        PeakPicking,
-       PeakBinningParams,
+       PeakBinning,
        get_masked_spectrum_indices,
-       detect_peaks_profile,
-       detect_peaks_centroid,
-       smooth_spectrum,
-       apply_baseline_correction,
-       apply_normalization,
-       bin_peaks,
+       detect_peaks_profile_core, 
+       detect_peaks_centroid_core, 
+       smooth_spectrum_core, 
+       apply_baseline_correction_core, 
+       apply_normalization_core, 
+       bin_peaks_core, 
        PeakSelection,
        PeakAlignment,
-       find_calibration_peaks,
-       align_peaks_lowess,
-       MutableSpectrum
+       find_calibration_peaks_core, 
+       align_peaks_lowess_core,
+       MutableSpectrum,
+       transform_intensity_core,
+       calibrate_spectra_core
+
+export apply_baseline_correction,
+       apply_smoothing,
+       apply_peak_picking,
+       apply_calibration,
+       apply_peak_alignment,
+       apply_normalization,
+       apply_peak_binning,
+       apply_intensity_transformation,
+       save_feature_matrix
 
 # Include all source files directly into the main module
 include("BloomFilters.jl")
@@ -55,6 +67,7 @@ include("MzmlConverter.jl")
 include("Preprocessing.jl")
 include("ImageProcessing.jl")
 include("Precalculations.jl")
+include("PreprocessingPipeline.jl")
 
 using Setfield # For immutable struct updates
 

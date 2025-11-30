@@ -5,6 +5,8 @@ import Pkg
 using CairoMakie
 using DataFrames    # For creating dataframes
 using CSV
+using Statistics
+using Interpolations
 
 # --- Load the MSI_src Module ---
 Pkg.activate(joinpath(@__DIR__, ".."))
@@ -15,12 +17,13 @@ using MSI_src
 # CONFIG: PLEASE FILL IN YOUR FILE PATHS HERE
 # ===================================================================
 
-const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Thricoderma_etc/Imaging_interaccion_trichoderma_vs_streptomyces.imzML"
+# const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Thricoderma_etc/Imaging_interaccion_trichoderma_vs_streptomyces.imzML"
 # const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/set de datos MS/Atropina_tuneo_fraq_20ev.mzML"
-# const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML"
+const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML"
+# const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML"
 
-# const MASK_ROUTE = "/home/pixel/Documents/Cinvestav_2025/JuliaMSI/public/css/masks/Stomach_DHB_uncompressed.png"
-const MASK_ROUTE = "" 
+const MASK_ROUTE = "/home/pixel/Documents/Cinvestav_2025/JuliaMSI/public/css/masks/Stomach_DHB_uncompressed.png"
+# const MASK_ROUTE = "" 
 
 const OUTPUT_DIR = "./test/results/preprocessing_results"
 
@@ -39,6 +42,55 @@ const reference_peaks = Dict(
     290.1747 => "Atropine [M+H]+", 
     304.1903 => "Scopolamine [M+H]+",
     124.0393 => "Tropine [M+H]+",
+)
+
+const PIPELINE_STP = [
+    "stabilization",
+    #"baseline_correction",
+    "smoothing", 
+    "peak_picking",
+    "peak_selection",
+    #"calibration",
+    "peak_alignment",
+    "normalization",
+    "peak_binning"
+]
+
+# ===================================================================
+# USER OVERRIDES: Manually specify parameters here
+# ===================================================================
+# This dictionary allows you to override any auto-detected parameters.
+# The structure should match the output of `main_precalculation`.
+# Example: Force a less aggressive peak prominence threshold.
+
+const USER_OVERRIDES = Dict(
+    :Stabilization => Dict(
+        :method => :sqrt # Default stabilization method
+    ),
+    :PeakPicking => Dict(
+        #:snr_threshold => 1.5,
+        #:half_window => 5,
+        :snr_threshold => 8.0,
+        #:merge_peaks_tolerance => 2.5,
+        #:half_window => 2
+        #:half_window => 3
+    ),
+    # :Smoothing => Dict(
+    #     :window => 11
+    # )
+    #:PeakAlignment => Dict(
+    #    :tolerance => 0.01
+    #)
+    #:PeakSelection => Dict(
+        #:frequency_threshold => 0,
+        #:min_shape_r2 => 0.5,
+        #:max_fwhm_ppm => 30.0,
+        #:min_fwhm_ppm => 2.0
+    #),
+    #:PeakBinning => Dict(
+        #:tolerance => 30.0,
+        #:frequency_threshold => 0
+    #)
 )
 
 # ===================================================================
@@ -79,7 +131,7 @@ end
 # PREPROCESSING PIPELINE FUNCTIONS (IN-PLACE)
 # ===================================================================
 
-function apply_baseline_correction(spectra::Vector{MutableSpectrum}, params::Dict, msi_data::MSIData)
+function apply_baseline_correction_core(spectra::Vector{MutableSpectrum}, params::Dict, msi_data::MSIData)
     print_step_header("Baseline Correction")
     
     method = get(params, :method, :snip)
@@ -91,7 +143,7 @@ function apply_baseline_correction(spectra::Vector{MutableSpectrum}, params::Dic
     if !isempty(spectra)
         s = spectra[1]
         if validate_spectrum(s.mz, s.intensity)
-            baseline = MSI_src.apply_baseline_correction(s.intensity; method=method, iterations=iterations, window=window)
+            baseline = MSI_src.apply_baseline_correction_core(s.intensity; method=method, iterations=iterations, window=window)
             corrected_intensity = max.(0.0, s.intensity .- baseline)
             plot_spectrum_step(s.mz, corrected_intensity, "baseline_correction")
         end
@@ -99,7 +151,7 @@ function apply_baseline_correction(spectra::Vector{MutableSpectrum}, params::Dic
 
     Threads.@threads for s in spectra
         if validate_spectrum(s.mz, s.intensity)
-            baseline = MSI_src.apply_baseline_correction(s.intensity; method=method, iterations=iterations, window=window)
+            baseline = MSI_src.apply_baseline_correction_core(s.intensity; method=method, iterations=iterations, window=window)
             s.intensity = max.(0.0, s.intensity .- baseline)
         end
     end
@@ -117,14 +169,14 @@ function apply_smoothing(spectra::Vector{MutableSpectrum}, params::Dict)
     if !isempty(spectra)
         s = spectra[1]
         if validate_spectrum(s.mz, s.intensity)
-            smoothed_intensity = max.(0.0, smooth_spectrum(s.intensity; method=method, window=window, order=order))
+            smoothed_intensity = max.(0.0, smooth_spectrum_core(s.intensity; method=method, window=window, order=order))
             plot_spectrum_step(s.mz, smoothed_intensity, "smoothing", spectrum_index=s.id)
         end
     end
 
     Threads.@threads for s in spectra
         if validate_spectrum(s.mz, s.intensity)
-            smoothed_intensity = max.(0.0, smooth_spectrum(s.intensity; method=method, window=window, order=order))
+            smoothed_intensity = max.(0.0, smooth_spectrum_core(s.intensity; method=method, window=window, order=order))
             s.intensity = smoothed_intensity
         end
     end
@@ -153,13 +205,13 @@ function apply_peak_picking(spectra::Vector{MutableSpectrum}, params::Dict)
 
         if is_valid
             if method == :profile
-                s.peaks = detect_peaks_profile(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window, min_peak_prominence=min_peak_prominence, merge_peaks_tolerance=merge_peaks_tolerance)
+                s.peaks = detect_peaks_profile_core(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window, min_peak_prominence=min_peak_prominence, merge_peaks_tolerance=merge_peaks_tolerance)
             elseif method == :wavelet
                 s.peaks = detect_peaks_wavelet(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window)
             elseif method == :centroid
-                s.peaks = detect_peaks_centroid(s.mz, s.intensity; snr_threshold=snr_threshold)
+                s.peaks = detect_peaks_centroid_core(s.mz, s.intensity; snr_threshold=snr_threshold)
             else
-                s.peaks = detect_peaks_profile(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window)
+                s.peaks = detect_peaks_profile_core(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window)
             end
         else
             s.peaks = []
@@ -172,6 +224,51 @@ function apply_peak_picking(spectra::Vector{MutableSpectrum}, params::Dict)
         if s1 !== nothing
             plot_spectrum_step(spectra[s1].mz, spectra[s1].intensity, "peak_picking", peaks=spectra[s1].peaks)
             println("  - Detected $(length(spectra[s1].peaks)) peaks in spectrum 1")
+        end
+    end
+end
+
+function apply_peak_selection(spectra::Vector{MutableSpectrum}, params::Dict)
+    print_step_header("Peak Selection")
+    
+    min_snr = get(params, :min_snr, 0.0)
+    min_fwhm = get(params, :min_fwhm_ppm, 0.0)
+    max_fwhm = get(params, :max_fwhm_ppm, Inf)
+    min_r2 = get(params, :min_shape_r2, 0.0)
+    
+    # Handle `nothing` values from params, default to non-filtering values
+    min_snr = isnothing(min_snr) ? 0.0 : min_snr
+    min_fwhm = isnothing(min_fwhm) ? 0.0 : min_fwhm
+    max_fwhm = isnothing(max_fwhm) ? Inf : max_fwhm
+    min_r2 = isnothing(min_r2) ? 0.0 : min_r2
+
+    println("  - Min SNR: $min_snr")
+    println("  - FWHM Range (ppm): [$min_fwhm, $max_fwhm]")
+    println("  - Min Shape R²: $min_r2")
+
+    total_peaks_before = sum(s -> length(s.peaks), spectra)
+
+    Threads.@threads for s in spectra
+        if !isempty(s.peaks)
+            s.peaks = filter(p -> 
+                p.snr >= min_snr &&
+                (min_fwhm <= p.fwhm <= max_fwhm) &&
+                p.shape_r2 >= min_r2,
+                s.peaks
+            )
+        end
+    end
+
+    total_peaks_after = sum(s -> length(s.peaks), spectra)
+    println("  - Peaks before: $total_peaks_before, Peaks after: $total_peaks_after")
+
+    # Safely plot the first spectrum to show effect of filtering
+    if !isempty(spectra)
+        s1_idx = findfirst(s -> s.id == 1, spectra)
+        if s1_idx !== nothing
+            s1 = spectra[s1_idx]
+            plot_spectrum_step(s1.mz, s1.intensity, "peak_selection", peaks=s1.peaks, spectrum_index=s1.id)
+            println("  - Spectrum 1 now has $(length(s1.peaks)) peaks after selection.")
         end
     end
 end
@@ -195,7 +292,7 @@ function apply_calibration(spectra::Vector{MutableSpectrum}, params::Dict, refer
         s = spectra[i]
         info_message = ""
         if validate_spectrum(s.mz, s.intensity)
-            matched_peaks = find_calibration_peaks(s.mz, s.intensity, reference_masses; ppm_tolerance=ppm_tolerance)
+            matched_peaks = find_calibration_peaks_core(s.mz, s.intensity, reference_masses; ppm_tolerance=ppm_tolerance)
             if length(matched_peaks) >= 2
                 measured = sort(collect(values(matched_peaks)))
                 theoretical = sort(collect(keys(matched_peaks)))
@@ -248,7 +345,7 @@ function apply_peak_alignment(spectra::Vector{MutableSpectrum}, params::Dict)
         end
         
         current_peaks_mz = [p.mz for p in s.peaks]
-        alignment_func = align_peaks_lowess(ref_peaks_mz, current_peaks_mz; method=method, tolerance=tolerance, tolerance_unit=tolerance_unit)
+        alignment_func = align_peaks_lowess_core(ref_peaks_mz, current_peaks_mz; method=method, tolerance=tolerance, tolerance_unit=tolerance_unit)
         
         s.mz = alignment_func.(s.mz) # Update m/z axis
         
@@ -261,7 +358,7 @@ function apply_peak_alignment(spectra::Vector{MutableSpectrum}, params::Dict)
     end
 end
 
-function apply_normalization(spectra::Vector{MutableSpectrum}, params::Dict)
+function apply_normalization_core(spectra::Vector{MutableSpectrum}, params::Dict)
     print_step_header("Normalization")
     
     method = get(params, :method, :tic)
@@ -273,7 +370,7 @@ function apply_normalization(spectra::Vector{MutableSpectrum}, params::Dict)
         if s1 !== nothing
             s = spectra[s1]
             if validate_spectrum(s.mz, s.intensity)
-                normalized_intensity = MSI_src.apply_normalization(s.intensity; method=method)
+                normalized_intensity = MSI_src.apply_normalization_core(s.intensity; method=method)
                 plot_spectrum_step(s.mz, normalized_intensity, "normalization")
             end
         end
@@ -281,7 +378,7 @@ function apply_normalization(spectra::Vector{MutableSpectrum}, params::Dict)
 
     Threads.@threads for s in spectra
         if validate_spectrum(s.mz, s.intensity)
-            s.intensity = MSI_src.apply_normalization(s.intensity; method=method)
+            s.intensity = MSI_src.apply_normalization_core(s.intensity; method=method)
         end
     end
 end
@@ -293,8 +390,6 @@ function apply_peak_binning(spectra::Vector{MutableSpectrum}, params::Dict)
     tolerance = get(params, :tolerance, 20.0)
     tolerance_unit = get(params, :tolerance_unit, :ppm)
     min_peak_per_bin = get(params, :min_peak_per_bin, 3)
-    max_bin_width_ppm = get(params, :max_bin_width_ppm, 150.0)
-    intensity_weighted_centers = get(params, :intensity_weighted_centers, true)
     println("  Method: $method, Tolerance: $tolerance $tolerance_unit")
 
     if isempty(spectra) || all(s -> isempty(s.peaks), spectra)
@@ -304,92 +399,129 @@ function apply_peak_binning(spectra::Vector{MutableSpectrum}, params::Dict)
     
     println("  - Binning peaks from $(length(spectra)) spectra")
     
-    binning_params = PeakBinningParams(
-        method=method,
-        tolerance=tolerance,
-        tolerance_unit=tolerance_unit,
-        min_peak_per_bin=min_peak_per_bin,
-        max_bin_width_ppm=max_bin_width_ppm,
-        intensity_weighted_centers=intensity_weighted_centers
-    )
-    
-    feature_matrix, bin_definitions = bin_peaks(spectra, binning_params)
-    
-    if feature_matrix !== nothing && bin_definitions !== nothing
-        println("  - Generated feature matrix: $(size(feature_matrix.matrix))")
-        println("  - Number of bins: $(length(bin_definitions))")
-    end
-    
-    return feature_matrix, bin_definitions
-end
-
-function save_feature_matrix(feature_matrix, bin_definitions)
-    print_step_header("Saving Results")
-    
-    # Save feature matrix as CSV
-    csv_path = joinpath(OUTPUT_DIR, "feature_matrix.csv")
-    
-    # Create column headers
-    bin_headers = ["bin_$(i)_$(round(def[1], digits=4))-$(round(def[2], digits=4))" 
-                         for (i, def) in enumerate(bin_definitions)]
-    
-    # Open file for writing
-    open(csv_path, "w") do io
-        # Write header row
-        write(io, "spectrum_index," * join(bin_headers, ",") * "\n")
-        
-        # Write data rows
-        for r_idx in 1:size(feature_matrix.matrix, 1)
-            write(io, "$(feature_matrix.sample_ids[r_idx]),")
-            for c_idx in 1:size(feature_matrix.matrix, 2)
-                write(io, "$(feature_matrix.matrix[r_idx, c_idx])")
-                if c_idx < size(feature_matrix.matrix, 2)
-                    write(io, ",")
-                end
-            end
-            write(io, "\n")
+    # Collect all peaks with their intensities
+    all_peaks = Vector{Tuple{Float64, Float64}}()  # (mz, intensity)
+    for s in spectra
+        for p in s.peaks
+            push!(all_peaks, (p.mz, p.intensity))
         end
     end
-    println("  - Saved feature matrix: $csv_path")
     
-    # Save bin definitions (still using DataFrame as it's small)
-    bins_path = joinpath(OUTPUT_DIR, "bin_definitions.csv")
-    bins_df = DataFrame(
-        bin_index = 1:length(bin_definitions),
-        mz_start = [def[1] for def in bin_definitions],
-        mz_end = [def[2] for def in bin_definitions],
-        mz_center = [(def[1] + def[2])/2 for def in bin_definitions]
-    )
-    CSV.write(bins_path, bins_df)
-    println("  - Saved bin definitions: $bins_path")
+    if isempty(all_peaks)
+        @warn "No peaks collected for binning."
+        return nothing, nothing
+    end
     
-    return csv_path, bins_path
+    sort!(all_peaks, by=x->x[1])
+    
+    # Create bins - just store mz_center and intensity
+    bin_centers = Float64[]
+    bin_intensities = Float64[]
+    
+    i = 1
+    while i <= length(all_peaks)
+        current_bin_start = i
+        current_peak = all_peaks[i]
+        
+        # Find all peaks in this bin
+        j = i + 1
+        while j <= length(all_peaks)
+            next_peak = all_peaks[j]
+            # Calculate tolerance
+            tol = (tolerance_unit == :ppm) ? (current_peak[1] * tolerance / 1e6) : tolerance
+            
+            if (next_peak[1] - current_peak[1]) <= tol
+                j += 1
+            else
+                break
+            end
+        end
+        
+        current_bin_end = j - 1
+        bin_size = current_bin_end - current_bin_start + 1
+        
+        # Check if we have enough peaks in this bin
+        if bin_size >= min_peak_per_bin
+            bin_peaks_core = all_peaks[current_bin_start:current_bin_end]
+            
+            # Calculate m/z center and average intensity
+            mz_sum = 0.0
+            intensity_sum = 0.0
+            for peak in bin_peaks_core
+                mz_sum += peak[1]
+                intensity_sum += peak[2]
+            end
+            
+            mz_center = mz_sum / bin_size
+            avg_intensity = intensity_sum / bin_size
+            
+            push!(bin_centers, mz_center)
+            push!(bin_intensities, avg_intensity)
+        end
+        
+        i = j  # Move to next potential bin
+    end
+    
+    # Create the 2-row matrix
+    if !isempty(bin_centers)
+        n_bins = length(bin_centers)
+        feature_matrix = Matrix{Float64}(undef, 2, n_bins)
+        
+        for i in 1:n_bins
+            feature_matrix[1, i] = bin_centers[i]
+            feature_matrix[2, i] = bin_intensities[i]
+        end
+        
+        println("  - Created feature matrix: 2 × $n_bins")
+        println("  - Number of bins created: $n_bins")
+        println("  - m/z range: $(round(bin_centers[1], digits=4)) - $(round(bin_centers[end], digits=4))")
+        
+        # Return bin info as a vector of tuples for compatibility
+        bin_info = [(bin_centers[i], bin_intensities[i]) for i in 1:n_bins]
+        return feature_matrix, bin_info
+    else
+        @warn "No bins created after filtering"
+        return nothing, nothing
+    end
 end
 
-# ===================================================================
-# USER OVERRIDES: Manually specify parameters here
-# ===================================================================
-# This dictionary allows you to override any auto-detected parameters.
-# The structure should match the output of `main_precalculation`.
-# Example: Force a less aggressive peak prominence threshold.
-const USER_OVERRIDES = Dict(
-    :PeakPicking => Dict(
-        #:snr_threshold => 1.5,
-        :half_window => 5,
-        :snr_threshold => 15.0,
-        #:merge_peaks_tolerance => 2.5,
-        #:half_window => 2
-    ),
-    # :Smoothing => Dict(
-    #     :window => 11
-    # )
-    #:PeakAlignment => Dict(
-    #    :tolerance => 0.01
-    #)
-    :PeakBinningParams => Dict(
-        :tolerance => 30.0
-    )
-)
+function save_feature_matrix(feature_matrix::Matrix{Float64}, bin_info)
+    print_step_header("Saving Results")
+    
+    # Save as simple CSV with m/z and intensity rows
+    csv_path = joinpath(OUTPUT_DIR, "feature_matrix_simple.csv")
+    
+    open(csv_path, "w") do io
+        # Write header
+        write(io, "mz,intensity\n")
+        
+        # Write data: m/z values in first column, intensities in second
+        for i in 1:size(feature_matrix, 2)
+            mz = feature_matrix[1, i]
+            intensity = feature_matrix[2, i]
+            write(io, "$mz,$intensity\n")
+        end
+    end
+    println("  - Saved simple feature matrix: $csv_path")
+    
+    # Also save in a more standard format for MSI
+    csv_path_standard = joinpath(OUTPUT_DIR, "feature_matrix_standard.csv")
+    
+    open(csv_path_standard, "w") do io
+        # Write header with m/z values as column names
+        write(io, "sample_type,")
+        mz_headers = [@sprintf("mz_%.4f", feature_matrix[1, i]) for i in 1:size(feature_matrix, 2)]
+        write(io, join(mz_headers, ",") * "\n")
+        
+        # Write the aggregated intensity values
+        write(io, "aggregated_spectrum,")
+        intensity_values = [feature_matrix[2, i] for i in 1:size(feature_matrix, 2)]
+        write(io, join(string.(intensity_values), ",") * "\n")
+    end
+    println("  - Saved standard format matrix: $csv_path_standard")
+    
+    return csv_path, csv_path_standard
+end
 
 # ===================================================================
 # MAIN PREPROCESSING PIPELINE
@@ -446,28 +578,45 @@ function run_preprocessing_pipeline()
     end
     
     # Define pipeline steps
-    pipeline_steps = [
-        "baseline_correction",
-        "smoothing", 
-        "peak_picking",
-        "calibration",
-        "peak_alignment",
-        "normalization",
-        "peak_binning"
-    ]
+    pipeline_steps = PIPELINE_STP
     
     println("\nPipeline steps: $(join(pipeline_steps, " -> "))")
     
     # Initialize `current_spectra` as a Vector of mutable structs for in-place modification
     println("\nInitializing spectra data structure...")
-    num_spectra = length(msi_data.spectra_metadata)
-    current_spectra = Vector{MutableSpectrum}(undef, num_spectra)
-    _iterate_spectra_fast(msi_data) do idx, mz, intensity
-        current_spectra[idx] = MutableSpectrum(idx, mz, intensity, [])
+    local spectrum_indices_to_process::AbstractVector{Int}
+    if !isempty(MASK_ROUTE)
+        println("Applying mask from: $(MASK_ROUTE)")
+        try
+            mask_matrix = MSI_src.load_and_prepare_mask(MASK_ROUTE, msi_data.image_dims)
+            masked_indices_set = MSI_src.get_masked_spectrum_indices(msi_data, mask_matrix)
+            spectrum_indices_to_process = collect(masked_indices_set)
+            println("Mask applied. $(length(spectrum_indices_to_process)) spectra are within the masked region.")
+        catch e
+            @error "Failed to load or apply mask: $e. Proceeding without mask."
+            spectrum_indices_to_process = 1:length(msi_data.spectra_metadata)
+        end
+    else
+        spectrum_indices_to_process = 1:length(msi_data.spectra_metadata)
+    end
+
+    if isempty(spectrum_indices_to_process)
+        @warn "No spectra available for processing after applying mask/filter. Exiting pipeline."
+        close(msi_data)
+        return
+    end
+
+    num_spectra_to_process = length(spectrum_indices_to_process)
+    current_spectra = Vector{MutableSpectrum}(undef, num_spectra_to_process)
+    
+    Threads.@threads for i in 1:num_spectra_to_process
+        original_idx = spectrum_indices_to_process[i]
+        mz, intensity = MSI_src.GetSpectrum(msi_data, original_idx)
+        current_spectra[i] = MSI_src.MutableSpectrum(original_idx, mz, intensity, [])
         
-        # Plot raw spectrum without masks
-        if idx == 1
-            plot_spectrum_step(mz, intensity, "raw_unmasked_spectrum")
+        # Plot raw spectrum without masks (only the first processed one)
+        if i == 1
+            plot_spectrum_step(mz, intensity, "raw_unmasked_spectrum", spectrum_index=original_idx)
         end
     end
     
@@ -481,14 +630,42 @@ function run_preprocessing_pipeline()
         println("PROCESSING STEP: $step")
         println("-"^60)
         
-        if step == "baseline_correction"
-            @time apply_baseline_correction(current_spectra, auto_params[:BaselineCorrection], msi_data)
+        if step == "stabilization"
+            print_step_header("Intensity Transformation (Stabilization)")
+            method = get(auto_params[:Stabilization], :method, :sqrt)
+            println("  Method: $method")
+            
+            # Safely plot the first spectrum before transformation
+            if !isempty(current_spectra)
+                s = current_spectra[1]
+                if validate_spectrum(s.mz, s.intensity)
+                    # Use a temporary spectrum to plot before and after
+                    initial_intensity = deepcopy(s.intensity)
+                    plot_spectrum_step(s.mz, initial_intensity, "stabilization_before", spectrum_index=s.id)
+                end
+            end
+
+            @time apply_intensity_transformation(current_spectra, auto_params[:Stabilization])
+            
+            # Safely plot the first spectrum after transformation
+            if !isempty(current_spectra)
+                s = current_spectra[1]
+                if validate_spectrum(s.mz, s.intensity)
+                    plot_spectrum_step(s.mz, s.intensity, "stabilization_after", spectrum_index=s.id)
+                end
+            end
+            
+        elseif step == "baseline_correction"
+            @time apply_baseline_correction_core(current_spectra, auto_params[:BaselineCorrection], msi_data)
             
         elseif step == "smoothing"
             apply_smoothing(current_spectra, auto_params[:Smoothing])
             
         elseif step == "peak_picking"
             @time apply_peak_picking(current_spectra, auto_params[:PeakPicking])
+
+        elseif step == "peak_selection"
+            @time apply_peak_selection(current_spectra, auto_params[:PeakSelection])
             
         elseif step == "calibration"
             @time apply_calibration(current_spectra, auto_params[:Calibration], reference_peaks)
@@ -497,14 +674,14 @@ function run_preprocessing_pipeline()
             @time apply_peak_alignment(current_spectra, auto_params[:PeakAlignment])
             
         elseif step == "normalization"
-            @time apply_normalization(current_spectra, auto_params[:Normalization])
+            @time apply_normalization_core(current_spectra, auto_params[:Normalization])
             
         elseif step == "peak_binning"
             # This step is different as it generates the final matrix, not modifying spectra in-place
-            feature_matrix, bin_definitions = @time apply_peak_binning(current_spectra, auto_params[:PeakBinningParams])
+            feature_matrix, bin_info = @time apply_peak_binning(current_spectra, auto_params[:PeakBinning])
             
             if feature_matrix !== nothing
-                @time save_feature_matrix(feature_matrix, bin_definitions)
+                @time save_feature_matrix(feature_matrix, bin_info)
             end
             
         else

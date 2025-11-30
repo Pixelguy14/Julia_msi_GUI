@@ -2,221 +2,322 @@ using CairoMakie
 using Statistics
 using Colors
 
-function create_msi_parameter_plot()
-    # Create the figure with subplots for each preprocessing step
-    fig = Figure(size=(1600, 1200), fontsize=12)
-    
-    # Define the preprocessing steps and their parameters
-    steps = [
-        ("BaselineCorrection", ["iterations: 10", "method: SNIP", "window: 3.0"]),
-        ("Calibration", ["fit_order: 2", "method: internal_standards", "ppm_tolerance: 20.0"]),
-        ("Normalization", ["method: rms"]),
-        ("PeakAlignment", ["max_shift_ppm: 50.0", "method: linear", "tolerance: 20.0 ppm"]),
-        ("PeakBinningParams", ["max_bin_width_ppm: 60.0", "method: adaptive", "min_peak_per_bin: 3"]),
-        ("PeakPicking", ["half_window: 5", "method: centroid", "snr_threshold: 15.0"]),
-        ("PeakSelection", ["max_fwhm_ppm: 95.39", "min_fwhm_ppm: 19.08", "min_snr: 3.0"]),
-        ("Smoothing", ["method: savitzky_golay", "order: 3", "window: 5"])
-    ]
-    
-    # Create a grid of subplots
-    g = fig[1, 1] = GridLayout()
-    
-    # Plot each preprocessing step
-    for (idx, (step_name, params)) in enumerate(steps)
-        row, col = fldmod1(idx, 2)
-        ax = Axis(g[row, col], title=step_name, titlesize=14)
-        
-        # Generate simulated m/z values and intensities
-        mz_range = range(100, 1000, length=500)
-        
-        if step_name == "BaselineCorrection"
-            # Simulate spectrum with baseline
-            true_signal = 0.5 .* exp.(-0.001 .* (mz_range .- 400).^2) .+
-                          0.3 .* exp.(-0.002 .* (mz_range .- 600).^2)
-            baseline = 0.1 .+ 0.05 .* sin.(mz_range ./ 50)
-            noisy_signal = true_signal .+ baseline .+ 0.02 .* randn(length(mz_range))
-            corrected = noisy_signal .- baseline
-            
-            lines!(ax, mz_range, noisy_signal, color=:blue, linewidth=2, label="Raw")
-            lines!(ax, mz_range, baseline, color=:red, linewidth=2, linestyle=:dash, label="Baseline")
-            lines!(ax, mz_range, corrected, color=:green, linewidth=2, label="Corrected")
-            
-        elseif step_name == "Calibration"
-            # Simulate calibration shift
-            reference_peaks = [200, 400, 600, 800]
-            measured_peaks = reference_peaks .+ 2.0 .* randn(length(reference_peaks))
-            
-            scatter!(ax, reference_peaks, fill(0.5, length(reference_peaks)), 
-                    color=:red, markersize=15, label="Reference")
-            scatter!(ax, measured_peaks, fill(0.3, length(measured_peaks)), 
-                    color=:blue, markersize=10, label="Measured")
-            
-            # Add calibration lines
-            for i in 1:length(reference_peaks)
-                lines!(ax, [measured_peaks[i], reference_peaks[i]], [0.3, 0.5], 
-                      color=:black, linewidth=1, linestyle=:dash)
+"""
+Plots the effect of baseline correction, showing how different numbers of SNIP
+iterations affect the estimated baseline.
+"""
+function plot_baseline_correction_details()
+    fig = Figure(size=(1200, 700), fontsize=14)
+    ax = Axis(fig[1, 1], title="Detailed View: Baseline Correction (SNIP)", xlabel="m/z", ylabel="Intensity")
+
+    mz_range = range(200, 1000, length=1500)
+    true_signal = 1.2 .* exp.(-0.001 .* (mz_range .- 450).^2) .+ 0.8 .* exp.(-0.002 .* (mz_range .- 750).^2)
+    baseline_comp = 0.15 .+ 0.1 .* sin.(mz_range ./ 60) .+ 0.0001 .* mz_range
+    noise = 0.04 .* randn(length(mz_range))
+    raw_signal = true_signal .+ baseline_comp .+ noise
+
+    # Simplified SNIP simulation for visualization
+    function simple_snip(y, iterations)
+        b = copy(y)
+        for _ in 1:iterations
+            for i in 2:length(b)-1
+                b[i] = min(b[i], 0.5 * (b[i-1] + b[i+1]))
             end
-            
-        elseif step_name == "Normalization"
-            # Simulate normalization effect
-            spectra = [
-                0.8 .* exp.(-0.001 .* (mz_range .- 300).^2) .+ 0.2 .* randn(length(mz_range)),
-                1.2 .* exp.(-0.001 .* (mz_range .- 300).^2) .+ 0.2 .* randn(length(mz_range)),
-                0.9 .* exp.(-0.001 .* (mz_range .- 300).^2) .+ 0.2 .* randn(length(mz_range))
-            ]
-            
-            normalized_spectra = [spec ./ std(spec) for spec in spectra]
-            
-            for (i, spec) in enumerate(spectra)
-                lines!(ax, mz_range, spec .+ i*0.3, color=RGBA(1, 0, 0, 0.6), linewidth=2, 
-                      label=i==1 ? "Before Norm" : "")
-            end
-            for (i, spec) in enumerate(normalized_spectra)
-                lines!(ax, mz_range, spec .+ i*0.3, color=RGBA(0, 0, 1, 0.6), linewidth=2, 
-                      label=i==1 ? "After Norm" : "")
-            end
-            
-        elseif step_name == "PeakAlignment"
-            # Simulate peak alignment
-            base_peaks = [300, 500, 700]
-            shifts = [-15, 5, 10]
-            
-            for (i, shift) in enumerate(shifts)
-                shifted_peaks = base_peaks .+ shift
-                aligned_peaks = base_peaks
-                
-                scatter!(ax, shifted_peaks, fill(i, length(shifted_peaks)), 
-                        color=:red, markersize=12, label=i==1 ? "Before Align" : "")
-                scatter!(ax, aligned_peaks, fill(i+0.3, length(aligned_peaks)), 
-                        color=:green, markersize=12, label=i==1 ? "After Align" : "")
-                
-                # Show alignment lines
-                for j in 1:length(base_peaks)
-                    lines!(ax, [shifted_peaks[j], aligned_peaks[j]], [i, i+0.3], 
-                          color=:black, linewidth=1, linestyle=:dash)
-                end
-            end
-            
-        elseif step_name == "PeakBinningParams"
-            # Simulate peak binning with centroids
-            raw_peaks_mz = 100:25:900
-            raw_peaks_intensity = rand(length(raw_peaks_mz))
-            
-            # Create binned peaks (wider bins)
-            bin_centers = 150:60:850
-            bin_intensities = [sum(raw_peaks_intensity[abs.(raw_peaks_mz .- center) .< 30]) 
-                              for center in bin_centers] .* 0.8
-            
-            # Profile mode (continuous)
-            profile_signal = zeros(length(mz_range))
-            for (mz, int) in zip(raw_peaks_mz, raw_peaks_intensity)
-                profile_signal .+= int .* exp.(-0.001 .* (mz_range .- mz).^2)
-            end
-            
-            lines!(ax, mz_range, profile_signal, color=:blue, linewidth=2, label="Profile")
-            barplot!(ax, bin_centers, bin_intensities, color=RGBA(1, 0, 0, 0.7), 
-                    width=50, label="Binned Centroids")
-            
-        elseif step_name == "PeakPicking"
-            # Simulate peak picking from profile to centroids
-            profile_signal = 0.6 .* exp.(-0.0005 .* (mz_range .- 400).^2) .+
-                             0.4 .* exp.(-0.0008 .* (mz_range .- 650).^2) .+
-                             0.1 .* randn(length(mz_range))
-            
-            # Simulate picked peaks (centroids)
-            peak_positions = [380, 405, 640, 660]
-            peak_intensities = [0.5, 0.6, 0.35, 0.4]
-            
-            lines!(ax, mz_range, profile_signal, color=:blue, linewidth=2, label="Profile Spectrum")
-            scatter!(ax, peak_positions, peak_intensities, color=:red, markersize=20, 
-                    label="Picked Centroids", strokewidth=2)
-            
-        elseif step_name == "PeakSelection"
-            # Simulate peak selection based on criteria
-            all_peaks_mz = 200:50:800
-            all_peaks_fwhm = rand(length(all_peaks_mz)) .* 100 .+ 10
-            all_peaks_snr = rand(length(all_peaks_mz)) .* 10
-            
-            # Selection criteria
-            selected = (all_peaks_fwhm .>= 19.08) .& (all_peaks_fwhm .<= 95.39) .& (all_peaks_snr .>= 3.0)
-            
-            scatter!(ax, all_peaks_mz[.!selected], all_peaks_fwhm[.!selected], 
-                    color=:red, markersize=15, label="Rejected")
-            scatter!(ax, all_peaks_mz[selected], all_peaks_fwhm[selected], 
-                    color=:green, markersize=15, label="Selected")
-            
-            # Add selection criteria lines
-            hlines!(ax, [19.08, 95.39], color=:black, linestyle=:dash, linewidth=2)
-            text!(ax, 850, 50; text="FWHM bounds", color=:black, fontsize=10)
-            
-        elseif step_name == "Smoothing"
-            # Simulate smoothing effect
-            true_signal = 0.7 .* exp.(-0.001 .* (mz_range .- 450).^2) .+
-                          0.5 .* exp.(-0.0008 .* (mz_range .- 650).^2)
-            noisy_signal = true_signal .+ 0.1 .* randn(length(mz_range))
-            
-            # Simple smoothing simulation
-            smoothed = similar(noisy_signal)
-            window = 5
-            for i in 1:length(noisy_signal)
-                start_idx = max(1, i - window ÷ 2)
-                end_idx = min(length(noisy_signal), i + window ÷ 2)
-                smoothed[i] = mean(noisy_signal[start_idx:end_idx])
-            end
-            
-            lines!(ax, mz_range, noisy_signal, color=:red, linewidth=1, label="Noisy")
-            lines!(ax, mz_range, smoothed, color=:blue, linewidth=2, label="Smoothed")
-            lines!(ax, mz_range, true_signal, color=:green, linewidth=1, linestyle=:dash, label="True")
         end
-        
-        # Add parameter text using a more reliable approach
-        param_text = join(params, "\n")
-        
-        text!(ax, param_text, position=Point2f(0.05, 0.95), 
-            space=:relative, align=(:left, :top), color=:black, 
-            fontsize=10, font=:regular)
-        
-        # Add legend for selected plots
-        if idx <= 4
-            axislegend(ax, position=:rt, framevisible=true, backgroundcolor=RGBA(1,1,1,0.8))
-        end
-        
-        # Customize axes
-        ax.xlabel = "m/z"
-        ax.ylabel = idx in [1,3,5,7] ? "Intensity" : ""
-        ax.xgridvisible = false
-        ax.ygridvisible = false
+        return b
     end
     
-    # Add overall title
-    Label(fig[0, :], "MSI Preprocessing Pipeline Parameters and Simulations", 
-          fontsize=18, font=:bold, padding=(0, 0, 10, 0))
-    
-    # Add explanation
-    explanation = """
-    Simulation of MSI preprocessing parameters showing:
-    • Blue lines: Profile/continuous spectra
-    • Red bars/points: Centroid data  
-    • Dashed lines: Reference/true signals
-    • Green: Processed/corrected data
-    • Each subplot demonstrates key parameters for the preprocessing step
-    """
-    
-    Label(fig[2, :], explanation, fontsize=12, tellwidth=false, padding=(10, 10, 10, 10))
-    
-    # Adjust layout
-    colgap!(g, 20)
-    rowgap!(g, 20)
-    
-    fig
+    baseline_iter_20 = simple_snip(raw_signal, 20)
+    baseline_iter_200 = simple_snip(raw_signal, 200)
+    corrected_signal = raw_signal .- baseline_iter_200
+
+    lines!(ax, mz_range, raw_signal, color=(:grey, 0.6), label="Raw Signal")
+    lines!(ax, mz_range, corrected_signal, color=:green, linewidth=2.5, label="Corrected Signal")
+    l1 = lines!(ax, mz_range, baseline_iter_20, color=(:red, 0.7), linestyle=:dash, linewidth=2, label="Baseline (iterations: 20)")
+    l2 = lines!(ax, mz_range, baseline_iter_200, color=:red, linewidth=2.5, label="Baseline (iterations: 200)")
+
+    text!(ax, "Parameter: `iterations`\nMore iterations result in a more aggressive baseline that follows the signal floor more closely.", 
+          position=Point2f(0.05, 0.95), space=:relative, align=(:left, :top), fontsize=12)
+    axislegend(ax, position=:rt)
+    save("descriptive_plot_baseline_correction.png", fig)
+    println("Saved: descriptive_plot_baseline_correction.png")
 end
 
-# Create and display the plot
-fig = create_msi_parameter_plot()
+"""
+Plots the effect of smoothing, comparing different window sizes.
+"""
+function plot_smoothing_details()
+    fig = Figure(size=(1200, 700), fontsize=14)
+    ax = Axis(fig[1, 1], title="Detailed View: Smoothing (Savitzky-Golay)", xlabel="m/z", ylabel="Intensity")
 
-# Save the plot
-save("msi_preprocessing_parameters.png", fig)
-println("Plot saved as 'msi_preprocessing_parameters.png'")
+    mz_range = range(400, 700, length=1000)
+    true_signal = 0.8 .* exp.(-0.002 .* (mz_range .- 500).^2) .+ 0.6 .* exp.(-0.001 .* (mz_range .- 600).^2)
+    noisy_signal = true_signal .+ 0.1 .* randn(length(mz_range))
 
-# Display the plot (if in an interactive environment)
-fig
+    function simple_moving_average(y, window)
+        smoothed = similar(y)
+        for i in 1:length(y)
+            start_idx = max(1, i - window ÷ 2)
+            end_idx = min(length(y), i + window ÷ 2)
+            smoothed[i] = mean(y[start_idx:end_idx])
+        end
+        return smoothed
+    end
+    
+    smoothed_small_window = simple_moving_average(noisy_signal, 5)
+    smoothed_large_window = simple_moving_average(noisy_signal, 21)
+
+    lines!(ax, mz_range, noisy_signal, color=(:red, 0.4), label="Noisy Signal")
+    lines!(ax, mz_range, true_signal, color=:black, linestyle=:dash, linewidth=2, label="True Signal")
+    lines!(ax, mz_range, smoothed_small_window, color=:blue, linewidth=2, label="Smoothed (window: 5)")
+    lines!(ax, mz_range, smoothed_large_window, color=:purple, linewidth=2, label="Smoothed (window: 21)")
+    
+    text!(ax, "Parameter: `window`\nA larger window increases smoothing but may broaden peaks.", 
+          position=Point2f(0.05, 0.95), space=:relative, align=(:left, :top), fontsize=12)
+    axislegend(ax, position=:rt)
+    save("descriptive_plot_smoothing.png", fig)
+    println("Saved: descriptive_plot_smoothing.png")
+end
+
+"""
+Visualizes the peak picking process for profile-mode data, illustrating the
+effects of SNR threshold and peak prominence.
+"""
+function plot_peak_picking_profile_details()
+    fig = Figure(size=(1200, 700), fontsize=14)
+    ax = Axis(fig[1, 1], title="Detailed View: Peak Picking (Profile Mode)", xlabel="m/z", ylabel="Intensity")
+
+    mz = 1:200
+    base_signal = 10 .* exp.(-((mz .- 50).^2) ./ (2*3^2)) .+ 7 .* exp.(-((mz .- 120).^2) ./ (2*5^2)) .+ 2
+    small_peak_signal = zeros(200)
+    for i in 80:90
+        small_peak_signal[i] = 3 * exp(-((i - 85)^2) / 2.0)
+    end
+    noise = 0.5 .* randn(200)
+    intensity = base_signal .+ small_peak_signal .+ noise
+    
+    noise_level = median(abs.(intensity .- median(intensity))) * 1.4826 # MAD
+    snr_threshold_val = 3.0
+    intensity_threshold = noise_level * snr_threshold_val
+
+    picked_peaks_mz = [50, 85, 120]
+    picked_peaks_intensity = intensity[picked_peaks_mz]
+    
+    hlines!(ax, [noise_level], color=:gray, linestyle=:dot, label="Est. Noise Level")
+    hlines!(ax, [intensity_threshold], color=:orange, linestyle=:dash, label="SNR Threshold (snr_threshold = 3.0)")
+    lines!(ax, mz, intensity, color=:blue, label="Profile Spectrum")
+    scatter!(ax, picked_peaks_mz, picked_peaks_intensity, color=:green, markersize=15, strokewidth=2, label="Peaks passing SNR")
+    scatter!(ax, [25], [intensity[25]], color=:red, marker=:x, markersize=15, label="Local max below SNR")
+
+    # Illustrate prominence
+    arrows!(ax, [120, 120], [intensity[135], intensity[120]], [0, 0], [intensity[120]-intensity[135], 0], color=:purple)
+    text!(ax, 125, (intensity[120]+intensity[135])/2, text="Prominence", color=:purple)
+
+    axislegend(ax, position=:rt)
+    save("descriptive_plot_peakpicking_profile.png", fig)
+    println("Saved: descriptive_plot_peakpicking_profile.png")
+end
+
+"""
+Visualizes peak picking (filtering) for centroid-mode data based on an SNR
+(intensity) threshold.
+"""
+function plot_peak_picking_centroid_details()
+    fig = Figure(size=(1200, 700), fontsize=14)
+    ax = Axis(fig[1, 1], title="Detailed View: Peak Picking (Centroid Mode)", xlabel="m/z", ylabel="Intensity")
+
+    mz = [100, 150, 200, 250, 300, 350, 400]
+    intensity = [10, 5, 25, 8, 3, 18, 12]
+    snr_threshold_val = 10.0
+
+    stem!(ax, mz, intensity, color=:gray, label="Input Centroids")
+    
+    selected_mask = intensity .>= snr_threshold_val
+    stem!(ax, mz[selected_mask], intensity[selected_mask], color=:green, trunkwidth=3, label="Selected Peaks (intensity >= 10)")
+    stem!(ax, mz[.!selected_mask], intensity[.!selected_mask], color=:red, trunkwidth=3, label="Rejected Peaks (intensity < 10)")
+    
+    hlines!(ax, [snr_threshold_val], color=:orange, linestyle=:dash, label="Intensity Threshold (snr_threshold)")
+
+    text!(ax, "Parameter: `snr_threshold`\nIn centroid mode, this acts as a direct intensity filter.", 
+          position=Point2f(0.05, 0.95), space=:relative, align=(:left, :top), fontsize=12)
+    axislegend(ax, position=:rt)
+    save("descriptive_plot_peakpicking_centroid.png", fig)
+    println("Saved: descriptive_plot_peakpicking_centroid.png")
+end
+
+"""
+Plots the effect of different normalization methods on a set of spectra.
+"""
+function plot_normalization_details()
+    fig = Figure(size=(1200, 700), fontsize=14)
+    
+    mz = range(300, 400, length=500)
+    spec1 = 1.5 .* exp.(-((mz .- 350).^2) ./ 50)
+    spec2 = 0.8 .* exp.(-((mz .- 350).^2) ./ 50)
+    
+    ax1 = Axis(fig[1, 1], title="Before Normalization", ylabel="Absolute Intensity")
+    lines!(ax1, mz, spec1, label="Spectrum A (High TIC)")
+    lines!(ax1, mz, spec2, label="Spectrum B (Low TIC)")
+    axislegend(ax1)
+
+    ax2 = Axis(fig[1, 2], title="After Normalization (TIC)", ylabel="Relative Intensity")
+    lines!(ax2, mz, spec1 ./ sum(spec1), label="Spectrum A (Normalized)")
+    lines!(ax2, mz, spec2 ./ sum(spec2), label="Spectrum B (Normalized)")
+
+    text!(ax2, "Effect: Spectra are scaled to have the same total area, making their intensities comparable.",
+          position=Point2f(0.05, 0.95), space=:relative, align=(:left, :top), fontsize=12, justification=:left)
+    
+    save("descriptive_plot_normalization.png", fig)
+    println("Saved: descriptive_plot_normalization.png")
+end
+
+"""
+Illustrates mass calibration, showing how a calibration curve corrects measured
+m/z values based on reference peaks.
+"""
+function plot_calibration_details()
+    fig = Figure(size=(1200, 700), fontsize=14)
+    ax = Axis(fig[1, 1], title="Detailed View: Calibration", xlabel="Measured m/z", ylabel="m/z Error (Measured - Reference)")
+
+    ref_mz = [200, 400, 600, 800, 1000]
+    measured_mz = ref_mz .+ [0.1, 0.15, 0.2, 0.25, 0.3] .+ 0.02 .* randn(5)
+    errors = measured_mz .- ref_mz
+
+    # Fit a linear model to the error
+    A = [ones(5) measured_mz]
+    coeffs = A \ errors
+    correction_func(m) = m - (coeffs[1] .+ coeffs[2] .* m)
+    
+    fit_line = coeffs[1] .+ coeffs[2] .* measured_mz
+    
+    scatter!(ax, measured_mz, errors, color=:red, markersize=15, label="Measured Error")
+    lines!(ax, measured_mz, fit_line, color=:blue, label="Calibration Curve (fit_order=1)")
+
+    text!(ax, "Parameter: `fit_order`\nA curve is fit to the error of known reference peaks.\nThis curve is then used to correct all m/z values.", 
+          position=Point2f(0.05, 0.95), space=:relative, align=(:left, :top), fontsize=12)
+    axislegend(ax, position=:rb)
+    save("descriptive_plot_calibration.png", fig)
+    println("Saved: descriptive_plot_calibration.png")
+end
+
+"""
+Visualizes peak alignment by showing multiple spectra with misaligned peaks
+before and after the alignment process.
+"""
+function plot_alignment_details()
+    fig = Figure(size=(1600, 600), fontsize=14)
+    ax1 = Axis(fig[1, 1], title="Before Alignment", xlabel="m/z", yticklabelsvisible=false, ygridvisible=false)
+    ax2 = Axis(fig[1, 2], title="After Alignment", xlabel="m/z", yticklabelsvisible=false, ygridvisible=false)
+
+    mz = range(490, 510, length=1000)
+    shifts = [-0.5, 0.0, 0.8]
+    colors = [:blue, :green, :purple]
+    
+    for (i, shift) in enumerate(shifts)
+        peak_center = 500 + shift
+        spectrum = exp.(-((mz .- peak_center).^2) ./ 0.1)
+        lines!(ax1, mz, spectrum .+ i, color=colors[i])
+        vlines!(ax1, [peak_center], color=(colors[i], 0.5), linestyle=:dash)
+
+        # After alignment, all peaks are at 500
+        aligned_spectrum = exp.(-((mz .- 500).^2) ./ 0.1)
+        lines!(ax2, mz, aligned_spectrum .+ i, color=colors[i])
+    end
+    vlines!(ax2, [500], color=:red, linestyle=:dash, label="Reference m/z")
+    axislegend(ax2)
+
+    save("descriptive_plot_alignment.png", fig)
+    println("Saved: descriptive_plot_alignment.png")
+end
+
+"""
+Illustrates peak selection by filtering a population of peaks based on
+FWHM and SNR criteria.
+"""
+function plot_peak_selection_details()
+    fig = Figure(size=(1200, 700), fontsize=14)
+    ax = Axis(fig[1, 1], title="Detailed View: Peak Selection", xlabel="FWHM (ppm)", ylabel="Signal-to-Noise Ratio (SNR)")
+
+    n_peaks = 100
+    fwhm = rand(n_peaks) .* 150
+    snr = rand(n_peaks) .* 20
+    
+    min_fwhm_ppm = 20.0
+    max_fwhm_ppm = 100.0
+    min_snr = 5.0
+
+    selected_mask = (fwhm .>= min_fwhm_ppm) .& (fwhm .<= max_fwhm_ppm) .& (snr .>= min_snr)
+
+    scatter!(ax, fwhm[.!selected_mask], snr[.!selected_mask], color=(:red, 0.5), label="Rejected Peaks")
+    scatter!(ax, fwhm[selected_mask], snr[selected_mask], color=:green, label="Selected Peaks")
+
+    vlines!(ax, [min_fwhm_ppm, max_fwhm_ppm], color=:blue, linestyle=:dash, label="FWHM bounds")
+    hlines!(ax, [min_snr], color=:orange, linestyle=:dash, label="SNR bound")
+    
+    poly!(ax, BBox(min_fwhm_ppm, max_fwhm_ppm, min_snr, 22), color=(:green, 0.1))
+    text!(ax, "Selection Region", position=(60, 12), color=:green, fontsize=14)
+
+    axislegend(ax)
+    save("descriptive_plot_peak_selection.png", fig)
+    println("Saved: descriptive_plot_peak_selection.png")
+end
+
+"""
+Visualizes the adaptive peak binning process, showing how peaks from different
+spectra are grouped into a common bin based on a PPM tolerance.
+"""
+function plot_peak_binning_details()
+    fig = Figure(size=(1200, 700), fontsize=14)
+    ax = Axis(fig[1, 1], title="Detailed View: Adaptive Peak Binning", xlabel="m/z", yticklabelsvisible=false)
+
+    ref_mz = 500.0
+    tolerance_ppm = 50.0
+    tol_mz = ref_mz * tolerance_ppm / 1e6
+    
+    bin_start = ref_mz - tol_mz/2
+    bin_end = ref_mz + tol_mz/2
+    
+    peaks_mz = [ref_mz - 0.01, ref_mz + 0.005, ref_mz + 0.02, ref_mz - 0.015]
+    peak_intensities = [0.8, 1.0, 0.9, 0.7]
+    peak_colors = [:blue, :green, :purple, :orange]
+    
+    vspan!(ax, bin_start, bin_end, color=(:gray, 0.2), label="Bin (tolerance: 50 ppm)")
+    stem!(ax, peaks_mz, peak_intensities, color=peak_colors, markersize=15)
+    
+    # Show bin center
+    bin_center = mean(peaks_mz)
+    vlines!(ax, [bin_center], color=:red, linestyle=:dash, label="Calculated Bin Center")
+
+    text!(ax, "Parameter: `tolerance`\nPeaks from different spectra within the tolerance window are grouped into a single feature.",
+          position=Point2f(0.05, 0.95), space=:relative, align=(:left, :top), fontsize=12)
+    axislegend(ax, position=:rt)
+    xlims!(ax, ref_mz - tol_mz*2, ref_mz + tol_mz*2)
+    save("descriptive_plot_peak_binning.png", fig)
+    println("Saved: descriptive_plot_peak_binning.png")
+end
+
+
+"""
+Main function to generate and save all descriptive plots.
+"""
+function create_and_save_all_plots()
+    println("Generating detailed descriptive plots for preprocessing steps...")
+    
+    plot_baseline_correction_details()
+    plot_smoothing_details()
+    plot_peak_picking_profile_details()
+    plot_peak_picking_centroid_details()
+    plot_normalization_details()
+    plot_calibration_details()
+    plot_alignment_details()
+    plot_peak_selection_details()
+    plot_peak_binning_details()
+
+    println("\nAll descriptive plots have been saved in the current directory.")
+end
+
+# Execute the plot generation
+if abspath(PROGRAM_FILE) == @__FILE__
+    create_and_save_all_plots()
+end
+

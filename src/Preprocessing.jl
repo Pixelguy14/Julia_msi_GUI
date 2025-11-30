@@ -21,6 +21,7 @@ using ContinuousWavelets # For CWT peak detection
 using ImageFiltering # For localmaxima in detect_peaks_wavelet
 using Interpolations # For calibration
 using Loess # For robust peak alignment
+using Base.Threads # For multithreading in apply functions
 
 # =============================================================================
 # Data Structures
@@ -30,6 +31,13 @@ using Loess # For robust peak alignment
     FeatureMatrix
 
 A struct to hold the final feature matrix generated from the preprocessing pipeline.
+
+# Fields
+- `matrix::Array{Float64,2}`: The feature matrix where rows correspond to samples (spectra)
+  and columns correspond to features (m/z bins).
+- `mz_bins::Vector{Tuple{Float64,Float64}}`: A vector of tuples defining the start and
+  end m/z for each bin (column) in the `matrix`.
+- `sample_ids::Vector{Int}`: A vector of identifiers for each sample (row) in the `matrix`.
 """
 struct FeatureMatrix
     matrix::Array{Float64,2}
@@ -38,9 +46,18 @@ struct FeatureMatrix
 end
 
 """
+    MutableSpectrum
+
 A mutable struct to hold spectrum data. Using a mutable struct allows
 in-place modification of fields (like intensity or m/z), which dramatically
 reduces memory allocations compared to creating new immutable tuples at each step.
+
+# Fields
+- `id::Int`: A unique identifier for the spectrum.
+- `mz::AbstractVector{Float64}`: The m/z values of the spectrum.
+- `intensity::AbstractVector{Float64}`: The intensity values corresponding to the m/z values.
+- `peaks::Vector{NamedTuple}`: A vector of detected peaks, each a `NamedTuple` with fields
+  like `:mz`, `:intensity`, `:fwhm`, etc.
 """
 mutable struct MutableSpectrum
     id::Int
@@ -62,8 +79,18 @@ abstract type AbstractPreprocessingStep end
 """
     Calibration(; method=:internal_standards, ...)
 
-A preprocessing step for mass calibration. Set a parameter to `nothing` to use an
-auto-determined value from the data where applicable.
+A preprocessing step for mass calibration. Corrects systematic mass errors in the m/z axis.
+Set a parameter to `nothing` to use an auto-determined value from the data where applicable.
+
+# Arguments
+- `method::Symbol`: The calibration method. Currently supports `:internal_standards`.
+- `internal_standards::Union{Dict{Float64, String}, Nothing}`: A dictionary mapping theoretical
+  m/z values of internal standards to their names.
+- `base_peak_mz_references::Union{Vector{Float64}, Nothing}`: A vector of reference m/z values
+  for base peak calibration (not yet implemented).
+- `ppm_tolerance::Union{Float64, Nothing}`: The tolerance in parts-per-million (ppm) for matching
+  peaks to internal standards.
+- `fit_order::Int`: The polynomial order for the calibration fit (e.g., 1 for linear, 2 for quadratic).
 """
 struct Calibration <: AbstractPreprocessingStep
     method::Symbol
@@ -80,7 +107,16 @@ end
 """
     BaselineCorrection(; method=:snip, ...)
 
-A preprocessing step for baseline correction.
+A preprocessing step for baseline correction. This step estimates and subtracts the
+background noise (baseline) from the spectral intensities.
+
+# Arguments
+- `method::Symbol`: The algorithm to use. Options include `:snip` (Sensitive Nonlinear
+  Iterative Peak clipping), `:convex_hull`, and `:median`.
+- `iterations::Union{Int, Nothing}`: The number of iterations for the SNIP algorithm.
+  A higher number results in a more aggressive baseline.
+- `window::Union{Int, Nothing}`: The window size for the `:median` method, determining
+  the local region for median calculation.
 """
 struct BaselineCorrection <: AbstractPreprocessingStep
     method::Symbol
@@ -95,7 +131,15 @@ end
 """
     Smoothing(; method=:savitzky_golay, ...)
 
-A preprocessing step for spectral smoothing.
+A preprocessing step for spectral smoothing. This helps to reduce high-frequency noise
+in the intensity data.
+
+# Arguments
+- `method::Symbol`: The smoothing algorithm. Options are `:savitzky_golay` and `:moving_average`.
+- `window::Union{Int, Nothing}`: The size of the smoothing window. For Savitzky-Golay,
+  this must be an odd integer.
+- `order::Union{Int, Nothing}`: The polynomial order for the Savitzky-Golay filter. Must be
+  less than the window size.
 """
 struct Smoothing <: AbstractPreprocessingStep
     method::Symbol
@@ -112,7 +156,15 @@ end
 """
     Normalization(; method=:tic)
 
-A preprocessing step for intensity normalization.
+A preprocessing step for intensity normalization. This corrects for variations in total
+ion current between different spectra, making them more comparable.
+
+# Arguments
+- `method::Symbol`: The normalization method. Options include:
+  - `:tic`: Total Ion Current normalization (divides by the sum of intensities).
+  - `:median`: Divides by the median intensity.
+  - `:rms`: Root Mean Square normalization.
+  - `:none`: No normalization is applied.
 """
 struct Normalization <: AbstractPreprocessingStep
     method::Symbol
@@ -125,7 +177,25 @@ end
 """
     PeakPicking(; method=nothing, ...)
 
-A preprocessing step for peak detection.
+A preprocessing step for peak detection. This step identifies peaks (signals of interest)
+in the profile or centroided spectra.
+
+# Arguments
+- `method::Union{Symbol, Nothing}`: The peak detection algorithm.
+  - `:profile`: For profile-mode data, using local maxima and quality filters.
+  - `:wavelet`: Continuous Wavelet Transform (CWT) based peak detection.
+  - `:centroid`: For centroid-mode data, essentially a filtering step.
+- `snr_threshold::Union{Float64, Nothing}`: Signal-to-Noise Ratio threshold. Peaks with SNR
+  below this value are discarded.
+- `half_window::Union{Int, Nothing}`: The number of data points to the left and right of a
+  potential peak to consider for local maximum detection (for `:profile`).
+- `min_peak_prominence::Union{Float64, Nothing}`: The minimum required prominence of a peak,
+  expressed as a fraction of its height.
+- `merge_peaks_tolerance::Union{Float64, Nothing}`: The m/z tolerance within which to merge
+  adjacent peaks, keeping the more intense one.
+- `min_peak_width_ppm, max_peak_width_ppm`: Minimum and maximum acceptable peak width (FWHM) in ppm.
+- `min_peak_shape_r2`: Minimum R-squared value from a Gaussian fit to the peak, used as a
+  quality measure for peak shape.
 """
 struct PeakPicking <: AbstractPreprocessingStep
     method::Union{Symbol, Nothing} # :profile, :wavelet, :centroid
@@ -145,7 +215,20 @@ end
 """
     PeakAlignment(; method=:lowess, ...)
 
-A preprocessing step for peak alignment.
+A preprocessing step for peak alignment. This corrects for m/z shifts between spectra,
+ensuring that the same analyte peak appears at the same m/z across all samples.
+
+# Arguments
+- `method::Symbol`: The alignment algorithm. Options: `:lowess`, `:linear`, `:ransac`.
+- `span::Union{Float64, Nothing}`: The span parameter for LOWESS regression, controlling smoothness.
+- `tolerance::Union{Float64, Nothing}`: The tolerance for matching peaks between the target
+  and reference spectrum.
+- `tolerance_unit::Union{Symbol, Nothing}`: The unit for `tolerance`, either `:mz` (absolute)
+  or `:ppm` (relative).
+- `max_shift_ppm::Union{Float64, Nothing}`: The maximum allowed m/z shift in ppm to prevent
+  spurious peak matches.
+- `min_matched_peaks::Union{Int, Nothing}`: The minimum number of matching peaks required
+  to perform the alignment.
 """
 struct PeakAlignment <: AbstractPreprocessingStep
     method::Symbol
@@ -163,7 +246,19 @@ end
 """
     PeakSelection(; frequency_threshold=nothing, ...)
 
-A preprocessing step for peak selection (filtering).
+A preprocessing step for peak selection (filtering). After peak detection, this step
+filters the detected peaks based on various quality criteria to remove noise and
+irrelevant signals.
+
+# Arguments
+- `frequency_threshold::Union{Float64, Nothing}`: The minimum fraction of spectra in which a
+  peak must be present to be kept.
+- `min_snr::Union{Float64, Nothing}`: Minimum Signal-to-Noise Ratio.
+- `min_fwhm_ppm, max_fwhm_ppm`: Minimum and maximum Full Width at Half Maximum in ppm.
+- `min_shape_r2::Union{Float64, Nothing}`: Minimum R-squared value from a Gaussian fit,
+  filtering for good peak shape.
+- `correlation_threshold::Union{Float64, Nothing}`: Minimum correlation with neighboring
+  peaks (not yet implemented).
 """
 struct PeakSelection <: AbstractPreprocessingStep
     frequency_threshold::Union{Float64, Nothing}
@@ -179,11 +274,24 @@ struct PeakSelection <: AbstractPreprocessingStep
 end
 
 """
-    PeakBinningParams(; method=:adaptive, ...)
+    PeakBinning(; method=:adaptive, ...)
 
-A preprocessing step for peak binning.
+A preprocessing step for peak binning. This step groups peaks from all spectra into
+common m/z bins to generate a feature matrix.
+
+# Arguments
+- `method::Symbol`: The binning strategy.
+  - `:adaptive`: Creates bins based on the density of detected peaks.
+  - `:uniform`: Creates a fixed number of equally spaced bins over the m/z range.
+- `tolerance, tolerance_unit`: Tolerance for grouping peaks into a bin in `:adaptive` mode.
+- `frequency_threshold`: The minimum fraction of spectra a bin must contain a peak in to be kept.
+- `min_peak_per_bin`: The minimum number of individual peaks required to form a bin in `:adaptive` mode.
+- `max_bin_width_ppm`: Maximum width of a bin in ppm for `:adaptive` mode.
+- `intensity_weighted_centers`: If `true`, calculates bin centers as an intensity-weighted
+  average of the peaks within it.
+- `num_uniform_bins`: The number of bins to create for the `:uniform` method.
 """
-struct PeakBinningParams <: AbstractPreprocessingStep
+struct PeakBinning <: AbstractPreprocessingStep
     method::Symbol
     tolerance::Union{Float64, Nothing}
     tolerance_unit::Union{Symbol, Nothing}
@@ -193,7 +301,7 @@ struct PeakBinningParams <: AbstractPreprocessingStep
     intensity_weighted_centers::Bool
     num_uniform_bins::Union{Int, Nothing}
 
-    function PeakBinningParams(; method=:adaptive, tolerance=nothing, tolerance_unit=nothing, frequency_threshold=nothing, min_peak_per_bin=nothing, max_bin_width_ppm=nothing, intensity_weighted_centers=true, num_uniform_bins=nothing)
+    function PeakBinning(; method=:adaptive, tolerance=nothing, tolerance_unit=nothing, frequency_threshold=nothing, min_peak_per_bin=nothing, max_bin_width_ppm=nothing, intensity_weighted_centers=true, num_uniform_bins=nothing)
         new(method, tolerance, tolerance_unit, frequency_threshold, min_peak_per_bin, max_bin_width_ppm, intensity_weighted_centers, num_uniform_bins)
     end
 end
@@ -237,7 +345,7 @@ Checks include:
 - `mz` and `intensity` have the same length.
 - All `m/z` values are finite and non-negative.
 - All `intensity` values are finite and non-negative.
-- `m/z` values are strictly increasing (no duplicates or decreasing values).
+- `m/z` values are monotonically non-decreasing.
 """
 function validate_spectrum(mz::AbstractVector{<:Real}, intensity::AbstractVector{<:Real})::Bool
     # 1. Check for empty vectors
@@ -278,11 +386,22 @@ end
 # =============================================================================
 
 """
-    transform_intensity(intensity; method=:sqrt) -> Vector
+    transform_intensity_core(intensity; method=:sqrt) -> Vector
 
-Applies a variance-stabilizing transformation to the intensity vector.
+Applies a variance-stabilizing transformation to the intensity vector. This can
+help to make the variance of the signal more constant across the intensity range,
+which is often an assumption of downstream statistical methods.
+
+# Arguments
+- `intensity::AbstractVector{<:Real}`: The input intensity values.
+- `method::Symbol`: The transformation to apply. Options are:
+  - `:sqrt`: Square root transformation.
+  - `:log`: Natural log transformation.
+  - `:log2`: Base-2 log transformation.
+  - `:log10`: Base-10 log transformation.
+  - `:log1p`: Natural log of `1 + x`, useful for data with zeros.
 """
-function transform_intensity(intensity::AbstractVector{<:Real}; method::Symbol=:sqrt)
+function transform_intensity_core(intensity::AbstractVector{<:Real}; method::Symbol=:sqrt)
     if method === :sqrt
         return sqrt.(max.(zero(eltype(intensity)), intensity))
     elseif method === :log1p
@@ -299,7 +418,7 @@ function transform_intensity(intensity::AbstractVector{<:Real}; method::Symbol=:
 end
 
 """
-    smooth_spectrum(y::AbstractVector{<:Real}; method::Symbol=:savitzky_golay, window::Int=9, order::Int=2) -> Vector
+    smooth_spectrum_core(y::AbstractVector{<:Real}; method::Symbol=:savitzky_golay, window::Int=9, order::Int=2) -> Vector
 
 Applies a smoothing filter to the intensity data.
 
@@ -309,7 +428,7 @@ Applies a smoothing filter to the intensity data.
 - `window`: The window size for the filter.
 - `order`: The polynomial order for Savitzky-Golay
 """
-function smooth_spectrum(y::AbstractVector{<:Real}; method::Symbol=:savitzky_golay, window::Int=9, order::Int=2)
+function smooth_spectrum_core(y::AbstractVector{<:Real}; method::Symbol=:savitzky_golay, window::Int=9, order::Int=2)
     if window < 3
         throw(ArgumentError("Window size must be at least 3"))
     end
@@ -399,7 +518,9 @@ end
 """
     convex_hull_baseline(y) -> Vector
 
-Estimates the baseline of a spectrum using the convex hull algorithm.
+Estimates the baseline of a spectrum using the convex hull algorithm. This method
+finds the lower convex hull of the spectrum, which is then used as the baseline.
+It is generally faster than SNIP but can be less flexible.
 """
 function convex_hull_baseline(y::AbstractVector{<:Real})
     n = length(y)
@@ -455,7 +576,7 @@ function median_baseline(y::AbstractVector{<:Real}; window::Int=20)
 end
 
 """
-    apply_baseline_correction(y::AbstractVector{<:Real}; method::Symbol=:snip, iterations::Int=100, window::Int=20) -> Vector
+    apply_baseline_correction_core(y::AbstractVector{<:Real}; method::Symbol=:snip, iterations::Int=100, window::Int=20) -> Vector
 
 Applies a baseline correction algorithm to the intensity data.
 
@@ -465,7 +586,7 @@ Applies a baseline correction algorithm to the intensity data.
 - `iterations`: Iterations for SNIP method.
 - `window`: Window size for median method.
 """
-function apply_baseline_correction(y::AbstractVector{<:Real}; method::Symbol=:snip, iterations::Int=100, window::Int=20)
+function apply_baseline_correction_core(y::AbstractVector{<:Real}; method::Symbol=:snip, iterations::Int=100, window::Int=20)
     if method === :snip
         return _snip_baseline_impl(y, iterations=iterations)
     elseif method === :convex_hull
@@ -485,7 +606,9 @@ end
 """
     tic_normalize(y) -> Vector
 
-Normalizes spectrum intensities to the Total Ion Current (TIC).
+Normalizes spectrum intensities to the Total Ion Current (TIC). Each intensity value
+is divided by the sum of all intensities in the spectrum. This method assumes that the
+total number of ions produced is similar for all samples.
 """
 function tic_normalize(y::AbstractVector{<:Real})
     s = sum(y)
@@ -496,6 +619,18 @@ end
     pqn_normalize(M) -> Matrix
 
 Performs Probabilistic Quotient Normalization (PQN) on a matrix of spectra.
+This is a more robust normalization method that is less sensitive to a small
+number of highly abundant, variable peaks compared to TIC.
+
+# Steps:
+1. A reference spectrum is calculated (typically the median spectrum across all samples).
+2. For each spectrum, the quotients of its intensities and the reference spectrum's
+   intensities are calculated.
+3. The median of these quotients is found for each spectrum.
+4. Each spectrum is divided by its median quotient.
+
+# Arguments
+- `M::AbstractMatrix{<:Real}`: A matrix where columns are spectra and rows are m/z bins.
 """
 function pqn_normalize(M::AbstractMatrix{<:Real})
     M_float = collect(float.(M))
@@ -532,7 +667,7 @@ function rms_normalize(y::AbstractVector{<:Real})
 end
 
 """
-    apply_normalization(y::AbstractVector{<:Real}; method::Symbol=:tic) -> Vector
+    apply_normalization_core(y::AbstractVector{<:Real}; method::Symbol=:tic) -> Vector
 
 Applies a per-spectrum normalization algorithm to the intensity data.
 
@@ -540,7 +675,7 @@ Applies a per-spectrum normalization algorithm to the intensity data.
 - `y`: The intensity data.
 - `method`: The normalization method (:tic, :median, :rms, or :none).
 """
-function apply_normalization(y::AbstractVector{<:Real}; method::Symbol=:tic)
+function apply_normalization_core(y::AbstractVector{<:Real}; method::Symbol=:tic)::Vector
     if method === :tic
         return tic_normalize(y)
     elseif method === :median
@@ -555,188 +690,12 @@ function apply_normalization(y::AbstractVector{<:Real}; method::Symbol=:tic)
     end
 end
 
-"""
-    remove_matrix_peaks_from_spectrum(mz::AbstractVector{<:Real}, intensity::AbstractVector{<:Real},
-                                      matrix_peak_mzs::AbstractVector{<:Real};
-                                      tolerance::Float64=0.002, tolerance_unit::Symbol=:mz,
-                                      removal_method::Symbol=:zero_out) -> Vector{Float64}
-
-Removes or reduces intensity around specified matrix peaks in a single spectrum.
-
-# Arguments
-- `mz`: The m/z vector of the spectrum.
-- `intensity`: The intensity vector of the spectrum.
-- `matrix_peak_mzs`: A list of m/z values identified as matrix peaks.
-- `tolerance`: The m/z tolerance for matching matrix peaks.
-- `tolerance_unit`: Unit of tolerance (:mz or :ppm).
-- `removal_method`: How to remove the peaks (:zero_out or :subtract).
-
-# Returns
-- `Vector{Float64}`: The modified intensity vector.
-"""
-function remove_matrix_peaks_from_spectrum(mz::AbstractVector{<:Real}, intensity::AbstractVector{<:Real},
-                                           matrix_peak_mzs::AbstractVector{<:Real};
-                                           tolerance::Float64=0.002, tolerance_unit::Symbol=:mz,
-                                           removal_method::Symbol=:zero_out)
-    modified_intensity = copy(intensity)
-    
-    for matrix_mz in matrix_peak_mzs
-        # Calculate dynamic tolerance if in PPM
-        current_tolerance = (tolerance_unit == :ppm) ? (matrix_mz * tolerance / 1e6) : tolerance
-        
-        # Find indices within the tolerance window
-        indices_to_modify = findall(m -> abs(m - matrix_mz) <= current_tolerance, mz)
-        
-        if !isempty(indices_to_modify)
-            if removal_method == :zero_out
-                modified_intensity[indices_to_modify] .= 0.0
-            elseif removal_method == :subtract
-                # Baseline-aware subtraction: replace peak with a line connecting its "feet"
-                idx_start = indices_to_modify[1]
-                idx_end = indices_to_modify[end]
-                
-                # Ensure we are not at the very edge of the spectrum
-                if idx_start > 1 && idx_end < length(modified_intensity)
-                    y1 = modified_intensity[idx_start - 1]
-                    y2 = modified_intensity[idx_end + 1]
-                    x1 = idx_start - 1
-                    x2 = idx_end + 1
-
-                    # Linearly interpolate the baseline under the peak
-                    for i in idx_start:idx_end
-                        # y = y1 + (y2 - y1) * (x - x1) / (x2 - x1)
-                        baseline_val = y1 + (y2 - y1) * (i - x1) / (x2 - x1)
-                        # Set the intensity to the baseline, but don't increase it (e.g., if baseline is above signal)
-                        modified_intensity[i] = min(modified_intensity[i], baseline_val)
-                    end
-                else
-                    # If peak is at the edge, we can't interpolate, so just zero it out
-                    modified_intensity[indices_to_modify] .= 0.0
-                end
-            else
-                @warn "Unsupported matrix peak removal method: $removal_method. Skipping."
-            end
-        end
-    end
-    return modified_intensity
-end
-
-function identify_matrix_peaks_from_blanks(
-    msi_data::MSIData,
-    blank_spectrum_tag::Symbol,
-    snr_threshold::Float64;
-    frequency_threshold::Float64=0.5, # e.g., peak must be in 50% of blanks
-    bin_tolerance::Float64=0.005, # m/z tolerance for binning blank peaks
-    bin_tolerance_unit::Symbol=:mz
-    )::Vector{Float64}
-    if !(0 < frequency_threshold <= 1.0)
-        throw(ArgumentError("`frequency_threshold` must be between 0 and 1 (exclusive of 0). Got: $frequency_threshold"))
-    end
-    println("Identifying matrix peaks from blank spectra (tag: $blank_spectrum_tag)...")
-    blank_indices = Int[]
-    for (i, meta) in enumerate(msi_data.spectra_metadata)
-        if meta.type == blank_spectrum_tag
-            push!(blank_indices, i)
-        end
-    end
-
-    if isempty(blank_indices)
-        @warn "No blank spectra found with tag: $blank_spectrum_tag. Cannot identify matrix peaks."
-        return Float64[]
-    end
-
-    all_blank_peaks = Vector{NamedTuple}[]
-    num_blank_spectra = 0
-
-    # Collect peaks from each blank spectrum
-    _iterate_spectra_fast(msi_data, blank_indices) do idx, mz, intensity
-        num_blank_spectra += 1
-        if !validate_spectrum(mz, intensity)
-            @warn "Blank spectrum $idx is invalid, skipping peak detection for it."
-            push!(all_blank_peaks, NamedTuple[]) # Add empty list to maintain count
-            return
-        end
-        # Assuming profile mode for matrix peak detection
-        peaks = detect_peaks_profile(mz, intensity; snr_threshold=snr_threshold)
-        push!(all_blank_peaks, peaks)
-    end
-
-    if isempty(all_blank_peaks) || all(isempty, all_blank_peaks)
-        @warn "No peaks detected in any blank spectra. Cannot identify matrix peaks."
-        return Float64[]
-    end
-
-    # Flatten all peaks from blank spectra for initial binning
-    flat_blank_peaks = NamedTuple[]
-    for peaks_in_spec in all_blank_peaks
-        append!(flat_blank_peaks, peaks_in_spec)
-    end
-    sort!(flat_blank_peaks, by=p->p.mz)
-
-    # Bin the detected peaks from all blanks to find common m/z features
-    # This is a simplified binning for matrix peak identification
-    binned_matrix_features = Dict{Float64, Int}() # mz_center => count of spectra it appeared in
-
-    i = 1
-    while i <= length(flat_blank_peaks)
-        current_bin_start_idx = i
-        current_peak = flat_blank_peaks[i]
-        
-        # Calculate dynamic tolerance if in PPM
-        current_bin_mz = current_peak.mz
-        tol_val = (bin_tolerance_unit == :ppm) ? (current_bin_mz * bin_tolerance / 1e6) : bin_tolerance
-        
-        j = i + 1
-        while j <= length(flat_blank_peaks) && (flat_blank_peaks[j].mz - current_peak.mz) <= tol_val
-            j += 1
-        end
-        current_bin_end_idx = j - 1
-
-        # Calculate a representative m/z for the bin (e.g., intensity-weighted average)
-        peaks_in_bin = flat_blank_peaks[current_bin_start_idx:current_bin_end_idx]
-        if !isempty(peaks_in_bin)
-            sum_intensity = sum(p.intensity for p in peaks_in_bin)
-            if sum_intensity > 0
-                bin_center_mz = sum(p.mz * p.intensity for p in peaks_in_bin) / sum(sum_intensity)
-            else
-                bin_center_mz = mean(p.mz for p in peaks_in_bin)
-            end
-            
-            # Check how many blank spectra this feature appeared in
-            spectra_count = 0
-            # For each blank spectrum, check if it contains a peak within the current bin's tolerance
-            for spec_peaks in all_blank_peaks
-                if any(p -> abs(p.mz - bin_center_mz) <= tol_val, spec_peaks)
-                    spectra_count += 1
-                end
-            end
-            binned_matrix_features[bin_center_mz] = spectra_count
-        end
-        i = j
-    end
-
-    # Filter based on frequency_threshold
-    matrix_peak_mzs = Float64[]
-    min_spectra_count = ceil(Int, num_blank_spectra * frequency_threshold)
-
-    for (mz_center, count) in binned_matrix_features
-        if count >= min_spectra_count
-            push!(matrix_peak_mzs, mz_center)
-        end
-    end
-    sort!(matrix_peak_mzs)
-
-    println("Identified $(length(matrix_peak_mzs)) potential matrix peaks from $(num_blank_spectra) blank spectra.")
-    return matrix_peak_mzs
-end
-
-
 # =============================================================================
 # 4) Peak Detection
 # =============================================================================
 
 """
-    detect_peaks_profile(mz, y; ...) -> Vector{NamedTuple}
+    detect_peaks_profile_core(mz, y; ...) -> Vector{NamedTuple}
 
 Enhanced peak detection for profile-mode spectra with advanced filtering and quality metrics.
 
@@ -748,7 +707,7 @@ Returns a vector of NamedTuples, each representing a detected peak with:
 - `snr`: Signal-to-Noise Ratio
 - `prominence`: Peak prominence
 """
-function detect_peaks_profile(mz::AbstractVector{<:Real}, y::AbstractVector{<:Real}; 
+function detect_peaks_profile_core(mz::AbstractVector{<:Real}, y::AbstractVector{<:Real}; 
                               half_window::Int=10,
                               snr_threshold::Float64=2.0,
                               min_peak_prominence::Float64=0.1,
@@ -762,7 +721,7 @@ function detect_peaks_profile(mz::AbstractVector{<:Real}, y::AbstractVector{<:Re
     n < 3 && return NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), Tuple{Float64, Float64, Float64, Float64, Float64, Float64}}[]
     
     noise_level = mad(y, normalize=true) + eps(Float64)
-    ys = smooth_spectrum(y; method=:savitzky_golay, window=max(5, 2*half_window+1), order=2) # Use smoothed data for detection
+    ys = smooth_spectrum_core(y; method=:savitzky_golay, window=max(5, 2*half_window+1), order=2) # Use smoothed data for detection
 
     candidate_peak_indices = Int[]
     for i in 2:n-1
@@ -818,16 +777,30 @@ function detect_peaks_profile(mz::AbstractVector{<:Real}, y::AbstractVector{<:Re
 end
 
 """
-    detect_peaks_wavelet(mz, intensity; ...) -> Vector{NamedTuple}
+    detect_peaks_wavelet_core(mz, intensity; ...) -> Vector{NamedTuple}
 
-Detects peaks using Continuous Wavelet Transform (CWT).
+Detects peaks using Continuous Wavelet Transform (CWT). CWT is effective at
+identifying peaks at different scales (widths), making it robust for complex spectra.
 
-Returns a vector of NamedTuples, each representing a detected peak with:
-- `mz`: m/z value of the peak
-- `intensity`: Intensity of the peak
-- `snr`: Signal-to-Noise Ratio (simplified)
+# Arguments
+- `mz::AbstractVector`: The m/z values of the spectrum.
+- `intensity::AbstractVector`: The intensity values of the spectrum.
+- `scales`: A range of scales to use for the CWT. Corresponds to the widths of
+  the features to be detected.
+- `snr_threshold`: The minimum Signal-to-Noise Ratio for a CWT-detected local maximum
+  in the original spectrum to be considered a peak.
+- `half_window`: Used for calculating peak quality metrics like FWHM and shape R^2.
+
+# Returns
+A vector of `NamedTuple`s, each representing a detected peak with:
+- `mz`: m/z value of the peak.
+- `intensity`: Intensity of the peak from the original spectrum.
+- `fwhm`: Full Width at Half Maximum (in ppm).
+- `shape_r2`: Goodness-of-fit to a Gaussian shape.
+- `snr`: Signal-to-Noise Ratio.
+- `prominence`: Peak prominence (estimated as peak intensity for this method).
 """
-function detect_peaks_wavelet(mz::AbstractVector, intensity::AbstractVector; scales=1:10, snr_threshold=3.0, half_window=10)::Vector{NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), Tuple{Float64, Float64, Float64, Float64, Float64, Float64}}}
+function detect_peaks_wavelet_core(mz::AbstractVector, intensity::AbstractVector; scales=1:10, snr_threshold=3.0, half_window=10)::Vector{NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), Tuple{Float64, Float64, Float64, Float64, Float64, Float64}}}
     n = length(intensity)
     n < 10 && return NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), Tuple{Float64, Float64, Float64, Float64, Float64, Float64}}[]
     
@@ -876,7 +849,7 @@ function detect_peaks_wavelet(mz::AbstractVector, intensity::AbstractVector; sca
 end
 
 """
-    detect_peaks_centroid(mz, y; ...) -> Vector{NamedTuple}
+    detect_peaks_centroid_core(mz, y; ...) -> Vector{NamedTuple}
 
 Filters peaks in centroid-mode data based on intensity threshold.
 
@@ -884,7 +857,7 @@ Returns a vector of NamedTuples, each representing a detected peak with:
 - `mz`: m/z value of the peak
 - `intensity`: Intensity of the peak
 """
-function detect_peaks_centroid(mz::AbstractVector{<:Real}, y::AbstractVector{<:Real}; snr_threshold::Float64=0.0)
+function detect_peaks_centroid_core(mz::AbstractVector{<:Real}, y::AbstractVector{<:Real}; snr_threshold::Float64=0.0)
     noise_level = mad(y, normalize=true) + eps(Float64)
     detected_peaks = NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), Tuple{Float64, Float64, Float64, Float64, Float64, Float64}}[]
     
@@ -903,11 +876,11 @@ end
 # =============================================================================
 
 """
-    align_peaks_lowess(ref_mz, tgt_mz; ...)
+    align_peaks_lowess_core(ref_mz, tgt_mz; ...)
 
 Enhanced peak alignment with PPM tolerance and other constraints.
 """
-function align_peaks_lowess(ref_mz::Vector{<:Real}, tgt_mz::Vector{<:Real};
+function align_peaks_lowess_core(ref_mz::Vector{<:Real}, tgt_mz::Vector{<:Real};
                             method::Symbol=:linear, # :linear, :lowess, or :ransac
                             span::Float64=0.75, # Span for LOWESS
                             tolerance::Float64=0.002,
@@ -1030,15 +1003,15 @@ function align_peaks_lowess(ref_mz::Vector{<:Real}, tgt_mz::Vector{<:Real};
 end
 
 """
-    find_calibration_peaks(mz, intensity, reference_masses; ...)
+    find_calibration_peaks_core(mz, intensity, reference_masses; ...)
 
 Finds peaks that match a list of reference masses.
 """
-function find_calibration_peaks(mz::AbstractVector, intensity::AbstractVector, reference_masses::AbstractVector; ppm_tolerance=20.0)
+function find_calibration_peaks_core(mz::AbstractVector, intensity::AbstractVector, reference_masses::AbstractVector; ppm_tolerance=20.0)
     matched_peaks = Dict{Float64, Float64}()
     
-    # detect_peaks_profile returns Vector{NamedTuple}, so we need to extract mz values
-    detected_peaks_list = detect_peaks_profile(mz, intensity)
+    # detect_peaks_profile_core returns Vector{NamedTuple}, so we need to extract mz values
+    detected_peaks_list = detect_peaks_profile_core(mz, intensity)
     
     # Extract only the m/z values into a new vector for easier processing
     detected_mz_values = [p.mz for p in detected_peaks_list]
@@ -1057,16 +1030,16 @@ function find_calibration_peaks(mz::AbstractVector, intensity::AbstractVector, r
 end
 
 """
-    calibrate_spectra(spectra, internal_standards; ...)
+    calibrate_spectra_core(spectra, internal_standards; ...)
 
 Calibrates spectra using internal standards.
 """
-function calibrate_spectra(spectra::Vector, internal_standards::Vector; ppm_tolerance=20.0)
+function calibrate_spectra_core(spectra::Vector, internal_standards::Vector; ppm_tolerance=20.0)
     calibrated_spectra = similar(spectra)
     for (i, spec) in enumerate(spectra)
         mz, intensity = spec[1], spec[2]
 
-        matched_peaks = find_calibration_peaks(mz, intensity, internal_standards; ppm_tolerance=ppm_tolerance)
+        matched_peaks = find_calibration_peaks_core(mz, intensity, internal_standards; ppm_tolerance=ppm_tolerance)
         if length(matched_peaks) < 2
             @warn "Spectrum $i: Not enough calibration peaks found. Skipping."
             calibrated_spectra[i] = spec
@@ -1092,16 +1065,16 @@ end
 # =============================================================================
 
 """
-    bin_peaks(all_pk_mz::Vector{Vector{Float64}},
+    bin_peaks_core(all_pk_mz::Vector{Vector{Float64}},
               all_pk_int::Vector{Vector{Float64}},
-              params::PeakBinningParams) -> Tuple{FeatureMatrix, Vector{Tuple{Float64,Float64}}}
+              params::PeakBinning) -> Tuple{FeatureMatrix, Vector{Tuple{Float64,Float64}}}
 
 Enhanced peak binning with adaptive and PPM-based parameters, or uniform binning.
 
 # Arguments
 - `all_pk_mz`: A vector of m/z vectors for all spectra.
 - `all_pk_int`: A vector of intensity vectors for all spectra.
-- `params`: A `PeakBinningParams` struct.
+- `params`: A `PeakBinning` struct.
 
 # Returns
 - `Tuple{FeatureMatrix, Vector{Tuple{Float64,Float64}}}`: A tuple containing the generated FeatureMatrix and the bin definitions.
@@ -1111,8 +1084,8 @@ The use of `Threads.@threads` in the `:adaptive` and `:uniform` methods is safe.
 - In the `:adaptive` method, the loop is over the bins (`j` index). Each thread writes only to its assigned column `X[:, j]`, so there are no write conflicts between threads.
 - In the `:uniform` method, the loop is over the spectra (`s_idx`). Writes to `X[s_idx, bin_idx]` could theoretically conflict if different peaks from the same spectrum (`s_idx`) are processed by different threads. However, the loop is over `s_idx`, meaning each thread handles a distinct spectrum, making writes to `X[s_idx, :]` exclusive to that thread and thus safe.
 """
-function bin_peaks(spectra::Vector{MutableSpectrum},
-                   params::PeakBinningParams)
+function bin_peaks_core(spectra::Vector{MutableSpectrum},
+                   params::PeakBinning)
     ns = length(spectra) # Number of spectra
     ns == 0 && return FeatureMatrix(zeros(0,0), Tuple{Float64,Float64}[], Int[]), Tuple{Float64,Float64}[]
 

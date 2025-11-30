@@ -1,0 +1,665 @@
+<header id="header">
+  <img src="/css/LABI_logo.png" alt="Labi Logo Icon" id="imgLogo">
+  <div>
+    <h4>JuliaMSI&nbsp;</h4>
+  </div>
+</header>
+
+<!--
+<div v-if="is_initializing" class="loading-overlay">
+  <div class="loading-content">
+    <q-spinner-hourglass color="white" size="4em" />
+    <div class="q-mt-md text-white text-h6">{{ initialization_message }}</div>
+  </div>
+</div>
+-->
+
+<div id="extDivStyle" class="row col-12 q-pa-xl">
+  <div class="row col-6">
+    <!-- Left DIV -->
+    <div id="intDivStyle-left" class="st-col col-12 st-module">
+      <q-tabs v-model="left_tab" dense class="text-grey" indicator-color="primary" align="justify">
+        <q-tab name="pre_treatment" label="Pre-Treatment"></q-tab>
+        <q-tab name="generator" label="Slice Generator"></q-tab>
+        <q-tab name="converter" label="Converter"></q-tab>
+      </q-tabs>
+      <q-separator></q-separator>
+      <q-tab-panels v-model="left_tab" animated>
+        <q-tab-panel name="pre_treatment">
+          <div class="text-h6">imzML & mzML Data Pre-Treatment</div>
+          <div class="row items-center">
+            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer col" v-model="full_route" readonly
+              :label="batch_file_count > 0 ? batch_file_count + ' file(s) in batch' : 'Select an imzMl / mzML file'"
+              v-on:click="btnSearch=true">
+              <template v-slot:append>
+                <q-icon name="search" v-on:click="btnSearch=true" class="cursor-pointer" />
+              </template>
+            </q-input>
+            <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add"></q-btn>
+            <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" :disable="batch_file_count === 0"
+              label="Clear"></q-btn>
+          </div>
+          <q-list bordered separator v-if="selected_files.length > 0">
+            <q-item v-for="(file, index) in selected_files" :key="index">
+              <q-item-section>
+                {{ file }}
+              </q-item-section>
+              <q-item-section side>
+                <q-btn flat round icon="delete" size="sm" v-on:click="selected_files.splice(index, 1)"></q-btn>
+              </q-item-section>
+            </q-item>
+          </q-list>
+          <!--<q-input standout="custom-standout" class="q-ma-sm cursor-pointer col" v-model="full_route_cal" readonly
+            label="Select a calibration imzMl / mzML file" v-on:click="btnSearchCal=true">
+            <template v-slot:append>
+              <q-icon name="search" v-on:click="btnSearchCal=true" class="cursor-pointer" />
+            </template>
+          </q-input>-->
+          <br>
+          <br>
+          <q-tabs v-model="pre_tab" dense class="text-grey" indicator-color="primary" align="justify">
+            <q-tab name="stabilization" label="Stabilization"></q-tab>
+            <q-tab name="smoothing" label="Smoothing"></q-tab>
+            <q-tab name="baseline" label="Baseline"></q-tab>
+            <q-tab name="normalization" label="Normalization"></q-tab>
+            <q-tab name="alignment" label="Alignment"></q-tab>
+            <q-tab name="standards" label="Internal Standards"></q-tab>
+            <q-tab name="calibration" label="Calibration"></q-tab>
+            <q-tab name="peak_picking" label="Peak Picking"></q-tab>
+            <q-tab name="peak_selection" label="Peak Selection"></q-tab>
+            <q-tab name="binning" label="Binning"></q-tab>
+          </q-tabs>
+          <div class="row justify-end items-center q-mt-md">
+            <q-btn class="q-ma-sm" icon="save" @click="export_params_btn=true" label="Export Params" outline />
+            <q-btn class="q-ma-sm" icon="upload_file" @click="import_params_btn=true" label="Import Params" outline />
+            <q-btn :loading="progressPrep" class="q-ma-sm btn-style" icon="play_arrow" v-on:click="run_full_pipeline=true"
+              padding="lg" label="Run Pipeline" />
+          </div>
+          <q-separator />
+          <q-tab-panels v-model="pre_tab" animated>
+            <q-tab-panel name="stabilization" class="q-pa-md">
+              <q-toggle v-model="enable_stabilization" label="Enable Stabilization" color="green" class="q-mb-md" hint="Enables variance-stabilizing transformation for intensities." />
+              <q-card class="q-mb-md">
+                <q-card-section>
+                  <div class="text-h6">Method</div>
+                  <div class="text-caption">Applies a variance-stabilizing transformation to the intensity vector.</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-radio v-model="stabilization_method" val="sqrt" label="SQRT" hint="Square root transformation." /><br>
+                  <q-radio v-model="stabilization_method" val="log" label="LOG" hint="Natural log transformation." /><br>
+                  <q-radio v-model="stabilization_method" val="log2" label="LOG 2" hint="Base-2 log transformation." /><br>
+                  <q-radio v-model="stabilization_method" val="log10" label="LOG 10" hint="Base-10 log transformation." /><br>
+                  <q-radio v-model="stabilization_method" val="log1p" label="LOG 1P" hint="Natural log of `1 + x`, useful for data with zeros." /><br>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+            <q-tab-panel name="smoothing">
+              <q-toggle v-model="enable_smoothing" label="Enable Smoothing" color="green" class="q-mb-md" hint="Enables spectral smoothing to reduce high-frequency noise." />
+              <q-card class="q-mb-md">
+                <q-card-section>
+                  <div class="text-h6">Method</div>
+                  <div class="text-caption">The smoothing algorithm.</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-radio v-model="smoothing_method" val="sg" label="Savitzky-Golay" hint="Savitzky-Golay filtering." /><br>
+                  <q-radio v-model="smoothing_method" val="ma" label="Moving Average" hint="Moving Average filtering." /><br>
+                </q-card-section>
+              </q-card>
+              <q-card>
+                <q-card-section>
+                  <div class="text-h6">Parameters</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-input standout="custom-standout" label="Half Window Size" type="number"
+                    :placeholder="suggested_smoothing_window" v-model.number="smoothing_window" hint="The half size of the smoothing window. For Savitzky-Golay, the full window (2*half_window + 1) must be an odd integer."></q-input>
+                  <q-input standout="custom-standout" label="Order (for Savitzky-Golay)" type="number"
+                    :placeholder="suggested_smoothing_order" v-model.number="smoothing_order" class="q-mt-md" hint="The polynomial order for the Savitzky-Golay filter. Must be less than the full window size."></q-input>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+            <q-tab-panel name="baseline">
+              <q-toggle v-model="enable_baseline" label="Enable Baseline Correction" color="green" class="q-mb-md" hint="Estimates and subtracts the background noise (baseline) from the spectral intensities." />
+              <q-card class="q-mb-md">
+                <q-card-section>
+                  <div class="text-h6">Method</div>
+                  <div class="text-caption">The algorithm to use for baseline correction.</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-radio v-model="baseline_method" val="snip" label="SNIP" hint="Sensitive Nonlinear Iterative Peak clipping." /><br>
+                  <q-radio v-model="baseline_method" val="convex_hull" label="CONVEX HULL" hint="Finds the lower convex hull of the spectrum." /><br>
+                  <q-radio v-model="baseline_method" val="median" label="MEDIAN" hint="Moving median filter." /><br>
+                </q-card-section>
+              </q-card>
+              <q-card>
+                <q-card-section>
+                  <div class="text-h6">Parameters</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-input standout="custom-standout" label="Iterations (for SNIP)" type="number"
+                    :placeholder="suggested_baseline_iterations" v-model.number="baseline_iterations" hint="The number of iterations for the SNIP algorithm. A higher number results in a more aggressive baseline."></q-input>
+                  <q-input standout="custom-standout" label="Window (for Median)" type="number"
+                    :placeholder="suggested_baseline_window" v-model.number="baseline_window" class="q-mt-md" hint="The window size for the median method, determining the local region for median calculation."></q-input>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+            <q-tab-panel name="normalization">
+              <q-toggle v-model="enable_normalization" label="Enable Normalization" color="green" class="q-mb-md" hint="Corrects for variations in total ion current between different spectra, making them more comparable." />
+              <q-card class="q-mb-md">
+                <q-card-section>
+                  <div class="text-h6">Method</div>
+                  <div class="text-caption">The normalization method to apply.</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-radio v-model="normalization_method" val="tic" label="TIC" hint="Total Ion Current normalization (divides by the sum of intensities)." /><br>
+                  <q-radio v-model="normalization_method" val="median" label="MEDIAN" hint="Divides by the median intensity." /><br>
+                  <q-radio v-model="normalization_method" val="rms" label="RMS" hint="Root Mean Square normalization." /><br>
+                  <q-radio v-model="normalization_method" val="none" label="NONE" hint="No normalization is applied." /><br>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+            <q-tab-panel name="alignment">
+              <q-toggle v-model="enable_alignment" label="Enable Peak Alignment" color="green" class="q-mb-md" hint="Corrects for m/z shifts between spectra, ensuring that the same analyte peak appears at the same m/z across all samples." />
+              <q-card class="q-mb-md">
+                <q-card-section>
+                  <div class="text-h6">Method</div>
+                  <div class="text-caption">The alignment algorithm.</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-radio v-model="alignment_method" val="lowess" label="LOWESS" hint="Locally Weighted Scatterplot Smoothing regression." /><br>
+                  <q-radio v-model="alignment_method" val="linear" label="LINEAR" hint="Linear regression." /><br>
+                  <q-radio v-model="alignment_method" val="ransac" label="RANSAC" hint="Random Sample Consensus algorithm for robust fitting." /><br>
+                </q-card-section>
+              </q-card>
+              <q-card>
+                <q-card-section>
+                  <div class="text-h6">Parameters</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-input standout="custom-standout" label="Span (for LOWESS)" type="number" step="0.01"
+                    :placeholder="suggested_alignment_span" v-model.number="alignment_span" :rules="[val => val >= 0.0 && val <= 1.0 || 'Needs to be between 0 and 1']" hint="The span parameter for LOWESS regression, controlling smoothness (0.0 to 1.0)."></q-input>
+                  <q-input standout="custom-standout" label="Tolerance" type="number" step="0.001"
+                    :placeholder="suggested_alignment_tolerance" v-model.number="alignment_tolerance" class="q-mt-md" hint="The tolerance for matching peaks between the target and reference spectrum."></q-input>
+                  <q-select standout="custom-standout" label="Tolerance Unit" v-model="alignment_tolerance_unit"
+                    :options="['mz', 'ppm']" class="q-mt-md" hint="The unit for tolerance, either 'mz' (absolute) or 'ppm' (relative)."></q-select>
+                  <q-input standout="custom-standout" label="Max Shift PPM" type="number"
+                    :placeholder="suggested_alignment_max_shift_ppm" v-model.number="alignment_max_shift_ppm" class="q-mt-md" hint="The maximum allowed m/z shift in ppm to prevent spurious peak matches."></q-input>
+                  <q-input standout="custom-standout" label="Min Matched Peaks" type="number"
+                    :placeholder="suggested_alignment_min_matched_peaks" v-model.number="alignment_min_matched_peaks" class="q-mt-md" hint="The minimum number of matching peaks required to perform the alignment."></q-input>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+            <q-tab-panel name="standards">
+              <q-toggle v-model="enable_standards" label="Enable Internal Standards for Calibration" color="green" class="q-mb-md" hint="Enables the use of internal standards for mass calibration." />
+              <div class="text-h6">Define Internal Standards / Reference Peaks</div>
+              <p>Provide m/z values and optional labels for internal standards or reference peaks. These are used for mass calibration and alignment.</p>
+              <q-list bordered separator class="q-mt-md">
+                <q-item v-for="(peak, index) in reference_peaks_list" :key="index">
+                  <q-item-section avatar>
+                    <q-btn flat round icon="delete" color="negative" @click="removeReferencePeak(index)"></q-btn>
+                  </q-item-section>
+                  <q-item-section>
+                    <div class="row q-col-gutter-sm">
+                      <div class="col-6">
+                        <q-input standout="custom-standout" label="m/z" type="number" step="0.0001"
+                          v-model.number="peak.mz" :rules="[val => !!val || 'Required', val => val > 0 || 'Must be positive']" hint="Theoretical m/z value of the internal standard."></q-input>
+                      </div>
+                      <div class="col-6">
+                        <q-input standout="custom-standout" label="Label (optional)" v-model="peak.label" hint="Optional label for the internal standard."></q-input>
+                      </div>
+                    </div>
+                  </q-item-section>
+                </q-item>
+                <q-item>
+                  <q-item-section>
+                    <q-btn class="q-ma-sm btn-style" icon="add" label="Add Reference Peak" @click="addReferencePeak"></q-btn>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+            </q-tab-panel>
+            <q-tab-panel name="calibration">
+              <q-toggle v-model="enable_calibration" label="Enable Mass Calibration" color="green" class="q-mb-md" hint="Enables mass calibration using internal standards." />
+              <p>This step uses the peaks defined in the 'Internal Standards' tab to correct the m/z axis.</p>
+              <q-card>
+                <q-card-section>
+                  <div class="text-h6">Parameters</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-input standout="custom-standout" label="Fit Order" type="number"
+                    :placeholder="suggested_calibration_fit_order" v-model.number="calibration_fit_order"
+                    hint="Polynomial order for the calibration curve (e.g., 1 or 2)."></q-input>
+                  <q-input standout="custom-standout" label="PPM Tolerance" type="number"
+                    :placeholder="suggested_calibration_ppm_tolerance" v-model.number="calibration_ppm_tolerance" class="q-mt-md"
+                    hint="PPM tolerance for matching reference peaks to internal standards."></q-input>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+            <q-tab-panel name="peak_picking">
+              <q-toggle v-model="enable_peak_picking" label="Enable Peak Picking" color="green" class="q-mb-md" hint="Identifies peaks (signals of interest) in the profile or centroided spectra." />
+              <p>Select the appropriate peak picking method and set its parameters.</p>
+              <q-card class="q-mb-md">
+                <q-card-section>
+                  <div class="text-h6">Method</div>
+                  <div class="text-caption">The peak detection algorithm.</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-radio v-model="peak_picking_method" val="profile" label="PROFILE" hint="For profile-mode data, using local maxima and quality filters." /><br>
+                  <q-radio v-model="peak_picking_method" val="wavelet" label="WAVELET" hint="Continuous Wavelet Transform (CWT) based peak detection." /><br>
+                  <q-radio v-model="peak_picking_method" val="centroid" label="CENTROID" hint="For centroid-mode data, essentially a filtering step." /><br>
+                </q-card-section>
+              </q-card>
+              <q-card>
+                <q-card-section>
+                  <div class="text-h6">Parameters</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-input standout="custom-standout" label="Signal to Noise Threshold" type="number" step="0.1"
+                    :placeholder="suggested_peak_picking_snr_threshold" v-model.number="peak_picking_snr_threshold" hint="Signal-to-Noise Ratio threshold. Peaks with SNR below this value are discarded."></q-input>
+                  <q-input standout="custom-standout" label="Half Window Size" type="number" class="q-mt-md"
+                    :placeholder="suggested_peak_picking_half_window" v-model.number="peak_picking_half_window" hint="Number of data points to the left and right of a potential peak to consider for local maximum detection (for Profile method)."></q-input>
+                  <q-input standout="custom-standout" label="Min Peak Prominence" type="number" step="0.01"
+                    :placeholder="suggested_peak_picking_min_peak_prominence" v-model.number="peak_picking_min_peak_prominence" class="q-mt-md" hint="Minimum required prominence of a peak, expressed as a fraction of its height."></q-input>
+                  <q-input standout="custom-standout" label="Merge Peaks Tolerance (m/z)" type="number" step="0.001"
+                    :placeholder="suggested_peak_picking_merge_peaks_tolerance" v-model.number="peak_picking_merge_peaks_tolerance" class="q-mt-md" hint="The m/z tolerance within which to merge adjacent peaks, keeping the more intense one."></q-input>
+                  <q-input standout="custom-standout" label="Min Peak Width (PPM)" type="number"
+                    :placeholder="suggested_peak_picking_min_peak_width_ppm" v-model.number="peak_picking_min_peak_width_ppm" class="q-mt-md" hint="Minimum acceptable peak width (FWHM) in ppm."></q-input>
+                  <q-input standout="custom-standout" label="Max Peak Width (PPM)" type="number"
+                    :placeholder="suggested_peak_picking_max_peak_width_ppm" v-model.number="peak_picking_max_peak_width_ppm" class="q-mt-md" hint="Maximum acceptable peak width (FWHM) in ppm."></q-input>
+                  <q-input standout="custom-standout" label="Min Peak Shape R2" type="number" step="0.01"
+                    :placeholder="suggested_peak_picking_min_peak_shape_r2" v-model.number="peak_picking_min_peak_shape_r2" class="q-mt-md" hint="Minimum R-squared value from a Gaussian fit to the peak, used as a quality measure for peak shape."></q-input>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+            <q-tab-panel name="peak_selection">
+              <q-toggle v-model="enable_peak_selection" label="Enable Peak Selection" color="green" class="q-mb-md" hint="Filters detected peaks based on various quality criteria to remove noise and irrelevant signals." />
+              <q-card>
+                <q-card-section>
+                  <div class="text-h6">Peak Quality Filters</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-input standout="custom-standout" label="Min SNR" type="number" step="0.1"
+                    :placeholder="suggested_peak_selection_min_snr" v-model.number="peak_selection_min_snr" hint="Minimum Signal-to-Noise Ratio for a peak to be kept."></q-input>
+                  <q-input standout="custom-standout" label="Min FWHM (PPM)" type="number"
+                    :placeholder="suggested_peak_selection_min_fwhm_ppm" v-model.number="peak_selection_min_fwhm_ppm" class="q-mt-md" hint="Minimum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept."></q-input>
+                  <q-input standout="custom-standout" label="Max FWHM (PPM)" type="number"
+                    :placeholder="suggested_peak_selection_max_fwhm_ppm" v-model.number="peak_selection_max_fwhm_ppm" class="q-mt-md" hint="Maximum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept."></q-input>
+                  <q-input standout="custom-standout" label="Min Peak Shape R2" type="number" step="0.01"
+                    :placeholder="suggested_peak_selection_min_shape_r2" v-model.number="peak_selection_min_shape_r2" class="q-mt-md" hint="Minimum R-squared value from a Gaussian fit, filtering for good peak shape."></q-input>
+                  <q-input standout="custom-standout" label="Frequency Threshold" type="number" step="0.01"
+                    :placeholder="suggested_peak_selection_frequency_threshold" v-model.number="peak_selection_frequency_threshold" class="q-mt-md"
+                    hint="The minimum fraction of spectra a peak must be present in to be kept (0.0 to 1.0)."></q-input>
+                  <q-input standout="custom-standout" label="Correlation Threshold" type="number" step="0.01"
+                    :placeholder="suggested_peak_selection_correlation_threshold" v-model.number="peak_selection_correlation_threshold" class="q-mt-md"
+                    hint="Minimum correlation with neighboring peaks (not yet implemented)."></q-input>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+            <q-tab-panel name="binning">
+              <q-toggle v-model="enable_binning" label="Enable Peak Binning" color="green" class="q-mb-md" hint="Groups peaks from all spectra into common m/z bins to generate a feature matrix." />
+              <q-card class="q-mb-md">
+                <q-card-section>
+                  <div class="text-h6">Method</div>
+                  <div class="text-caption">The binning strategy.</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-radio v-model="binning_method" val="adaptive" label="ADAPTIVE" hint="Creates bins based on the density of detected peaks." /><br>
+                  <q-radio v-model="binning_method" val="uniform" label="UNIFORM" hint="Creates a fixed number of equally spaced bins over the m/z range." /><br>
+                </q-card-section>
+              </q-card>
+              <q-card>
+                <q-card-section>
+                  <div class="text-h6">Parameters</div>
+                </q-card-section>
+                <q-card-section>
+                  <q-input standout="custom-standout" label="Tolerance (for Adaptive)" type="number" step="0.001"
+                    :placeholder="suggested_binning_tolerance" v-model.number="binning_tolerance" hint="Tolerance for grouping peaks into a bin in adaptive mode."></q-input>
+                  <q-select standout="custom-standout" label="Tolerance Unit" v-model="binning_tolerance_unit"
+                    :options="['mz', 'ppm']" class="q-mt-md" hint="The unit for tolerance, either 'mz' (absolute) or 'ppm' (relative)."></q-select>
+                  <q-input standout="custom-standout" label="Frequency Threshold" type="number" step="0.01"
+                    :placeholder="suggested_binning_frequency_threshold" v-model.number="binning_frequency_threshold" class="q-mt-md" hint="The minimum fraction of spectra a bin must contain a peak in to be kept (0.0 to 1.0)."></q-input>
+                  <q-input standout="custom-standout" label="Min Peaks Per Bin" type="number"
+                    :placeholder="suggested_binning_min_peak_per_bin" v-model.number="binning_min_peak_per_bin" class="q-mt-md" hint="The minimum number of individual peaks required to form a bin in adaptive mode."></q-input>
+                  <q-input standout="custom-standout" label="Max Bin Width (PPM)" type="number"
+                    :placeholder="suggested_binning_max_bin_width_ppm" v-model.number="binning_max_bin_width_ppm" class="q-mt-md" hint="Maximum width of a bin in ppm for adaptive mode."></q-input>
+                  <q-toggle v-model="binning_intensity_weighted_centers" label="Intensity Weighted Centers"
+                    class="q-mt-md" hint="If enabled, calculates bin centers as an intensity-weighted average of the peaks within it."></q-toggle>
+                  <q-input standout="custom-standout" label="Number of Uniform Bins" type="number"
+                    :placeholder="suggested_binning_num_uniform_bins" v-model.number="binning_num_uniform_bins" class="q-mt-md" hint="The number of bins to create for the uniform method."></q-input>
+                </q-card-section>
+              </q-card>
+            </q-tab-panel>
+          </q-tab-panels>
+        </q-tab-panel>
+        <q-tab-panel name="generator">
+          <div class="text-h6">imzML & mzML Data Processor</div>
+          <p>Please make sure the ibd and imzML file are located in the same directory and have the same name.
+            <br>It may take a while to generate the slice / spectrum, please be patient.
+            <br>To generate the contour or surface plots, you have to select the desired slice first using the
+            interface.
+          </p>
+          <div class="row items-center">
+            <q-input standout="custom-standout" class="q-ma-sm cursor-pointer col" v-model="full_route" readonly
+              :label="batch_file_count > 0 ? batch_file_count + ' file(s) in batch' : 'Select an imzMl / mzML file'"
+              v-on:click="btnSearch=true">
+              <template v-slot:append>
+                <q-icon name="search" v-on:click="btnSearch=true" class="cursor-pointer" />
+              </template>
+            </q-input>
+            <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add"></q-btn>
+            <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" :disable="batch_file_count === 0"
+              label="Clear"></q-btn>
+          </div>
+          <q-list bordered separator v-if="selected_files.length > 0">
+            <q-item v-for="(file, index) in selected_files" :key="index">
+              <q-item-section>
+                {{ file }}
+              </q-item-section>
+              <q-item-section side>
+                <q-btn flat round icon="delete" size="sm" v-on:click="selected_files.splice(index, 1)"></q-btn>
+              </q-item-section>
+            </q-item>
+          </q-list>
+
+          <!-- Variable Manipulation -->
+          <div class="row">
+            <div class="st-col col-4 col-sm q-ma-sm">
+              <q-input standout="custom-standout" id="textNmass" v-model="Nmass"
+                label="Mass-to-charge ratio(s) of interest" type="text" :rules="[ 
+                    val => !!val || '* Required',
+                    val => val.split(',').every(m => !isNaN(parseFloat(m.trim())) && parseFloat(m.trim()) > 0) || 'Need comma-separated positive numbers'
+                  ]">
+              </q-input>
+            </div>
+            <div class="st-col col-4 col-sm q-ma-sm">
+              <q-input standout="custom-standout" id="textTol" step="0.005" v-model="Tol"
+                label="Mass-to-charge ratio tolerance" type="number"
+                :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
+            </div>
+            <div class="st-col col-4 col-sm q-ma-sm">
+              <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color levels"
+                type="number"
+                :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
+            </div>
+          </div>
+          <div class="row">
+            <!-- Triq Variable Manipulation and filters-->
+            <div class="col-6">
+              <div class="st-col col-6 col-sm q-ma-sm">
+                <q-toggle id="btnEnableMFilter" v-on:click="MFilterEnabled" v-model="MFilterEnabled" color="green"
+                  label="Add Median Filter"></q-toggle>
+                <q-toggle id="btnEnableTriq" v-on:click="triqEnabled" v-model="triqEnabled" color="blue"
+                  label="Add Threshold Intensity Quantization (TrIQ)"></q-toggle>
+                <q-toggle id="btnEnableMask" v-on:click="maskEnabled" v-model="maskEnabled" color="black"
+                  label="Use Mask To Filter Data"></q-toggle>
+              </div>
+              <div class="row">
+                <div class="st-col col-4 col-sm-4 q-ma-sm">
+                  <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb"
+                    label="TrIQ probability" type="number" :rules="[
+                            val => triqEnabled ? ( '* Required', val >= 0.8 &amp;&amp; val <= 1 || 'Needs to be in range between 0.8 and 1') : true
+                            ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
+                </div>
+              </div>
+            </div>
+            <!-- Spectra Plot Manipulation -->
+            <div class="col-6">
+              <div class="st-col col-6 col-sm">
+                <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+                  label="Generate Spectra" icon="play_arrow">
+                  <template v-slot:loading>
+                    <q-spinner-hourglass class="on-left" />
+                    Loading plot
+                  </template>
+
+                  <q-list>
+                    <q-item clickable v-close-popup v-on:click="createMeanPlot=true">
+                      <q-item-section>
+                        <q-item-label>Mean spectrum plot</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                    <q-item clickable v-close-popup v-on:click="createSumPlot=true">
+                      <q-item-section>
+                        <q-item-label>Sum Spectrum plot</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                    <q-item clickable v-close-popup v-on:click="createXYPlot=true">
+                      <q-item-section>
+                        <q-item-label>Spectrum plot (X,Y)</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </q-list>
+                </q-btn-dropdown>
+              </div>
+              <div class="row col-6">
+                <div class="st-col col-4 col-sm-4 q-ma-sm">
+                  <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord" type="number" :rules="[
+                            val => SpectraEnabled ? ( '* Required', val >= 0|| 'Needs to be bigger than 0') : true
+                            ]"></q-input>
+                </div>
+                <div class="st-col col-4 col-sm-4 q-ma-sm">
+                  <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord" type="number" :rules="[
+                            val => SpectraEnabled ? ( '* Required', val <= 0|| 'Needs to be lower than 0') : true
+                            ]"></q-input>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <q-btn :loading="progress" class="q-ma-sm btn-style" :disabled="btnStartDisable" icon="play_arrow"
+              v-on:click="mainProcess=true" padding="lg" label="Generate Slice">
+              <template v-slot:loading>
+                <q-spinner-hourglass class="on-left" />
+                Loading...
+              </template>
+            </q-btn>
+            <q-btn icon="zoom_out_map" class="q-ma-sm on-right btn-style" v-on:click="compareBtn=true" padding="sm"
+              label="Compare"></q-btn>
+            <q-btn class="q-ma-sm btn-style" icon="edit" label="Mask Editor" href="/mask"></q-btn>
+            <q-btn class="q-ma-sm btn-style" icon="dashboard" v-on:click="showMetadataBtn=true"
+              label="Show Metadata"></q-btn>
+            <div class="q-pa-md row items-center" v-show="progress">
+              <q-spinner color="primary" size="2em" class="q-mr-sm"></q-spinner>
+              <div class="text-caption">{{ progress_message }}</div>
+            </div>
+          </div>
+          <p>{{msg}}</p>
+          <div class="row st-col col-12">
+            <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressPlot" :disable="btnPlotDisable"
+              label="Generate Plots" icon="play_arrow">
+              <template v-slot:loading>
+                <q-spinner-hourglass class="on-left" />
+                Loading plot
+              </template>
+
+              <q-list>
+                <q-item clickable v-close-popup v-on:click="imageCPlot=true">
+                  <q-item-section>
+                    <q-item-label>Image topography Plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+
+                <q-item clickable v-close-popup v-on:click="triqCPlot=true">
+                  <q-item-section>
+                    <q-item-label>TrIQ topography Plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+
+                <q-item clickable v-close-popup v-on:click="image3dPlot=true">
+                  <q-item-section>
+                    <q-item-label>Image surface Plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+
+                <q-item clickable v-close-popup v-on:click="triq3dPlot=true">
+                  <q-item-section>
+                    <q-item-label>TrIQ Surface Plot</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+            </q-btn-dropdown>
+            <q-btn-dropdown icon="search" class="q-ma-sm btn-style" :disable="btnOpticalDisable"
+              label="Load your optical image">
+              <q-item clickable v-close-popup v-on:click="btnOptical=true">
+                <q-item-section>
+                  <q-item-label>Over normal image</q-item-label>
+                </q-item-section>
+              </q-item>
+              <q-item clickable v-close-popup v-on:click="btnOpticalT=true">
+                <q-item-section>
+                  <q-item-label>Over TrIQ image</q-item-label>
+                </q-item-section>
+              </q-item>
+            </q-btn-dropdown>
+            <div class="q-mx-sm">
+              <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
+              <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
+            </div>
+          </div>
+        </q-tab-panel>
+        <q-tab-panel name="converter">
+          <div class="text-h6">mzML to imzML Converter</div>
+          <p>Select the .mzML file and the corresponding .txt synchronization file to convert them into an .imzML/.ibd
+            pair.</p>
+          <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="mzml_full_route" readonly
+            label="Select your .mzML file" v-on:click="btnSearchMzml=true">
+            <template v-slot:append>
+              <q-icon name="search" v-on:click="btnSearchMzml=true" class="cursor-pointer" />
+            </template>
+          </q-input>
+
+          <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="sync_full_route" readonly
+            label="Select your .txt sync file" v-on:click="btnSearchSync=true">
+            <template v-slot:append>
+              <q-icon name="search" v-on:click="btnSearchSync=true" class="cursor-pointer" />
+            </template>
+          </q-input>
+
+          <q-btn :loading="progress_conversion" class="q-ma-sm btn-style" :disabled="btnConvertDisable"
+            icon="swap_horiz" v-on:click="convert_process=true" padding="lg" label="Convert File">
+            <template v-slot:loading>
+              <q-spinner-hourglass class="on-left" />
+              Converting...
+            </template>
+          </q-btn>
+          <p>{{msg_conversion}}</p>
+        </q-tab-panel>
+      </q-tab-panels>
+    </div>
+  </div>
+  <div class="row col-6">
+    <!-- Right DIV -->
+    <div id="intDivStyle-right" class="st-col col-12 col-sm st-module">
+      <div v-if="left_tab === 'pre_treatment'">
+        <div class="text-h6 q-mb-md">Spectrum View</div>
+        <q-card class="q-mb-md">
+          <q-card-section>
+            <div class="text-subtitle1">Before Preprocessing</div>
+          </q-card-section>
+          <q-card-section>
+            <plotly id="plotSpectraBefore" :data="plotdata_before" :layout="plotlayout_before" class="q-pa-none q-ma-none"></plotly>
+          </q-card-section>
+        </q-card>
+        <q-card>
+          <q-card-section>
+            <div class="text-subtitle1">After Preprocessing</div>
+          </q-card-section>
+          <q-card-section>
+            <plotly id="plotSpectraAfter" :data="plotdata_after" :layout="plotlayout_after" class="q-pa-none q-ma-none">
+            </plotly>
+          </q-card-section>
+        </q-card>
+      </div>
+      <div v-else>
+        <st-tabs id="tabHeader-main" :ids="tabIDs" :labels="tabLabels" v-model="selectedTab" no-arrows></st-tabs>
+        <q-tab-panels v-model="selectedTab">
+          <q-tab-panel name="tab0">
+            <!-- Content for Tab 0 -->
+            <h6>Image visualizer</h6>
+            <div class="row items-center">
+              <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
+              <q-space></q-space>
+              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinus=true"></q-btn>
+              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlus=true"></q-btn>
+            </div>
+            <!-- Image manager -->
+            <div id="image-container-normal" class="row st-col col-12">
+              <div class="col-10 q-pa-none q-ma-none">
+                <plotly id="plotImg" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data"
+                  @click="data_click"></plotly>
+              </div>
+              <div class="col-2 q-pa-none q-ma-none">
+                <q-img id="colorbar-normal" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
+              </div>
+            </div>
+            <p v-html="msgimg"></p>
+          </q-tab-panel>
+
+          <q-tab-panel name="tab1">
+            <!-- Content for Tab 1 -->
+            <h6>TrIQ visualizer</h6>
+            <div class="row items-center">
+              <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
+              <q-space></q-space>
+              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusT=true"></q-btn>
+              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusT=true"></q-btn>
+            </div>
+            <!-- Triq Image manager -->
+            <div id="image-container-triq" class="row st-col col-12">
+              <div class="col-10 q-pa-none q-ma-none ">
+                <plotly id="plotImgT" :data="plotdataImgT" :layout="plotlayoutImgT"
+                  class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
+              </div>
+              <div class="col-2 q-pa-none q-ma-none ">
+                <q-img id="colorbar-triq" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
+              </div>
+            </div>
+            <p v-html="msgtriq"></p>
+          </q-tab-panel>
+
+          <q-tab-panel name="tab2">
+            <div class="row items-center">
+              <q-select v-model="selected_folder_main" :options="available_folders" label="Select Dataset"
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
+              <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+                label="Generate Spectra" icon="play_arrow">
+                <template v-slot:loading>
+                  <q-spinner-hourglass class="on-left" />
+                  Loading plot
+                </template>
+
+                <q-list>
+                  <q-item clickable v-close-popup v-on:click="createMeanPlot=true">
+                    <q-item-section>
+                      <q-item-label>Mean spectrum plot</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup v-on:click="createSumPlot=true">
+                    <q-item-section>
+                      <q-item-label>Sum Spectrum plot</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup v-on:click="createXYPlot=true">
+                    <q-item-section>
+                      <q-item-label>Spectrum plot (X,Y)</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                </q-list>
+              </q-btn-dropdown>
+            </div>
+            <plotly id="plotSpectra" :data="plotdata" :layout="plotlayout" class="q-pa-none q-ma-none"></plotly>
+          </q-tab-panel>
+
+          <q-tab-panel name="tab3">
+            <!-- Content for Tab 3 -->
+            <plotly id="plotTopo" :data="plotdataC" :layout="plotlayoutC" class="q-pa-none q-ma-none"></plotly>
+          </q-tab-panel>
+          <q-tab-panel name="tab4">
+            <!-- Content for Tab 4 -->
+            <plotly id="plot3d" :data="plotdata3d" :layout="plotlayout3d" class="q-pa-none q-ma-none"></plotly>
+          </q-tab-panel>
+        </q-tab-panels>
+      </div>
+    </div>
+  </div>
+</div>

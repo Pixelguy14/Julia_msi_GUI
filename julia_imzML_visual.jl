@@ -927,6 +927,27 @@ function update_registry(registry_path, dataset_name, source_path, metadata=noth
 end
 
 """
+    save_registry(registry_path, registry_data)
+
+Saves the dataset registry to a JSON file, ensuring thread-safe access.
+
+# Arguments
+- `registry_path`: Path to the `registry.json` file.
+- `registry_data`: The dictionary containing the registry data to save.
+"""
+function save_registry(registry_path, registry_data)
+    lock(REGISTRY_LOCK) do
+        try
+            open(registry_path, "w") do f
+                JSON.print(f, registry_data, 4)
+            end
+        catch e
+            @error "Failed to write to registry.json: $e"
+        end
+    end
+end
+
+"""
     process_file_safely(file_path, masses, params, progress_message_ref, overall_progress_ref)
 
 Safely processes a single MSI data file, generating and saving m/z slices.
