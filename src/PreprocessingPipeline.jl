@@ -389,10 +389,11 @@ function save_feature_matrix(feature_matrix::Matrix{Float64}, bin_info, output_d
     return csv_path, csv_path_standard
 end
 
-function execute_full_preprocessing(spectra::Vector{MutableSpectrum}, params::Dict, 
+function execute_full_preprocessing(progress_callback::Function, # Now first positional
+                                   spectra::Vector{MutableSpectrum}, params::Dict, 
                                    pipeline_steps::Vector{String}, reference_peaks::Dict, 
-                                   mask_path::Union{String, Nothing}=nothing;
-                                   progress_callback::Function=(step -> nothing))
+                                   mask_path::Union{String, Nothing} # Positional argument
+                                   )
     
     println("Starting preprocessing pipeline with $(length(spectra)) spectra")
     println("Steps: $(join(pipeline_steps, " -> "))")

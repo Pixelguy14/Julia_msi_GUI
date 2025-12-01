@@ -22,7 +22,7 @@ using Dates
 using Base.Threads
 
 # Bring MSIData into App module's scope
-using .MSI_src: MSIData, OpenMSIData, process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile, generate_colorbar_image, load_and_prepare_mask, set_global_mz_range!, main_precalculation, MutableSpectrum
+using .MSI_src: MSIData, OpenMSIData, process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile, generate_colorbar_image, load_and_prepare_mask, set_global_mz_range!, main_precalculation, MutableSpectrum, execute_full_preprocessing
 
 if !@isdefined(increment_image)
     include("./julia_imzML_visual.jl")
@@ -65,6 +65,30 @@ if get(ENV, "GENIE_ENV", "dev") != "prod"
     end
 else
     log_memory_usage(context::String, msi_data_val) = nothing # No-op for production
+end
+
+function validate_parse(validation_errors::Vector{String}, param_str::String, param_name::String, target_type::Type, step_name::String)
+    println("DEBUG: Validating ($step_name) Parameter '$param_name'. Received value: '$param_str'")
+    if isempty(param_str)
+        push!(validation_errors, "($step_name) Parameter '$param_name' is empty.")
+        return nothing
+    end
+    val = tryparse(target_type, param_str)
+    if val === nothing
+        push!(validation_errors, "($step_name) Parameter '$param_name' ('$param_str') is not a valid $(target_type).")
+        return nothing
+    end
+    return val
+end
+
+# Helper function to check if a pipeline step is enabled
+function is_step_enabled(step_name::String, pipeline_order::Vector{Dict{String, Any}})
+    for step in pipeline_order
+        if get(step, "name", "") == step_name
+            return get(step, "enabled", false)
+        end
+    end
+    return false # Default to disabled if step not found
 end
 
 @genietools
@@ -116,6 +140,7 @@ end
     @in compareBtn=false # To open dialog
     @in createMeanPlot=false # To generate mean spectrum plot
     @in createXYPlot=false # To generate an spectrum plot according to the xy values inputed
+    @in createNSpectrumPlot=false # To generate an spectrum plot according to spectrum order
     @in createSumPlot=false # To generate a sum of all the spectrum plots
     @in image3dPlot=false # To generate 3d plot based on current image
     @in triq3dPlot=false # To generate 3d plot based on current triq image
@@ -264,7 +289,6 @@ end
         Dict("name" => "normalization", "label" => "Normalization", "enabled" => true),
         Dict("name" => "peak_binning", "label" => "Peak Binning", "enabled" => true)
     ]
-    @in preprocessing_mask_route = ""
     @in selected_spectrum_id_for_plot = 1
     @in feature_matrix_result = nothing
     @in bin_info_result = nothing
@@ -274,41 +298,21 @@ end
         Dict("mz" => 155.0349, "label" => "DHB_M+H"),
     ]
 
-    # --- Methods for Reference Peaks List ---
-    function addReferencePeak()
-        push!(reference_peaks_list, Dict("mz" => 0.0, "label" => ""))
-        reference_peaks_list = deepcopy(reference_peaks_list) # Force reactivity
-    end
-
-    function removeReferencePeak(index::Int)
-        deleteat!(reference_peaks_list, index)
-        reference_peaks_list = deepcopy(reference_peaks_list) # Force reactivity
-    end
-
-    # Step reordering functions
-    function moveStepUp(index::Int)
-        if index > 1
-            pipeline_step_order = deepcopy(pipeline_step_order)
-            temp = pipeline_step_order[index]
-            pipeline_step_order[index] = pipeline_step_order[index-1]
-            pipeline_step_order[index-1] = temp
-            pipeline_step_order = pipeline_step_order  # Force reactivity
-        end
-    end
-
-    function moveStepDown(index::Int)
-        if index < length(pipeline_step_order)
-            pipeline_step_order = deepcopy(pipeline_step_order)
-            temp = pipeline_step_order[index]
-            pipeline_step_order[index] = pipeline_step_order[index+1]
-            pipeline_step_order[index+1] = temp
-            pipeline_step_order = pipeline_step_order  # Force reactivity
-        end
-    end
     @in save_feature_matrix_btn = false
+    @in recalculate_suggestions_btn = false
+    @in addReferencePeak = false
+    @in removeReferencePeak = false
+    @in moveStepUp = false
+    @in moveStepDown = false
 
     # Trigger for running the full pipeline
     @in run_full_pipeline = false
+    @in enable_standards = true
+    @in action_index = -1
+    @in remove_peak_trigger = false
+    @in move_step_up_trigger = false
+    @in move_step_down_trigger = false
+    @in toggle_step_trigger = false
     @out current_pipeline_step = "" # To indicate which step is currently running in the full pipeline
 
     @in export_params_btn = false
@@ -453,7 +457,13 @@ end
             showgrid=true,
             tickformat = ".3g"
         ),
-        margin=attr(l=0,r=0,t=120,b=0,pad=0)
+        margin=attr(l=0,r=0,t=120,b=0,pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0,
+            xanchor="right", 
+            yanchor="top"
+        )
     )
     # Dummy 2D scatter plot
     traceSpectra=PlotlyBase.scatter(x=Vector{Float64}(), y=Vector{Float64}(), mode="lines", marker=attr(size=1, color="blue", opacity=0.1))
@@ -558,7 +568,7 @@ end
         msg = "Opening file: $(basename(picked_route))..."
 
         try
-            dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML|mzml))$ "i => "")
+            dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML|mzml))$"i => "")
             registry = load_registry(registry_path)
             existing_entry = get(registry, dataset_name, nothing)
 
@@ -938,119 +948,339 @@ end
     @onbutton run_full_pipeline begin
         progressPrep = true
         current_pipeline_step = "Initializing..."
+        println("DEBUG: run_full_pipeline started.")
+        # println("DEBUG: Current pipeline_step_order configuration: $pipeline_step_order")
         
         try
-            # 1. Data Preparation
-            if isempty(selected_folder_main)
-                msg = "No dataset selected. Please process a file first."
+            # --- 1. Initial Checks and Data Loading ---
+            println("DEBUG: Performing initial checks and data loading...")
+            if msi_data === nothing || isempty(selected_folder_main)
+                msg = "No dataset loaded. Please load a file using 'Select an imzMl / mzML file'."
                 warning_msg = true
+                println("DEBUG: $msg")
                 return
             end
 
             registry = load_registry(registry_path)
-            entry = registry[selected_folder_main]
+            entry = get(registry, selected_folder_main, nothing)
+            if entry === nothing
+                msg = "Selected dataset '$(selected_folder_main)' not found in registry. Please reload the file."
+                warning_msg = true
+                println("DEBUG: $msg")
+                return
+            end
             target_path = entry["source_path"]
 
-            if msi_data === nothing || full_route != target_path
-                if msi_data !== nothing
-                    close(msi_data)
-                end
+            # Ensure msi_data is for the currently selected file
+            if full_route != target_path
+                println("DEBUG: Active file path changed. Reloading MSI data: $(basename(target_path))")
+                if msi_data !== nothing; close(msi_data); end
+                msg = "Reloading $(basename(target_path)) for analysis..."
                 full_route = target_path
                 msi_data = OpenMSIData(target_path)
+            else
+                println("DEBUG: Using already loaded MSI data for $(basename(target_path)).")
             end
 
-            # Apply mask if enabled
+            # Mask path retrieval from registry
+            local mask_path_for_pipeline::Union{String, Nothing} = nothing
+            if maskEnabled
+                println("DEBUG: Masking is ENABLED.")
+                if get(entry, "has_mask", false)
+                    mask_path_candidate = get(entry, "mask_path", "")
+                    if isfile(mask_path_candidate)
+                        mask_path_for_pipeline = mask_path_candidate
+                        println("DEBUG: Using mask for pipeline: $(mask_path_for_pipeline)")
+                    else
+                        msg = "Mask enabled but file not found: $(mask_path_candidate). Aborting pipeline."
+                        warning_msg = true
+                        @warn msg
+                        println("DEBUG: $msg")
+                        return
+                    end
+                else
+                    msg = "Mask enabled but no valid mask entry found for: $(selected_folder_main). Aborting pipeline."
+                    warning_msg = true
+                    @warn msg
+                    println("DEBUG: $msg")
+                    return
+                end
+            else
+                println("DEBUG: Masking is DISABLED. No mask will be applied.")
+            end
+
+            # Apply mask if enabled to get indices to process
             spectrum_indices_to_process = collect(1:length(msi_data.spectra_metadata))
-            if maskEnabled && !isempty(preprocessing_mask_route) && isfile(preprocessing_mask_route)
-                current_pipeline_step = "Loading mask..."
-                mask_matrix = load_and_prepare_mask(preprocessing_mask_route, msi_data.image_dims)
+            if mask_path_for_pipeline !== nothing
+                current_pipeline_step = "Applying mask..."
+                println("DEBUG: Applying mask matrix to filter spectra...")
+                mask_matrix = load_and_prepare_mask(mask_path_for_pipeline, msi_data.image_dims)
                 masked_indices_set = get_masked_spectrum_indices(msi_data, mask_matrix)
                 spectrum_indices_to_process = collect(masked_indices_set)
+                if isempty(spectrum_indices_to_process)
+                    msg = "No spectra remaining after applying mask. Aborting pipeline."
+                    warning_msg = true
+                    println("DEBUG: $msg")
+                    return
+                end
+                println("DEBUG: $(length(spectrum_indices_to_process)) spectra remaining after mask application.")
+            else
+                println("DEBUG: No mask applied. Processing all $(length(msi_data.spectra_metadata)) spectra.")
             end
 
             # Initialize spectra data structure
             current_pipeline_step = "Loading spectra..."
+            println("DEBUG: Loading $(length(spectrum_indices_to_process)) spectra into MutableSpectrum objects...")
             current_spectra = Vector{MutableSpectrum}(undef, length(spectrum_indices_to_process))
             
-            Threads. @threads for i in 1:length(spectrum_indices_to_process)
+            Threads.@threads for i in 1:length(spectrum_indices_to_process)
                 original_idx = spectrum_indices_to_process[i]
-                mz, intensity = GetSpectrum(msi_data, original_idx)
-                current_spectra[i] = MutableSpectrum(original_idx, mz, intensity, [])
+                mz, intensity = GetSpectrum(msi_data, original_idx) # Fetch mz and intensity for the current spectrum
+                current_spectra[i] = MutableSpectrum(original_idx, Float64.(mz), Float64.(intensity), NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), NTuple{6, Float64}}[])
+            end
+            println("DEBUG: All spectra loaded into temporary structure for processing.")
+
+
+            # --- 2. Parameter Assembly with Validation ---
+            current_pipeline_step = "Configuring parameters..."
+            println("DEBUG: Configuring parameters and validating enabled steps...")
+            ref_peaks = Dict{Float64, String}(p["mz"] => p["label"] for p in reference_peaks_list)
+
+            final_params = Dict{Symbol, Dict{Symbol, Any}}()
+            validation_errors = String[]
+            
+            # --- Stabilization ---
+            println("DEBUG: Checking Stabilization step (name: stabilization)")
+            if is_step_enabled("stabilization", pipeline_step_order)
+                println("DEBUG: Stabilization step is ENABLED. Setting method: $(stabilization_method).")
+                final_params[:Stabilization] = Dict{Symbol, Any}(:method => Symbol(stabilization_method))
+            else
+                println("DEBUG: Stabilization step is DISABLED. Skipping.")
             end
 
-            # 2. Parameter Assembly
-            current_pipeline_step = "Configuring parameters..."
-            final_params = Dict(
-                :Stabilization => Dict(:method => Symbol(stabilization_method)),
-                :Smoothing => Dict(
+            # --- Smoothing ---
+            println("DEBUG: Checking Smoothing step (name: smoothing)")
+            if is_step_enabled("smoothing", pipeline_step_order)
+                println("DEBUG: Smoothing step is ENABLED. Validating parameters.")
+                window_val = validate_parse(validation_errors, smoothing_window, "Window", Int, "Smoothing")
+                order_val = validate_parse(validation_errors, smoothing_order, "Order", Int, "Smoothing")
+                final_params[:Smoothing] = Dict{Symbol, Any}(
                     :method => Symbol(smoothing_method),
-                    :window => parse(Int, smoothing_window),
-                    :order => parse(Int, smoothing_order)
-                ),
-                :BaselineCorrection => Dict(
-                    :method => Symbol(baseline_method),
-                    :iterations => parse(Int, baseline_iterations),
-                    :window => parse(Int, baseline_window)
-                ),
-                :Normalization => Dict(:method => Symbol(normalization_method)),
-                :PeakPicking => Dict(
-                    :method => Symbol(peak_picking_method),
-                    :snr_threshold => parse(Float64, peak_picking_snr_threshold),
-                    :half_window => parse(Int, peak_picking_half_window),
-                    :min_peak_prominence => parse(Float64, peak_picking_min_peak_prominence),
-                    :merge_peaks_tolerance => parse(Float64, peak_picking_merge_peaks_tolerance)
-                ),
-                :PeakSelection => Dict(
-                    :min_snr => parse(Float64, peak_selection_min_snr),
-                    :min_fwhm_ppm => parse(Float64, peak_selection_min_fwhm_ppm),
-                    :max_fwhm_ppm => parse(Float64, peak_selection_max_fwhm_ppm),
-                    :min_shape_r2 => parse(Float64, peak_selection_min_shape_r2)
-                ),
-                :Calibration => Dict(
-                    :method => :internal_standards,
-                    :ppm_tolerance => parse(Float64, calibration_ppm_tolerance),
-                    :fit_order => parse(Int, calibration_fit_order)
-                ),
-                :PeakAlignment => Dict(
-                    :method => Symbol(alignment_method),
-                    :tolerance => parse(Float64, alignment_tolerance),
-                    :tolerance_unit => Symbol(alignment_tolerance_unit)
-                ),
-                :PeakBinning => Dict(
-                    :method => Symbol(binning_method),
-                    :tolerance => parse(Float64, binning_tolerance),
-                    :tolerance_unit => Symbol(binning_tolerance_unit),
-                    :min_peak_per_bin => parse(Int, binning_min_peak_per_bin)
+                    :window => something(window_val, 9),
+                    :order => something(order_val, 2)
                 )
-            )
+                if window_val !== nothing && window_val < 1
+                    push!(validation_errors, "(Smoothing) Window must be positive.")
+                end
+                if order_val !== nothing && order_val < 0
+                    push!(validation_errors, "(Smoothing) Order must be non-negative.")
+                end
+                println("DEBUG: Smoothing parameters set: method=$(smoothing_method), window=$(something(window_val, 9)), order=$(something(order_val, 2)).")
+            else
+                println("DEBUG: Smoothing step is DISABLED. Skipping parameter validation.")
+            end
+
+            # --- Baseline Correction ---
+            println("DEBUG: Checking Baseline Correction step (name: baseline_correction)")
+            if is_step_enabled("baseline_correction", pipeline_step_order)
+                println("DEBUG: Baseline Correction step is ENABLED. Validating parameters.")
+                iterations_val = validate_parse(validation_errors, baseline_iterations, "Iterations", Int, "Baseline Correction")
+                baseline_window_val = validate_parse(validation_errors, baseline_window, "Window", Int, "Baseline Correction")
+                final_params[:BaselineCorrection] = Dict{Symbol, Any}(
+                    :method => Symbol(baseline_method),
+                    :iterations => something(iterations_val, 100),
+                    :window => something(baseline_window_val, 20)
+                )
+                if iterations_val !== nothing && iterations_val < 0
+                    push!(validation_errors, "(Baseline Correction) Iterations must be non-negative.")
+                end
+                if baseline_window_val !== nothing && baseline_window_val < 1
+                    push!(validation_errors, "(Baseline Correction) Window must be positive.")
+                end
+                println("DEBUG: Baseline Correction parameters set: method=$(baseline_method), iterations=$(something(iterations_val, 100)), window=$(something(baseline_window_val, 20)).")
+            else
+                println("DEBUG: Baseline Correction step is DISABLED. Skipping parameter validation.")
+            end
+
+            # --- Normalization ---
+            println("DEBUG: Checking Normalization step (name: normalization)")
+            if is_step_enabled("normalization", pipeline_step_order)
+                println("DEBUG: Normalization step is ENABLED. Setting method: $(normalization_method).")
+                final_params[:Normalization] = Dict{Symbol, Any}(:method => Symbol(normalization_method))
+            else
+                println("DEBUG: Normalization step is DISABLED. Skipping.")
+            end
+
+
+            # --- Peak Picking ---
+            println("DEBUG: Checking Peak Picking step (name: peak_picking)")
+            if is_step_enabled("peak_picking", pipeline_step_order)
+                println("DEBUG: Peak Picking step is ENABLED. Validating parameters.")
+                snr_threshold_val = validate_parse(validation_errors, peak_picking_snr_threshold, "SNR Threshold", Float64, "Peak Picking")
+                half_window_val = validate_parse(validation_errors, peak_picking_half_window, "Half Window", Int, "Peak Picking")
+                min_peak_prominence_val = validate_parse(validation_errors, peak_picking_min_peak_prominence, "Min Prominence", Float64, "Peak Picking")
+                merge_peaks_tolerance_val = validate_parse(validation_errors, peak_picking_merge_peaks_tolerance, "Merge Tolerance", Float64, "Peak Picking")
+                final_params[:PeakPicking] = Dict{Symbol, Any}(
+                    :method => Symbol(peak_picking_method),
+                    :snr_threshold => something(snr_threshold_val, 3.0),
+                    :half_window => something(half_window_val, 10),
+                    :min_peak_prominence => something(min_peak_prominence_val, 0.1),
+                    :merge_peaks_tolerance => something(merge_peaks_tolerance_val, 0.002)
+                )
+                if snr_threshold_val !== nothing && snr_threshold_val < 0
+                    push!(validation_errors, "(Peak Picking) SNR Threshold must be non-negative.")
+                end
+                if half_window_val !== nothing && half_window_val < 1
+                    push!(validation_errors, "(Peak Picking) Half Window must be positive.")
+                end
+                if min_peak_prominence_val !== nothing && (min_peak_prominence_val < 0 || min_peak_prominence_val > 1)
+                    push!(validation_errors, "(Peak Picking) Min Prominence must be between 0 and 1.")
+                end
+                if merge_peaks_tolerance_val !== nothing && merge_peaks_tolerance_val < 0
+                    push!(validation_errors, "(Peak Picking) Merge Tolerance must be non-negative.")
+                end
+                println("DEBUG: Peak Picking parameters set: method=$(peak_picking_method), snr_threshold=$(something(snr_threshold_val, 3.0)), half_window=$(something(half_window_val, 10))...")
+            else
+                println("DEBUG: Peak Picking step is DISABLED. Skipping parameter validation.")
+            end
+
+            # --- Peak Selection ---
+            println("DEBUG: Checking Peak Selection step (name: peak_selection)")
+            if is_step_enabled("peak_selection", pipeline_step_order)
+                println("DEBUG: Peak Selection step is ENABLED. Validating parameters.")
+                min_snr_val = validate_parse(validation_errors, peak_selection_min_snr, "Min SNR", Float64, "Peak Selection")
+                min_fwhm_ppm_val = validate_parse(validation_errors, peak_selection_min_fwhm_ppm, "Min FWHM", Float64, "Peak Selection")
+                max_fwhm_ppm_val = validate_parse(validation_errors, peak_selection_max_fwhm_ppm, "Max FWHM", Float64, "Peak Selection")
+                min_shape_r2_val = validate_parse(validation_errors, peak_selection_min_shape_r2, "Min Shape R2", Float64, "Peak Selection")
+                final_params[:PeakSelection] = Dict{Symbol, Any}(
+                    :min_snr => something(min_snr_val, 0.0),
+                    :min_fwhm_ppm => something(min_fwhm_ppm_val, 0.0),
+                    :max_fwhm_ppm => something(max_fwhm_ppm_val, Inf),
+                    :min_shape_r2 => something(min_shape_r2_val, 0.0)
+                )
+                if min_snr_val !== nothing && min_snr_val < 0
+                    push!(validation_errors, "(Peak Selection) Min SNR must be non-negative.")
+                end
+                if min_fwhm_ppm_val !== nothing && min_fwhm_ppm_val < 0
+                    push!(validation_errors, "(Peak Selection) Min FWHM must be non-negative.")
+                end
+                if max_fwhm_ppm_val !== nothing && max_fwhm_ppm_val < 0
+                    push!(validation_errors, "(Peak Selection) Max FWHM must be non-negative.")
+                end
+                if min_shape_r2_val !== nothing && (min_shape_r2_val < 0 || min_shape_r2_val > 1)
+                    push!(validation_errors, "(Peak Selection) Min Shape R2 must be between 0 and 1.")
+                end
+                println("DEBUG: Peak Selection parameters set: min_snr=$(something(min_snr_val, 0.0)), min_fwhm_ppm=$(something(min_fwhm_ppm_val, 0.0))...")
+            else
+                println("DEBUG: Peak Selection step is DISABLED. Skipping parameter validation.")
+            end
+
+
+            # --- Calibration ---
+            println("DEBUG: Checking Calibration step (name: calibration)")
+            if is_step_enabled("calibration", pipeline_step_order)
+                println("DEBUG: Calibration step is ENABLED. Validating parameters.")
+                ppm_tolerance_cal_val = validate_parse(validation_errors, calibration_ppm_tolerance, "PPM Tolerance", Float64, "Calibration")
+                fit_order_val = validate_parse(validation_errors, calibration_fit_order, "Fit Order", Int, "Calibration")
+                final_params[:Calibration] = Dict{Symbol, Any}(
+                    :method => :internal_standards, # Fixed method
+                    :ppm_tolerance => something(ppm_tolerance_cal_val, 20.0),
+                    :fit_order => something(fit_order_val, 1) # Default to linear
+                )
+                if ppm_tolerance_cal_val !== nothing && ppm_tolerance_cal_val < 0
+                    push!(validation_errors, "(Calibration) PPM Tolerance must be non-negative.")
+                end
+                if fit_order_val !== nothing && (fit_order_val < 0 || fit_order_val > 2)
+                    push!(validation_errors, "(Calibration) Fit Order must be 0, 1, or 2.")
+                end
+                if enable_standards && isempty(ref_peaks)
+                    push!(validation_errors, "(Calibration) Internal Standards are enabled, but no reference peaks are defined.")
+                end
+                println("DEBUG: Calibration parameters set: ppm_tolerance=$(something(ppm_tolerance_cal_val, 20.0)), fit_order=$(something(fit_order_val, 1)).")
+            else
+                println("DEBUG: Calibration step is DISABLED. Skipping parameter validation.")
+            end
+
+
+            # --- Peak Alignment ---
+            println("DEBUG: Checking Peak Alignment step (name: peak_alignment)")
+            if is_step_enabled("peak_alignment", pipeline_step_order)
+                println("DEBUG: Peak Alignment step is ENABLED. Validating parameters.")
+                alignment_tolerance_val = validate_parse(validation_errors, alignment_tolerance, "Tolerance", Float64, "Peak Alignment")
+                final_params[:PeakAlignment] = Dict{Symbol, Any}(
+                    :method => Symbol(alignment_method),
+                    :tolerance => something(alignment_tolerance_val, 0.002),
+                    :tolerance_unit => Symbol(alignment_tolerance_unit)
+                )
+                if alignment_tolerance_val !== nothing && alignment_tolerance_val < 0
+                    push!(validation_errors, "(Peak Alignment) Tolerance must be non-negative.")
+                end
+                println("DEBUG: Peak Alignment parameters set: method=$(alignment_method), tolerance=$(something(alignment_tolerance_val, 0.002)), tolerance_unit=$(alignment_tolerance_unit).")
+            else
+                println("DEBUG: Peak Alignment step is DISABLED. Skipping parameter validation.")
+            end
+
+
+            # --- Peak Binning ---
+            println("DEBUG: Checking Peak Binning step (name: peak_binning)")
+            if is_step_enabled("peak_binning", pipeline_step_order)
+                println("DEBUG: Peak Binning step is ENABLED. Validating parameters.")
+                binning_tolerance_val = validate_parse(validation_errors, binning_tolerance, "Tolerance", Float64, "Peak Binning")
+                min_peak_per_bin_val = validate_parse(validation_errors, binning_min_peak_per_bin, "Min Peaks Per Bin", Int, "Peak Binning")
+                final_params[:PeakBinning] = Dict{Symbol, Any}(
+                    :method => Symbol(binning_method),
+                    :tolerance => something(binning_tolerance_val, 20.0),
+                    :tolerance_unit => Symbol(binning_tolerance_unit),
+                    :min_peak_per_bin => something(min_peak_per_bin_val, 3)
+                )
+                if binning_tolerance_val !== nothing && binning_tolerance_val < 0
+                    push!(validation_errors, "(Peak Binning) Tolerance must be non-negative.")
+                end
+                if min_peak_per_bin_val !== nothing && min_peak_per_bin_val < 1
+                    push!(validation_errors, "(Peak Binning) Min Peaks Per Bin must be positive.")
+                end
+                println("DEBUG: Peak Binning parameters set: method=$(binning_method), tolerance=$(something(binning_tolerance_val, 20.0)), min_peak_per_bin=$(something(min_peak_per_bin_val, 3))...")
+            else
+                println("DEBUG: Peak Binning step is DISABLED. Skipping parameter validation.")
+            end
+
+
+            if !isempty(validation_errors)
+                msg = "Pipeline setup errors:\n" * join(validation_errors, "\n")
+                warning_msg = true
+                println("DEBUG: Validation errors encountered: $validation_errors")
+                return
+            end
 
             # Build pipeline steps from enabled steps in order
             pipeline_stp = [step["name"] for step in pipeline_step_order if step["enabled"]]
+            println("DEBUG: Final enabled pipeline steps to execute: $pipeline_stp")
             
-            # Convert reference peaks
-            ref_peaks = Dict(p["mz"] => p["label"] for p in reference_peaks_list)
-
             # 3. Execute Pipeline
             current_pipeline_step = "Running preprocessing pipeline..."
+            println("DEBUG: Starting pipeline execution with $(length(pipeline_stp)) enabled steps.")
             feature_matrix_result, bin_info_result = execute_full_preprocessing(
                 current_spectra,
                 final_params,
                 pipeline_stp,
                 ref_peaks,
-                maskEnabled ? preprocessing_mask_route : nothing
+                mask_path_for_pipeline
             ) do step
                 current_pipeline_step = "Processing: $step"
+                println("DEBUG: Processing step: $step")
             end
+            println("DEBUG: Pipeline execution finished.")
 
             # 4. Update Results Display
             current_pipeline_step = "Updating results..."
+            println("DEBUG: Updating results display after pipeline completion.")
             
             # Find the spectrum to display in "after" plot
             display_spectrum_idx = findfirst(s -> s.id == selected_spectrum_id_for_plot, current_spectra)
             if display_spectrum_idx !== nothing
                 processed_spectrum = current_spectra[display_spectrum_idx]
+                println("DEBUG: Displaying spectrum $(selected_spectrum_id_for_plot) after processing.")
                 
-                # Create "after" plot data
                 after_trace = PlotlyBase.scatter(
                     x=processed_spectrum.mz, 
                     y=processed_spectrum.intensity, 
@@ -1060,10 +1290,9 @@ end
                 
                 traces_after = [after_trace]
 
-                # Add peaks if they exist
                 if !isempty(processed_spectrum.peaks)
                     peak_mzs = [p.mz for p in processed_spectrum.peaks]
-                    peak_intensities = [p.intensity for p in processed_spectrum.peaks] # Fixed: Should be peak.intensity
+                    peak_intensities = [p.intensity for p in processed_spectrum.peaks]
                     peak_trace = PlotlyBase.scatter(
                         x=peak_mzs, 
                         y=peak_intensities, 
@@ -1072,14 +1301,19 @@ end
                         marker=attr(color="red", size=8)
                     )
                     push!(traces_after, peak_trace)
+                    println("DEBUG: $(length(processed_spectrum.peaks)) peaks picked for spectrum $(selected_spectrum_id_for_plot).")
+                else
+                    println("DEBUG: No peaks picked for spectrum $(selected_spectrum_id_for_plot).")
                 end
                 
                 plotdata_after = traces_after
                 plotlayout_after = PlotlyBase.Layout(
-                    title="After Preprocessing (Spectrum $selected_spectrum_id_for_plot)",
+                    title="After Preprocessing (Spectrum $(selected_spectrum_id_for_plot))",
                     xaxis_title="m/z",
                     yaxis_title="Intensity"
                 )
+            else
+                println("DEBUG: Selected spectrum for display ($(selected_spectrum_id_for_plot)) not found in processed spectra.")
             end
 
             # Save feature matrix if binning was performed
@@ -1088,18 +1322,254 @@ end
                 mkpath(output_dir)
                 save_feature_matrix(feature_matrix_result, bin_info_result, output_dir)
                 msg = "Pipeline completed successfully. Feature matrix saved."
+                println("DEBUG: Feature matrix saved to $output_dir")
             else
-                msg = "Pipeline completed successfully."
+                msg = "Pipeline completed successfully. No feature matrix generated (binning step not enabled)."
+                println("DEBUG: $msg")
             end
 
         catch e
             msg = "Error during pipeline execution: $e"
             warning_msg = true
             @error "Pipeline failed" exception=(e, catch_backtrace())
+            println("DEBUG: Pipeline caught an exception: $e")
         finally
             progressPrep = false
             current_pipeline_step = ""
-            GC.gc()
+            println("DEBUG: run_full_pipeline finished (finally block).")
+            GC.gc() # Trigger garbage collection
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
+            end
+        end
+    end
+
+    @onbutton recalculate_suggestions_btn begin
+        if msi_data === nothing
+            msg = "Please load a file first."
+            warning_msg = true
+            return
+        end
+        
+        try
+            msg = "Recalculating suggestions..."
+            progressPrep = true
+            
+            ref_peaks = Dict(p["mz"] => p["label"] for p in reference_peaks_list)
+            recommended_params = main_precalculation(msi_data, reference_peaks=ref_peaks)
+
+            for (step_name, params) in recommended_params
+                for (param_key, value) in params
+                    # Convert value to appropriate type before assignment
+                    processed_value = if value === nothing
+                        ""
+                    elseif value isa Tuple
+                        @warn "Skipping invalid parameter suggestion (tuple): $value for $param_key"
+                        "" # Set to empty string for safety
+                    elseif value isa Number
+                        string(value)
+                    else
+                        string(value)
+                    end
+                    
+                    if isempty(processed_value) && !(processed_value isa Number)
+                        continue # Skip if processed_value is an empty string and not a number type
+                    end
+
+                    # Map recommended parameters to suggested_* reactive variables
+                    if step_name == :Smoothing
+                        if param_key == :window
+                            suggested_smoothing_window = processed_value
+                            smoothing_window = processed_value
+                        elseif param_key == :order
+                            suggested_smoothing_order = processed_value
+                            smoothing_order = processed_value
+                        end
+                    elseif step_name == :BaselineCorrection
+                        if param_key == :iterations
+                            suggested_baseline_iterations = processed_value
+                            baseline_iterations = processed_value
+                        elseif param_key == :window
+                            suggested_baseline_window = processed_value
+                            baseline_window = processed_value
+                        end
+                    elseif step_name == :PeakAlignment
+                        if param_key == :span
+                            suggested_alignment_span = processed_value
+                            alignment_span = processed_value
+                        elseif param_key == :tolerance
+                            suggested_alignment_tolerance = processed_value
+                            alignment_tolerance = processed_value
+                        elseif param_key == :max_shift_ppm
+                            suggested_alignment_max_shift_ppm = processed_value
+                            alignment_max_shift_ppm = processed_value
+                        elseif param_key == :min_matched_peaks
+                            suggested_alignment_min_matched_peaks = processed_value
+                            alignment_min_matched_peaks = processed_value
+                        end
+                    elseif step_name == :Calibration
+                        if param_key == :fit_order
+                            suggested_calibration_fit_order = processed_value
+                            calibration_fit_order = processed_value
+                        elseif param_key == :ppm_tolerance
+                            suggested_calibration_ppm_tolerance = processed_value
+                            calibration_ppm_tolerance = processed_value
+                        end
+                    elseif step_name == :PeakPicking
+                        if param_key == :snr_threshold
+                            suggested_peak_picking_snr_threshold = processed_value
+                            peak_picking_snr_threshold = processed_value
+                        elseif param_key == :half_window
+                            suggested_peak_picking_half_window = processed_value
+                            peak_picking_half_window = processed_value
+                        elseif param_key == :min_peak_prominence
+                            suggested_peak_picking_min_peak_prominence = processed_value
+                            peak_picking_min_peak_prominence = processed_value
+                        elseif param_key == :merge_peaks_tolerance
+                            suggested_peak_picking_merge_peaks_tolerance = processed_value
+                            peak_picking_merge_peaks_tolerance = processed_value
+                        elseif param_key == :min_peak_width_ppm
+                            suggested_peak_picking_min_peak_width_ppm = processed_value
+                            peak_picking_min_peak_width_ppm = processed_value
+                        elseif param_key == :max_peak_width_ppm
+                            suggested_peak_picking_max_peak_width_ppm = processed_value
+                            peak_picking_max_peak_width_ppm = processed_value
+                        elseif param_key == :min_peak_shape_r2
+                            suggested_peak_picking_min_peak_shape_r2 = processed_value
+                            peak_picking_min_peak_shape_r2 = processed_value
+                        end
+                    elseif step_name == :PeakSelection
+                        if param_key == :min_snr
+                            suggested_peak_selection_min_snr = processed_value
+                            peak_selection_min_snr = processed_value
+                        elseif param_key == :min_fwhm_ppm
+                            suggested_peak_selection_min_fwhm_ppm = processed_value
+                            peak_selection_min_fwhm_ppm = processed_value
+                        elseif param_key == :max_fwhm_ppm
+                            suggested_peak_selection_max_fwhm_ppm = processed_value
+                            peak_selection_max_fwhm_ppm = processed_value
+                        elseif param_key == :min_shape_r2
+                            suggested_peak_selection_min_shape_r2 = processed_value
+                            peak_selection_min_shape_r2 = processed_value
+                        elseif param_key == :frequency_threshold
+                            suggested_peak_selection_frequency_threshold = processed_value
+                            peak_selection_frequency_threshold = processed_value
+                        elseif param_key == :correlation_threshold
+                            suggested_peak_selection_correlation_threshold = processed_value
+                            peak_selection_correlation_threshold = processed_value
+                        end
+                    elseif step_name == :PeakBinning
+                        if param_key == :tolerance
+                            suggested_binning_tolerance = processed_value
+                            binning_tolerance = processed_value
+                        elseif param_key == :frequency_threshold
+                            suggested_binning_frequency_threshold = processed_value
+                            binning_frequency_threshold = processed_value
+                        elseif param_key == :min_peak_per_bin
+                            suggested_binning_min_peak_per_bin = processed_value
+                            binning_min_peak_per_bin = processed_value
+                        elseif param_key == :max_bin_width_ppm
+                            suggested_binning_max_bin_width_ppm = processed_value
+                            binning_max_bin_width_ppm = processed_value
+                        elseif param_key == :num_uniform_bins
+                            suggested_binning_num_uniform_bins = processed_value
+                            binning_num_uniform_bins = processed_value
+                        end
+                    end
+                end
+            end
+            
+            # Also set method types for steps
+            if haskey(recommended_params, :Smoothing) && haskey(recommended_params[:Smoothing], :method)
+                smoothing_method = string(recommended_params[:Smoothing][:method])
+            end
+            if haskey(recommended_params, :BaselineCorrection) && haskey(recommended_params[:BaselineCorrection], :method)
+                baseline_method = string(recommended_params[:BaselineCorrection][:method])
+            end
+            if haskey(recommended_params, :Normalization) && haskey(recommended_params[:Normalization], :method)
+                normalization_method = string(recommended_params[:Normalization][:method])
+            end
+            if haskey(recommended_params, :PeakAlignment) && haskey(recommended_params[:PeakAlignment], :method)
+                alignment_method = string(recommended_params[:PeakAlignment][:method])
+            end
+            if haskey(recommended_params, :PeakPicking) && haskey(recommended_params[:PeakPicking], :method)
+                peak_picking_method = string(recommended_params[:PeakPicking][:method])
+            end
+            if haskey(recommended_params, :PeakBinning) && haskey(recommended_params[:PeakBinning], :method)
+                binning_method = string(recommended_params[:PeakBinning][:method])
+            end
+            if haskey(recommended_params, :PeakAlignment) && haskey(recommended_params[:PeakAlignment], :tolerance_unit)
+                alignment_tolerance_unit = string(recommended_params[:PeakAlignment][:tolerance_unit])
+            end
+            if haskey(recommended_params, :PeakBinning) && haskey(recommended_params[:PeakBinning], :tolerance_unit)
+                binning_tolerance_unit = string(recommended_params[:PeakBinning][:tolerance_unit])
+            end
+            
+            msg = "Suggestions have been recalculated."
+        catch e
+            msg = "Failed to recalculate suggestions: $e"
+            warning_msg = true
+            @error "Recalculation failed" exception=(e, catch_backtrace())
+        finally
+            progressPrep = false
+        end
+    end
+
+    @onbutton addReferencePeak begin
+        new_list = deepcopy(reference_peaks_list)
+        push!(new_list, Dict("mz" => 0.0, "label" => ""))
+        reference_peaks_list = new_list # Assign new list to trigger reactivity
+    end
+
+    @onbutton remove_peak_trigger begin
+        if action_index > -1
+            julia_index = action_index + 1
+            new_list = deepcopy(reference_peaks_list)
+            if 1 <= julia_index <= length(new_list)
+                deleteat!(new_list, julia_index)
+                reference_peaks_list = new_list
+            end
+            action_index = -1 # Reset
+        end
+    end
+
+    @onbutton move_step_up_trigger begin
+        if action_index > -1
+            julia_index = action_index + 1
+            if julia_index > 1
+                new_order = deepcopy(pipeline_step_order)
+                temp = new_order[julia_index]
+                new_order[julia_index] = new_order[julia_index - 1]
+                new_order[julia_index - 1] = temp
+                pipeline_step_order = new_order
+            end
+            action_index = -1 # Reset
+        end
+    end
+
+    @onbutton move_step_down_trigger begin
+        if action_index > -1
+            julia_index = action_index + 1
+            if julia_index < length(pipeline_step_order)
+                new_order = deepcopy(pipeline_step_order)
+                temp = new_order[julia_index]
+                new_order[julia_index] = new_order[julia_index + 1]
+                new_order[julia_index + 1] = temp
+                pipeline_step_order = new_order
+            end
+            action_index = -1 # Reset
+        end
+    end
+    
+    @onbutton toggle_step_trigger begin
+        if action_index > -1
+            julia_index = action_index + 1
+            if 1 <= julia_index <= length(pipeline_step_order)
+                new_order = deepcopy(pipeline_step_order)
+                new_order[julia_index]["enabled"] = !new_order[julia_index]["enabled"]
+                pipeline_step_order = new_order
+            end
+            action_index = -1 # Reset
         end
     end
 
@@ -1633,9 +2103,11 @@ end
 
             # Convert to positive coordinates for processing
             y_positive = yCoord < 0 ? abs(yCoord) : yCoord
-            plotdata, plotlayout, xSpectraMz, ySpectraMz = xySpectrumPlot(msi_data, xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
+            plotdata, plotlayout, xSpectraMz, ySpectraMz, spectrum_id = xySpectrumPlot(msi_data, xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
+            selected_spectrum_id_for_plot = spectrum_id
+            idSpectrum = spectrum_id # we set the same obtained spectrum id to the UI
             
             # Update coordinates based on actual plot title
             # Extract title text from the Dict safely
@@ -1676,6 +2148,93 @@ end
             msg = "Could not retrieve spectrum: $e"
             warning_msg = true
             @error "Spectrum plotting failed" exception=(e, catch_backtrace())
+        finally
+            progressSpectraPlot = false
+            btnPlotDisable = false
+            btnSpectraDisable = false
+            btnStartDisable = false
+            GC.gc() # Trigger garbage collection
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
+            end
+        end
+    end
+
+    @onbutton createNSpectrumPlot @time begin
+        if isempty(selected_folder_main)
+            msg = "No dataset selected. Please process a file and select a folder first."
+            warning_msg = true
+            return
+        end
+
+        progressSpectraPlot = true
+        btnStartDisable = true
+        btnPlotDisable = true
+        btnSpectraDisable = true
+        msg = "Loading plot for $(selected_folder_main)..."
+
+        try
+            sTime = time()
+            registry = load_registry(registry_path)
+            
+            # Add error handling for registry access
+            if !haskey(registry, selected_folder_main)
+                msg = "Dataset '$(selected_folder_main)' not found in registry."
+                warning_msg = true
+                return
+            end
+            
+            entry = registry[selected_folder_main]
+            target_path = entry["source_path"]
+
+            if target_path == "unknown (manually added)"
+                msg = "Dataset selected contained no route."
+                warning_msg = true
+                return
+            end
+
+            if msi_data === nothing || full_route != target_path
+                if msi_data !== nothing
+                    close(msi_data)
+                end
+                msg = "Reloading $(basename(target_path)) for analysis..."
+                full_route = target_path
+                msi_data = OpenMSIData(target_path)
+                if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
+                    raw_min = entry["metadata"]["global_min_mz"]
+                    raw_max = entry["metadata"]["global_max_mz"]
+                    min_val = isa(raw_min, Dict) ? get(raw_min, "value", raw_min) : raw_min
+                    max_val = isa(raw_max, Dict) ? get(raw_max, "value", raw_max) : raw_max
+                    set_global_mz_range!(msi_data, convert(Float64, min_val), convert(Float64, max_val))
+                else
+                    precompute_analytics(msi_data)
+                end
+            end
+
+            local mask_path_for_plot::Union{String, Nothing} = nothing
+            if maskEnabled && get(entry, "has_mask", false)
+                mask_path_for_plot = get(entry, "mask_path", "")
+                if !isfile(mask_path_for_plot)
+                    @warn "Mask not found for plotting: $(mask_path_for_plot). Plotting without mask."
+                    mask_path_for_plot = nothing
+                end
+            end
+
+            # Call the new nSpectrumPlot function
+            plotdata, plotlayout, xSpectraMz, ySpectraMz, spectrum_id = nSpectrumPlot(msi_data, idSpectrum, selected_folder_main, mask_path=mask_path_for_plot)
+            plotdata_before = plotdata
+            plotlayout_before = plotlayout
+            selected_spectrum_id_for_plot = spectrum_id
+            
+            selectedTab = "tab2"
+            fTime = time()
+            eTime = round(fTime - sTime, digits=3)
+            msg = "Plot loaded in $(eTime) seconds"
+            log_memory_usage("nSpectrum Plot Generated", msi_data)
+        catch e
+            msg = "Could not retrieve spectrum: $e"
+            warning_msg = true
+            @error "nSpectrum plotting failed" exception=(e, catch_backtrace())
         finally
             progressSpectraPlot = false
             btnPlotDisable = false

@@ -229,53 +229,189 @@ function get_spectrum_attributes(stream::IO, hIbd::IO)
     return [x_skip, y_skip, mz_first, array_len_skip, spectrum_end_skip]
 end
 
-function determine_parser(stream::IO, mz_is_compressed::Bool, int_is_compressed::Bool)
-    start_pos = position(stream)
-    spectrum_xml = ""
+
+# Helper function to read an entire spectrum block from the stream
+function read_spectrum_block(stream::IO)
+    lines = String[]
+    in_spectrum = false
     
-    try
-        # Find the start of the first spectrum tag
-        while !eof(stream)
-            line = readline(stream)
-            if occursin("<spectrum ", line)
-                spectrum_buffer = IOBuffer()
-                write(spectrum_buffer, line)
-                # Read until the end of the spectrum tag
-                while !eof(stream)
-                    line = readline(stream)
-                    write(spectrum_buffer, line)
-                    if occursin("</spectrum>", line)
-                        break
-                    end
-                end
-                spectrum_xml = String(take!(spectrum_buffer))
-                break # Found the first spectrum, so we can stop
+    # Store the stream's position before starting to read this block.
+    # This is important for determining if a block was successfully read.
+    start_pos = position(stream)
+
+    while !eof(stream)
+        line = readline(stream)
+        
+        if occursin("<spectrum ", line)
+            in_spectrum = true
+            push!(lines, line)
+        elseif in_spectrum
+            push!(lines, line)
+            if occursin("</spectrum>", line)
+                return join(lines, "\n")
             end
         end
-    finally
-        seek(stream, start_pos) # Always reset stream position
     end
-
-    if isempty(spectrum_xml)
-        # Fallback based on compression flags if no spectrum tag found
-        return (mz_is_compressed || int_is_compressed) ? :compressed : :uncompressed
-    end
-
-    # Inspect the XML content
-    has_neofx_markers = occursin("encodedLength=\"0\"", spectrum_xml) &&
-                        occursin("external encoded length", spectrum_xml)
     
-    has_external_data_markers = occursin("IMS:1000101", spectrum_xml) && 
-                                occursin("IMS:1000102", spectrum_xml) &&
-                                occursin("IMS:1000103", spectrum_xml)
+    # If we reach EOF without finding </spectrum> for a started block, 
+    # or if no <spectrum> was found at all, return empty.
+    if isempty(lines)
+        seek(stream, start_pos) # Reset stream position if no block was found
+        return ""
+    else
+        # Should not happen if XML is well-formed, but just in case
+        @warn "Reached EOF while parsing spectrum block without finding </spectrum> tag. Returning partial block."
+        return join(lines, "\n")
+    end
+end
 
-    if has_neofx_markers
-                    return :neofx
-                end
-                
-                # If not neofx, it must be compressed (as uncompressed path is no longer supported)
-                return :compressed 
+# Helper function to parse coordinates from a spectrum block
+function parse_coordinates(spectrum_block::String)
+    x = Int32(0)
+    y = Int32(0)
+    
+    x_match = match(r"IMS:1000050[^>]*value=\"(\d+)\"", spectrum_block)
+    y_match = match(r"IMS:1000051[^>]*value=\"(\d+)\"", spectrum_block)
+    
+    x = x_match !== nothing ? parse(Int32, x_match.captures[1]) : x
+    y = y_match !== nothing ? parse(Int32, y_match.captures[1]) : y
+    
+    return x, y
+end
+
+# Helper function to parse spectrum mode from a spectrum block
+function parse_spectrum_mode(spectrum_block::String, global_mode::SpectrumMode)
+    if occursin("MS:1000127", spectrum_block)
+        return CENTROID
+    elseif occursin("MS:1000128", spectrum_block) 
+        return PROFILE
+    else
+        return global_mode
+    end
+end
+
+# Helper function to parse binary data arrays
+function parse_binary_data_arrays(spectrum_block::String, spectrum_start_line::String, 
+                                  default_mz_format::DataType, default_intensity_format::DataType, 
+                                  mz_is_compressed::Bool, int_is_compressed::Bool)
+    
+    array_data_type = @NamedTuple{is_mz::Bool, array_length::Int32, encoded_length::Int64, offset::Int64}
+    current_array_data = array_data_type[]
+
+    for bda_match in eachmatch(r"<binaryDataArray.*?>(.*?)</binaryDataArray>"sm, spectrum_block)
+        bda_content = bda_match.match # This will be the full <binaryDataArray> block
+
+        is_mz = occursin("MS:1000514", bda_content) || occursin("mzArray", bda_content)
+        
+        array_len_cv_match = match(r"IMS:1000103.*?value=\"(\d+)\"", bda_content)
+        array_length = Int32(0)
+        if array_len_cv_match !== nothing
+            array_length = parse(Int32, array_len_cv_match.captures[1])
+        end
+        
+        # Fallback for defaultArrayLength from the spectrum_start_line
+        if array_length == 0
+            default_match = match(r"defaultArrayLength=\"(\d+)\"", spectrum_start_line)
+            if default_match !== nothing
+                array_length = parse(Int32, default_match.captures[1])
             end
+        end
+
+        encoded_len_cv_match = match(r"IMS:1000104.*?value=\"(\d+)\"", bda_content)
+        encoded_length = Int64(0)
+        if encoded_len_cv_match !== nothing
+            encoded_length = parse(Int64, encoded_len_cv_match.captures[1])
+        else
+            encoded_len_attr_match = match(r"encodedLength=\"(\d+)\"", bda_content)
+            if encoded_len_attr_match !== nothing
+                encoded_length = parse(Int64, encoded_len_attr_match.captures[1])
+            end
+        end
+
+        offset_match = match(r"IMS:1000102.*?value=\"(\d+)\"", bda_content)
+        offset = Int64(0)
+        if offset_match !== nothing
+            offset = parse(Int64, offset_match.captures[1])
+        end
+        
+        if array_length > 0 && offset > 0
+            push!(current_array_data, (is_mz=is_mz, array_length=array_length, 
+                                     encoded_length=encoded_length, offset=offset))
+        end
+    end
+    return current_array_data
+end
+
+
+# Unified function to parse spectrum metadata
+function parse_imzml_spectrum_block(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_groups::Dict{String, SpecDim},
+                                    width::Int32, height::Int32, num_spectra::Int32,
+                                    default_mz_format::DataType, default_intensity_format::DataType, 
+                                    mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
+    
+    spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
+    
+    # Store the initial position of the stream, in case read_spectrum_block fails to find a spectrum.
+    # This helps reset the stream for subsequent debugging if needed, though typically it should find a spectrum.
+    initial_stream_pos = position(stream)
+
+    for k in 1:num_spectra
+        spectrum_block_content = read_spectrum_block(stream)
+        if isempty(spectrum_block_content)
+            @warn "Expected spectrum block $k but found none or reached EOF prematurely. Stopping parsing."
+            # Fill remaining spectra_metadata with placeholder or error.
+            for j in k:num_spectra
+                mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, Int64(0), 0, :mz)
+                int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, Int64(0), 0, :intensity)
+                spectra_metadata[j] = SpectrumMetadata(Int32(0), Int32(0), "", :sample, global_mode, mz_asset, int_asset)
+            end
+            break
+        end
+
+        x, y = parse_coordinates(spectrum_block_content)
+        spectrum_mode = parse_spectrum_mode(spectrum_block_content, global_mode)
+        
+        # The spectrum_start_line is needed for defaultArrayLength fallback in parse_binary_data_arrays
+        # We need to extract it from spectrum_block_content or pass the first line of the spectrum_block_content
+        # Let's assume the first line of spectrum_block_content is the spectrum_start_line for this purpose
+        spectrum_start_line_from_block = String(split(spectrum_block_content, '\n')[1])
+
+        current_array_data = parse_binary_data_arrays(spectrum_block_content, spectrum_start_line_from_block, 
+                                                        default_mz_format, default_intensity_format, 
+                                                        mz_is_compressed, int_is_compressed)
+        
+        # Separate m/z and intensity arrays
+        mz_data = filter(d -> d.is_mz, current_array_data)
+        int_data = filter(d -> !d.is_mz, current_array_data)
+        
+        if length(mz_data) != 1 || length(int_data) != 1
+            println("DEBUG: Spectrum $k is empty or invalid - creating placeholder metadata")
+            mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, Int64(0), 0, :mz)
+            int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, Int64(0), 0, :intensity)
+        else
+            mz_info = mz_data[1]
+            int_info = int_data[1]
+
+            if k == 1 # Only print debug for the first spectrum
+                println("DEBUG First spectrum parsed (unified):")
+                println("  Coordinates: x=$x, y=$y")
+                println("  Mode: $spectrum_mode")
+                println("  m/z array: array_length=$(mz_info.array_length), encoded_length=$(mz_info.encoded_length), offset=$(mz_info.offset)")
+                println("  intensity array: array_length=$(int_info.array_length), encoded_length=$(int_info.encoded_length), offset=$(int_info.offset)")
+            end
+
+            mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, mz_info.offset, 
+                                    mz_is_compressed ? mz_info.encoded_length : mz_info.array_length, :mz)
+            int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, int_info.offset,
+                                     int_is_compressed ? int_info.encoded_length : int_info.array_length, :intensity)
+        end
+        
+        spectra_metadata[k] = SpectrumMetadata(x, y, "", :sample, spectrum_mode, mz_asset, int_asset)
+    end
+
+    return spectra_metadata
+end
+
 function load_imzml_lazy(file_path::String; cache_size::Int=100)
     println("DEBUG: Checking for .imzML file at $file_path")
     if !isfile(file_path)
@@ -342,22 +478,9 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
         println("DEBUG: m/z compressed: $mz_is_compressed, Intensity compressed: $int_is_compressed")
         println("DEBUG: Global mode: $global_mode")
 
-        # --- Parser Selection ---
-        parser_type = determine_parser(stream, mz_is_compressed, int_is_compressed)
-        println("DEBUG: Selected parser: $parser_type")
-
-        local spectra_metadata
-        if parser_type == :neofx
-            println("DEBUG: Using neofx parser.")
-            spectra_metadata = parse_neofx(stream, ts_hIbd, param_groups, width, height, num_spectra, 
-                                           default_mz_format, default_intensity_format, 
-                                           mz_is_compressed, int_is_compressed, global_mode)
-        else
-            println("DEBUG: Using compressed parser.")
-            spectra_metadata = parse_compressed(stream, ts_hIbd, param_groups, width, height, num_spectra,
-                                           default_mz_format, default_intensity_format,
-                                           mz_is_compressed, int_is_compressed, global_mode)
-        end
+        local spectra_metadata = parse_imzml_spectrum_block(stream, ts_hIbd, param_groups, width, height, num_spectra,
+                                                          default_mz_format, default_intensity_format,
+                                                          mz_is_compressed, int_is_compressed, global_mode)
 
         println("DEBUG: Metadata parsing complete.")
         
@@ -554,150 +677,6 @@ function parse_compressed(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, par
     return spectra_metadata
 end
 
-function parse_neofx(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_groups::Dict{String, SpecDim},
-                              width::Int32, height::Int32, num_spectra::Int32,
-                              default_mz_format::DataType, default_intensity_format::DataType, 
-                              mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
-    spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
-    
-    array_data_type = @NamedTuple{is_mz::Bool, array_length::Int32, encoded_length::Int64, offset::Int64}
-
-    for k in 1:num_spectra
-        # Initialize variables for this spectrum
-        x = Int32(0)
-        y = Int32(0)
-        spectrum_mode = global_mode
-        current_array_data = array_data_type[]
-        spectrum_start_line = ""
-
-        # Find the start of the spectrum tag
-        line = ""
-        while !eof(stream)
-            line = readline(stream)
-            if occursin("<spectrum ", line)
-                spectrum_start_line = line
-                break
-            end
-        end
-        
-        # Parse lines within the spectrum block
-        while !eof(stream)
-            if !occursin("<spectrum ", line) # Avoid re-reading the first line
-                line = readline(stream)
-            end
-            
-            if occursin("</spectrum>", line)
-                break
-            end
-
-            # Parse coordinates
-            x_match = match(r"IMS:1000050.*?value=\"(\d+)\"", line)
-            if x_match !== nothing
-                x = parse(Int32, x_match.captures[1])
-            end
-            y_match = match(r"IMS:1000051.*?value=\"(\d+)\"", line)
-            if y_match !== nothing
-                y = parse(Int32, y_match.captures[1])
-            end
-
-            # Parse mode
-            if occursin("MS:1000127", line) 
-                spectrum_mode = CENTROID
-            elseif occursin("MS:1000128", line)
-                spectrum_mode = PROFILE
-            end
-
-            # More robust binaryDataArray detection
-            if occursin("<binaryDataArray", line)
-                bda_lines = [line]
-                if !occursin("</binaryDataArray>", line)
-                    while !eof(stream)
-                        bda_line = readline(stream)
-                        push!(bda_lines, bda_line)
-                        if occursin("</binaryDataArray>", bda_line)
-                            break
-                        end
-                    end
-                end
-                bda_content = join(bda_lines, "\n")
-
-                # Parse from bda_content
-                is_mz = occursin("MS:1000514", bda_content) || occursin("mzArray", bda_content)
-                
-                array_len_cv_match = match(r"IMS:1000103.*?value=\"(\d+)\"", bda_content)
-                array_length = Int32(0)
-                if array_len_cv_match !== nothing
-                    array_length = parse(Int32, array_len_cv_match.captures[1])
-                end
-                
-                # Fallback for defaultArrayLength
-                if array_length == 0
-                    default_match = match(r"defaultArrayLength=\"(\d+)\"", spectrum_start_line)
-                    if default_match !== nothing
-                        array_length = parse(Int32, default_match.captures[1])
-                    end
-                end
-
-                encoded_len_cv_match = match(r"IMS:1000104.*?value=\"(\d+)\"", bda_content)
-                encoded_length = Int64(0)
-                if encoded_len_cv_match !== nothing
-                    encoded_length = parse(Int64, encoded_len_cv_match.captures[1])
-                else
-                    encoded_len_attr_match = match(r"encodedLength=\"(\d+)\"", bda_content)
-                    if encoded_len_attr_match !== nothing
-                        encoded_length = parse(Int64, encoded_len_attr_match.captures[1])
-                    end
-                end
-
-                offset_match = match(r"IMS:1000102.*?value=\"(\d+)\"", bda_content)
-                offset = Int64(0)
-                if offset_match !== nothing
-                    offset = parse(Int64, offset_match.captures[1])
-                end
-                
-                if array_length > 0 && offset > 0
-                    push!(current_array_data, (is_mz=is_mz, array_length=array_length, 
-                                             encoded_length=encoded_length, offset=offset))
-                end
-            end
-            
-            # Reset line to continue loop
-            line = ""
-        end
-
-        # Separate m/z and intensity arrays
-        mz_data = filter(d -> d.is_mz, current_array_data)
-        int_data = filter(d -> !d.is_mz, current_array_data)
-        
-        if length(mz_data) != 1 || length(int_data) != 1
-            println("DEBUG: Spectrum $k is empty or invalid - creating placeholder metadata")
-            mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, Int64(0), 0, :mz)
-            int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, Int64(0), 0, :intensity)
-        else
-            mz_info = mz_data[1]
-            int_info = int_data[1]
-
-            if k == 1
-                println("DEBUG First spectrum parsed:")
-                println("  Coordinates: x=$x, y=$y")
-                println("  Mode: $spectrum_mode")
-                println("  m/z array: array_length=$(mz_info.array_length), encoded_length=$(mz_info.encoded_length), offset=$(mz_info.offset)")
-                println("  intensity array: array_length=$(int_info.array_length), encoded_length=$(int_info.encoded_length), offset=$(int_info.offset)")
-            end
-
-            mz_asset = SpectrumAsset(default_mz_format, mz_is_compressed, mz_info.offset, 
-                                    mz_is_compressed ? mz_info.encoded_length : mz_info.array_length, :mz)
-            int_asset = SpectrumAsset(default_intensity_format, int_is_compressed, int_info.offset,
-                                     int_is_compressed ? int_info.encoded_length : int_info.array_length, :intensity)
-        end
-        
-        spectra_metadata[k] = SpectrumMetadata(x, y, "", :sample, spectrum_mode, mz_asset, int_asset)
-    end
-
-    return spectra_metadata
-end
-
-# --- End of content from imzML.jl ---
 
 # =============================================================================
 #

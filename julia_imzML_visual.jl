@@ -531,7 +531,13 @@ function meanSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Uni
             showgrid=true,
             tickformat=".3g"
         ),
-        margin=attr(l=0, r=0, t=120, b=0, pad=0)
+        margin=attr(l=0, r=0, t=120, b=0, pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0, 
+            xanchor="right", 
+            yanchor="top"
+        )
     )
 
     # Use the new, efficient function from the backend
@@ -582,22 +588,25 @@ Generates a plot for the spectrum at a specific coordinate (for imaging data) or
 """
 function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, imgHeight::Int, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
     local mz::AbstractVector, intensity::AbstractVector
-    local plot_title::String
-    local spectrum_mode = MSI_src.CENTROID # Default to centroid
+    local spectrum_id::Int = -1 # Initialize spectrum_id
+    mz, intensity = Float64[], Float64[]
+    base_title = ""
+    spectrum_mode = MSI_src.PROFILE
 
-    is_imaging = data.source isa ImzMLSource
+    if data.source isa ImzMLSource
+        w, h = data.image_dims
+        x = clamp(xCoord, 1, w)
+        y = clamp(yCoord, 1, h)
+        spectrum_id = (y - 1) * w + x # Calculate spectrum_id for imaging data
 
-    if is_imaging
-        x = clamp(xCoord, 1, imgWidth)
-        y = clamp(yCoord, 1, imgHeight)
-
-        # Get spectrum mode
+        # Check if spectrum stats are available and retrieve the mode
         if data.spectrum_stats_df !== nothing && hasproperty(data.spectrum_stats_df, :Mode)
-            w, h = data.image_dims
-            if y > 0 && x > 0 && y <= h && x <= w
-                idx = (y - 1) * w + x
-                if idx <= length(data.spectrum_stats_df.Mode)
-                    spectrum_mode = data.spectrum_stats_df.Mode[idx]
+            if spectrum_id <= length(data.spectrum_stats_df.Mode)
+                try
+                    spectrum_mode = data.spectrum_stats_df.Mode[spectrum_id]
+                catch e
+                    @warn "Could not retrieve spectrum mode for index $spectrum_id. Defaulting to PROFILE."
+                    spectrum_mode = MSI_src.PROFILE
                 end
             end
         end
@@ -625,6 +634,7 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     else
         # For non-imaging data, treat xCoord as the spectrum index
         index = clamp(xCoord, 1, length(data.spectra_metadata))
+        spectrum_id = index # Assign index to spectrum_id for non-imaging data
 
         if data.spectrum_stats_df !== nothing && hasproperty(data.spectrum_stats_df, :Mode)
             if index <= length(data.spectrum_stats_df.Mode)
@@ -660,7 +670,13 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
             showgrid=true,
             tickformat=".3g"
         ),
-        margin=attr(l=0, r=0, t=120, b=0, pad=0)
+        margin=attr(l=0, r=0, t=120, b=0, pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0, 
+            xanchor="right", 
+            yanchor="top"
+        )
     )
 
     # Downsample for plotting performance
@@ -675,7 +691,98 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
     plotdata = [trace]
     plotlayout = layout
 
-    return plotdata, plotlayout, mz, intensity
+    return plotdata, plotlayout, mz, intensity, spectrum_id
+end
+
+"""
+    nSpectrumPlot(data::MSIData, id::Int, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
+
+Generates a plot for a spectrum specified by its linear `id` for any type of MSIData.
+
+# Arguments
+- `data`: The `MSIData` object.
+- `id`: The linear index (ID) of the spectrum to plot.
+- `dataset_name`: Optional name of the dataset for the plot title.
+- `mask_path`: Optional path to a mask file (currently not used for plotting by ID, but kept for signature consistency).
+
+# Returns
+- `plotdata`: A vector containing the Plotly trace.
+- `plotlayout`: The Plotly layout for the plot.
+- `mz`: The m/z values of the spectrum.
+- `intensity`: The intensity values of the spectrum.
+- `spectrum_id`: The linear index of the spectrum (same as input `id`).
+"""
+function nSpectrumPlot(data::MSIData, id::Int, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
+    local mz::AbstractVector, intensity::AbstractVector
+    local plot_title::String
+    local spectrum_mode = MSI_src.CENTROID # Default to centroid
+    local spectrum_id::Int = id # Spectrum ID is the input id
+
+    # Validate ID
+    if id < 1 || id > length(data.spectra_metadata)
+        @warn "Spectrum ID $id is out of bounds."
+        mz, intensity = Float64[], Float64[]
+        base_title = "Spectrum ID $id (Out of Bounds)"
+        spectrum_id = 0 # Indicate invalid spectrum ID
+    else
+        # Get spectrum mode
+        if data.spectrum_stats_df !== nothing && hasproperty(data.spectrum_stats_df, :Mode)
+            if id <= length(data.spectrum_stats_df.Mode)
+                spectrum_mode = data.spectrum_stats_df.Mode[id]
+            end
+        end
+
+        # Retrieve spectrum data
+        process_spectrum(data, id) do recieved_mz, recieved_intensity
+            mz = recieved_mz
+            intensity = recieved_intensity
+        end
+        base_title = "Spectrum #$id"
+    end
+
+    plot_title = isempty(dataset_name) ? base_title : "$base_title for: $dataset_name"
+
+    layout = PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text=plot_title,
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
+        hovermode="closest",
+        xaxis=PlotlyBase.attr(
+            title="<i>m/z</i>",
+            showgrid=true
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Intensity",
+            showgrid=true,
+            tickformat=".3g"
+        ),
+        margin=attr(l=0, r=0, t=120, b=0, pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0, 
+            xanchor="right", 
+            yanchor="top"
+        )
+    )
+
+    # Downsample for plotting performance
+    mz_down, int_down = MSI_src.downsample_spectrum(mz, intensity)
+
+    trace = if spectrum_mode == MSI_src.CENTROID
+        PlotlyBase.stem(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    else
+        PlotlyBase.scatter(x=mz_down, y=int_down, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    end
+
+    plotdata = [trace]
+    plotlayout = layout
+
+    return plotdata, plotlayout, mz, intensity, spectrum_id
 end
 
 """
@@ -722,7 +829,13 @@ function sumSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Unio
             showgrid=true,
             tickformat=".3g"
         ),
-        margin=attr(l=0, r=0, t=120, b=0, pad=0)
+        margin=attr(l=0, r=0, t=120, b=0, pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0, 
+            xanchor="right", 
+            yanchor="top"
+        )
     )
 
     # Use the get_total_spectrum function from the backend

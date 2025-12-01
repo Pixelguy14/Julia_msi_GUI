@@ -62,6 +62,11 @@
         <q-item clickable v-close-popup v-on:click="createXYPlot=true">
           <q-item-label>Spectrum plot (X,Y)</q-item-label>
         </q-item>
+        <q-item clickable v-close-popup v-on:click="createNSpectrumPlot=true">
+          <q-item-section>
+            <q-item-label>Spectrum plot (ID)</q-item-label>
+          </q-item-section>
+        </q-item>
       </q-list>
     </q-btn-dropdown>
     <div class="row col-6">
@@ -86,20 +91,21 @@
   <q-card class="q-mb-md">
     <q-card-section>
       <div class="text-h6">Internal Standards</div>
-      <div class="text-caption">Reference peaks for calibration and alignment</div>
+      <div class="text-caption">Reference peaks for calibration, alignment and precise suggestion calculations</div>
     </q-card-section>
     <q-card-section>
+      <q-toggle v-model="enable_standards" v-on:click="enable_standards" label="Use Internal Standards" color="primary" class="q-mb-md" />
       <!-- Keep your existing reference_peaks_list implementation -->
       <q-list bordered separator class="q-mt-md">
         <q-item v-for="(peak, index) in reference_peaks_list" :key="index">
           <q-item-section avatar>
-            <q-btn flat round icon="delete" color="negative" @click="removeReferencePeak(index)"></q-btn>
+            <q-btn flat round icon="delete" color="negative" v-on:click="action_index = index; remove_peak_trigger = true"></q-btn>
           </q-item-section>
           <q-item-section>
             <div class="row q-col-gutter-sm">
               <div class="col-6">
                 <q-input standout="custom-standout" label="m/z" type="number" step="0.0001"
-                  v-model.number="peak.mz" :rules="[val => !!val || 'Required', val => val > 0 || 'Must be positive']"></q-input>
+                  v-model="peak.mz" :rules="[val => !!val || 'Required', val => val > 0 || 'Must be positive']"></q-input>
               </div>
               <div class="col-6">
                 <q-input standout="custom-standout" label="Label (optional)" v-model="peak.label"></q-input>
@@ -109,13 +115,15 @@
         </q-item>
         <q-item>
           <q-item-section>
-            <q-btn class="q-ma-sm btn-style" icon="add" label="Add Reference Peak" @click="addReferencePeak"></q-btn>
+            <q-btn class="q-ma-sm btn-style" icon="add" label="Add Reference Peak" v-on:click="addReferencePeak=true"></q-btn>
           </q-item-section>
         </q-item>
-      </q-list>
-    </q-card-section>
-  </q-card>
-
+                </q-list>
+                <div class="row justify-end q-mt-sm">
+                  <q-btn class="q-ma-sm" icon="functions" v-on:click="recalculate_suggestions_btn=true" label="Recalculate Suggestions" outline hint="Re-run automatic parameter suggestion using the current list of internal standards."/>
+                </div>
+              </q-card-section>
+            </q-card>
   <!-- Reorderable Preprocessing Steps -->
   <div class="text-h6 q-mb-md">Preprocessing Pipeline</div>
   <q-list bordered>
@@ -128,9 +136,9 @@
         <q-item-section avatar>
           <div class="row no-wrap">
             <q-btn flat round icon="arrow_upward" size="sm" 
-                   :disable="index === 0" @click.stop="moveStepUp(index)"></q-btn>
+                   :disable="index === 0" v-on:click.stop="action_index = index; move_step_up_trigger = true"></q-btn>
             <q-btn flat round icon="arrow_downward" size="sm" 
-                   :disable="index === pipeline_step_order.length - 1" @click.stop="moveStepDown(index)"></q-btn>
+                   :disable="index === pipeline_step_order.length - 1" v-on:click.stop="action_index = index; move_step_down_trigger = true"></q-btn>
           </div>
         </q-item-section>
         
@@ -139,7 +147,7 @@
         </q-item-section>
         
         <q-item-section side>
-          <q-toggle v-model="step.enabled" color="green" @click.stop />
+          <q-toggle v-model="step.enabled" color="green" v-on:click.stop="action_index = index; toggle_step_trigger = true" />
         </q-item-section>
       </template>
 
@@ -160,10 +168,10 @@
           <q-radio v-model="smoothing_method" val="ma" label="Moving Average" />
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
-              <q-input standout="custom-standout" label="Window Size" v-model.number="smoothing_window" type="number" />
+              <q-input standout="custom-standout" label="Window Size" v-model="smoothing_window" type="number" />
             </div>
             <div class="col-6">
-              <q-input standout="custom-standout" label="Order (Savitzky-Golay)" v-model.number="smoothing_order" type="number" />
+              <q-input standout="custom-standout" label="Order (Savitzky-Golay)" v-model="smoothing_order" type="number" />
             </div>
           </div>
         </q-card-section>
@@ -186,11 +194,11 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Iterations (for SNIP)" type="number"
-                :placeholder="suggested_baseline_iterations" v-model.number="baseline_iterations" hint="The number of iterations for the SNIP algorithm. A higher number results in a more aggressive baseline."></q-input>
+                :placeholder="suggested_baseline_iterations" v-model="baseline_iterations" hint="The number of iterations for the SNIP algorithm. A higher number results in a more aggressive baseline."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Window (for Median)" type="number"
-                :placeholder="suggested_baseline_window" v-model.number="baseline_window" hint="The window size for the median method, determining the local region for median calculation."></q-input>
+                :placeholder="suggested_baseline_window" v-model="baseline_window" hint="The window size for the median method, determining the local region for median calculation."></q-input>
             </div>
           </div>
         </q-card-section>
@@ -226,11 +234,11 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Span (for LOWESS)" type="number" step="0.01"
-                :placeholder="suggested_alignment_span" v-model.number="alignment_span" :rules="[val => val >= 0.0 && val <= 1.0 || 'Needs to be between 0 and 1']" hint="The span parameter for LOWESS regression, controlling smoothness (0.0 to 1.0)."></q-input>
+                :placeholder="suggested_alignment_span" v-model="alignment_span" :rules="[val => val >= 0.0 && val <= 1.0 || 'Needs to be between 0 and 1']" hint="The span parameter for LOWESS regression, controlling smoothness (0.0 to 1.0)."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Tolerance" type="number" step="0.001"
-                :placeholder="suggested_alignment_tolerance" v-model.number="alignment_tolerance" hint="The tolerance for matching peaks between the target and reference spectrum."></q-input>
+                :placeholder="suggested_alignment_tolerance" v-model="alignment_tolerance" hint="The tolerance for matching peaks between the target and reference spectrum."></q-input>
             </div>
           </div>
           <q-select standout="custom-standout" label="Tolerance Unit" v-model="alignment_tolerance_unit"
@@ -238,11 +246,11 @@
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Max Shift PPM" type="number"
-                :placeholder="suggested_alignment_max_shift_ppm" v-model.number="alignment_max_shift_ppm" hint="The maximum allowed m/z shift in ppm to prevent spurious peak matches."></q-input>
+                :placeholder="suggested_alignment_max_shift_ppm" v-model="alignment_max_shift_ppm" hint="The maximum allowed m/z shift in ppm to prevent spurious peak matches."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Matched Peaks" type="number"
-                :placeholder="suggested_alignment_min_matched_peaks" v-model.number="alignment_min_matched_peaks" hint="The minimum number of matching peaks required to perform the alignment."></q-input>
+                :placeholder="suggested_alignment_min_matched_peaks" v-model="alignment_min_matched_peaks" hint="The minimum number of matching peaks required to perform the alignment."></q-input>
             </div>
           </div>
         </q-card-section>
@@ -256,12 +264,12 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Fit Order" type="number"
-                :placeholder="suggested_calibration_fit_order" v-model.number="calibration_fit_order"
+                :placeholder="suggested_calibration_fit_order" v-model="calibration_fit_order"
                 hint="Polynomial order for the calibration curve (e.g., 1 or 2)."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="PPM Tolerance" type="number"
-                :placeholder="suggested_calibration_ppm_tolerance" v-model.number="calibration_ppm_tolerance"
+                :placeholder="suggested_calibration_ppm_tolerance" v-model="calibration_ppm_tolerance"
                 hint="PPM tolerance for matching reference peaks to internal standards."></q-input>
             </div>
           </div>
@@ -285,35 +293,35 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Signal to Noise Threshold" type="number" step="0.1"
-                :placeholder="suggested_peak_picking_snr_threshold" v-model.number="peak_picking_snr_threshold" hint="Signal-to-Noise Ratio threshold. Peaks with SNR below this value are discarded."></q-input>
+                :placeholder="suggested_peak_picking_snr_threshold" v-model="peak_picking_snr_threshold" hint="Signal-to-Noise Ratio threshold. Peaks with SNR below this value are discarded."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Half Window Size" type="number"
-                :placeholder="suggested_peak_picking_half_window" v-model.number="peak_picking_half_window" hint="Number of data points to the left and right of a potential peak to consider for local maximum detection (for Profile method)."></q-input>
+                :placeholder="suggested_peak_picking_half_window" v-model="peak_picking_half_window" hint="Number of data points to the left and right of a potential peak to consider for local maximum detection (for Profile method)."></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Peak Prominence" type="number" step="0.01"
-                :placeholder="suggested_peak_picking_min_peak_prominence" v-model.number="peak_picking_min_peak_prominence" hint="Minimum required prominence of a peak, expressed as a fraction of its height."></q-input>
+                :placeholder="suggested_peak_picking_min_peak_prominence" v-model="peak_picking_min_peak_prominence" hint="Minimum required prominence of a peak, expressed as a fraction of its height."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Merge Peaks Tolerance (m/z)" type="number" step="0.001"
-                :placeholder="suggested_peak_picking_merge_peaks_tolerance" v-model.number="peak_picking_merge_peaks_tolerance" hint="The m/z tolerance within which to merge adjacent peaks, keeping the more intense one."></q-input>
+                :placeholder="suggested_peak_picking_merge_peaks_tolerance" v-model="peak_picking_merge_peaks_tolerance" hint="The m/z tolerance within which to merge adjacent peaks, keeping the more intense one."></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Peak Width (PPM)" type="number"
-                :placeholder="suggested_peak_picking_min_peak_width_ppm" v-model.number="peak_picking_min_peak_width_ppm" hint="Minimum acceptable peak width (FWHM) in ppm."></q-input>
+                :placeholder="suggested_peak_picking_min_peak_width_ppm" v-model="peak_picking_min_peak_width_ppm" hint="Minimum acceptable peak width (FWHM) in ppm."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Max Peak Width (PPM)" type="number"
-                :placeholder="suggested_peak_picking_max_peak_width_ppm" v-model.number="peak_picking_max_peak_width_ppm" hint="Maximum acceptable peak width (FWHM) in ppm."></q-input>
+                :placeholder="suggested_peak_picking_max_peak_width_ppm" v-model="peak_picking_max_peak_width_ppm" hint="Maximum acceptable peak width (FWHM) in ppm."></q-input>
             </div>
           </div>
           <q-input standout="custom-standout" label="Min Peak Shape R2" type="number" step="0.01" class="q-mt-md"
-            :placeholder="suggested_peak_picking_min_peak_shape_r2" v-model.number="peak_picking_min_peak_shape_r2" hint="Minimum R-squared value from a Gaussian fit to the peak, used as a quality measure for peak shape."></q-input>
+            :placeholder="suggested_peak_picking_min_peak_shape_r2" v-model="peak_picking_min_peak_shape_r2" hint="Minimum R-squared value from a Gaussian fit to the peak, used as a quality measure for peak shape."></q-input>
         </q-card-section>
       </q-card>
 
@@ -325,32 +333,32 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Min SNR" type="number" step="0.1"
-                :placeholder="suggested_peak_selection_min_snr" v-model.number="peak_selection_min_snr" hint="Minimum Signal-to-Noise Ratio for a peak to be kept."></q-input>
+                :placeholder="suggested_peak_selection_min_snr" v-model="peak_selection_min_snr" hint="Minimum Signal-to-Noise Ratio for a peak to be kept."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Min FWHM (PPM)" type="number"
-                :placeholder="suggested_peak_selection_min_fwhm_ppm" v-model.number="peak_selection_min_fwhm_ppm" hint="Minimum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept."></q-input>
+                :placeholder="suggested_peak_selection_min_fwhm_ppm" v-model="peak_selection_min_fwhm_ppm" hint="Minimum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept."></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Max FWHM (PPM)" type="number"
-                :placeholder="suggested_peak_selection_max_fwhm_ppm" v-model.number="peak_selection_max_fwhm_ppm" hint="Maximum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept."></q-input>
+                :placeholder="suggested_peak_selection_max_fwhm_ppm" v-model="peak_selection_max_fwhm_ppm" hint="Maximum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Peak Shape R2" type="number" step="0.01"
-                :placeholder="suggested_peak_selection_min_shape_r2" v-model.number="peak_selection_min_shape_r2" hint="Minimum R-squared value from a Gaussian fit, filtering for good peak shape."></q-input>
+                :placeholder="suggested_peak_selection_min_shape_r2" v-model="peak_selection_min_shape_r2" hint="Minimum R-squared value from a Gaussian fit, filtering for good peak shape."></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Frequency Threshold" type="number" step="0.01"
-                :placeholder="suggested_peak_selection_frequency_threshold" v-model.number="peak_selection_frequency_threshold"
+                :placeholder="suggested_peak_selection_frequency_threshold" v-model="peak_selection_frequency_threshold"
                 hint="The minimum fraction of spectra a peak must be present in to be kept (0.0 to 1.0)."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Correlation Threshold" type="number" step="0.01"
-                :placeholder="suggested_peak_selection_correlation_threshold" v-model.number="peak_selection_correlation_threshold"
+                :placeholder="suggested_peak_selection_correlation_threshold" v-model="peak_selection_correlation_threshold"
                 hint="Minimum correlation with neighboring peaks (not yet implemented)."></q-input>
             </div>
           </div>
@@ -373,7 +381,7 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Tolerance (for Adaptive)" type="number" step="0.001"
-                :placeholder="suggested_binning_tolerance" v-model.number="binning_tolerance" hint="Tolerance for grouping peaks into a bin in adaptive mode."></q-input>
+                :placeholder="suggested_binning_tolerance" v-model="binning_tolerance" hint="Tolerance for grouping peaks into a bin in adaptive mode."></q-input>
             </div>
             <div class="col-6">
               <q-select standout="custom-standout" label="Tolerance Unit" v-model="binning_tolerance_unit"
@@ -383,24 +391,24 @@
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Frequency Threshold" type="number" step="0.01"
-                :placeholder="suggested_binning_frequency_threshold" v-model.number="binning_frequency_threshold" hint="The minimum fraction of spectra a bin must contain a peak in to be kept (0.0 to 1.0)."></q-input>
+                :placeholder="suggested_binning_frequency_threshold" v-model="binning_frequency_threshold" hint="The minimum fraction of spectra a bin must contain a peak in to be kept (0.0 to 1.0)."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Peaks Per Bin" type="number"
-                :placeholder="suggested_binning_min_peak_per_bin" v-model.number="binning_min_peak_per_bin" hint="The minimum number of individual peaks required to form a bin in adaptive mode."></q-input>
+                :placeholder="suggested_binning_min_peak_per_bin" v-model="binning_min_peak_per_bin" hint="The minimum number of individual peaks required to form a bin in adaptive mode."></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Max Bin Width (PPM)" type="number"
-                :placeholder="suggested_binning_max_bin_width_ppm" v-model.number="binning_max_bin_width_ppm" hint="Maximum width of a bin in ppm for adaptive mode."></q-input>
+                :placeholder="suggested_binning_max_bin_width_ppm" v-model="binning_max_bin_width_ppm" hint="Maximum width of a bin in ppm for adaptive mode."></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Number of Uniform Bins" type="number"
-                :placeholder="suggested_binning_num_uniform_bins" v-model.number="binning_num_uniform_bins" hint="The number of bins to create for the uniform method."></q-input>
+                :placeholder="suggested_binning_num_uniform_bins" v-model="binning_num_uniform_bins" hint="The number of bins to create for the uniform method."></q-input>
             </div>
           </div>
-          <q-toggle v-model="binning_intensity_weighted_centers" label="Intensity Weighted Centers"
+          <q-toggle v-model="binning_intensity_weighted_centers" v-on:click="binning_intensity_weighted_centers" label="Intensity Weighted Centers"
             class="q-mt-md" hint="If enabled, calculates bin centers as an intensity-weighted average of the peaks within it."></q-toggle>
         </q-card-section>
       </q-card>
@@ -410,8 +418,8 @@
 
   <!-- Pipeline Controls -->
   <div class="row justify-end items-center q-mt-md">
-    <q-btn class="q-ma-sm" icon="save" @click="export_params_btn=true" label="Export Params" outline />
-    <q-btn class="q-ma-sm" icon="upload_file" @click="import_params_btn=true" label="Import Params" outline />
+    <q-btn class="q-ma-sm" icon="save" v-on:click="export_params_btn=true" label="Export Params" outline />
+    <q-btn class="q-ma-sm" icon="upload_file" v-on:click="import_params_btn=true" label="Import Params" outline />
     <q-btn :loading="progressPrep" class="q-ma-sm btn-style" icon="play_arrow" 
            v-on:click="run_full_pipeline=true" padding="lg" label="Run Pipeline" />
   </div>
@@ -422,8 +430,8 @@
 
   <!-- Pipeline Controls -->
   <div class="row justify-end items-center q-mt-md">
-    <q-btn class="q-ma-sm" icon="save" @click="export_params_btn=true" label="Export Params" outline />
-    <q-btn class="q-ma-sm" icon="upload_file" @click="import_params_btn=true" label="Import Params" outline />
+    <q-btn class="q-ma-sm" icon="save" v-on:click="export_params_btn=true" label="Export Params" outline />
+    <q-btn class="q-ma-sm" icon="upload_file" v-on:click="import_params_btn=true" label="Import Params" outline />
     <q-btn :loading="progressPrep" class="q-ma-sm btn-style" icon="play_arrow" 
            v-on:click="run_full_pipeline=true" padding="lg" label="Run Pipeline" />
   </div>
@@ -523,6 +531,11 @@
                     <q-item clickable v-close-popup v-on:click="createXYPlot=true">
                       <q-item-section>
                         <q-item-label>Spectrum plot (X,Y)</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                    <q-item clickable v-close-popup v-on:click="createNSpectrumPlot=true">
+                      <q-item-section>
+                        <q-item-label>Spectrum plot (ID)</q-item-label>
                       </q-item-section>
                     </q-item>
                   </q-list>
@@ -688,7 +701,7 @@
             <div id="image-container-normal" class="row st-col col-12">
               <div class="col-10 q-pa-none q-ma-none">
                 <plotly id="plotImg" :data="plotdataImg" :layout="plotlayoutImg" class="q-pa-none q-ma-none sync_data"
-                  @click="data_click"></plotly>
+                  v-on:click="data_click"></plotly>
               </div>
               <div class="col-2 q-pa-none q-ma-none">
                 <q-img id="colorbar-normal" class="q-ma-none q-pa-none" :src="colorbar"></q-img>
@@ -711,7 +724,7 @@
             <div id="image-container-triq" class="row st-col col-12">
               <div class="col-10 q-pa-none q-ma-none ">
                 <plotly id="plotImgT" :data="plotdataImgT" :layout="plotlayoutImgT"
-                  class="q-pa-none q-ma-none sync_data" @click="data_click"></plotly>
+                  class="q-pa-none q-ma-none sync_data" v-on:click="data_click"></plotly>
               </div>
               <div class="col-2 q-pa-none q-ma-none ">
                 <q-img id="colorbar-triq" class="q-ma-none q-pa-none" :src="colorbarT"></q-img>
@@ -745,6 +758,11 @@
                   <q-item clickable v-close-popup v-on:click="createXYPlot=true">
                     <q-item-section>
                       <q-item-label>Spectrum plot (X,Y)</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup v-on:click="createNSpectrumPlot=true">
+                    <q-item-section>
+                      <q-item-label>Spectrum plot (ID)</q-item-label>
                     </q-item-section>
                   </q-item>
                 </q-list>
