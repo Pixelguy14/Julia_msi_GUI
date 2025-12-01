@@ -32,25 +32,48 @@
   <div class="row items-center">
     <q-input standout="custom-standout" class="q-ma-sm cursor-pointer col" v-model="full_route" readonly
       :label="batch_file_count > 0 ? batch_file_count + ' file(s) in batch' : 'Select an imzMl / mzML file'"
-      v-on:click="btnSearch=true">
+      v-on:click="!is_processing && (btnSearch=true)" :disable="is_processing">
       <template v-slot:append>
-        <q-icon name="search" v-on:click="btnSearch=true" class="cursor-pointer" />
+        <q-icon name="search" v-on:click="!is_processing && (btnSearch=true)" class="cursor-pointer" />
       </template>
     </q-input>
-    <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add"></q-btn>
-    <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" :disable="batch_file_count === 0"
+    <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add" :disable="is_processing"></q-btn>
+    <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" :disable="is_processing || batch_file_count === 0"
       label="Clear"></q-btn>
   </div>
 
   <!-- Mask Configuration -->
   <div class="row items-center q-mb-md">
-    <q-toggle v-model="maskEnabled" label="Apply Mask During Preprocessing" color="green" class="q-mr-md" />
+    <q-toggle v-model="maskEnabled" label="Apply Mask During Preprocessing" color="green" class="q-mr-md" :disable="is_processing" />
   </div>
+
+  <!-- Subset Processing -->
+  <q-card class="q-mb-md" flat bordered>
+    <q-card-section>
+      <div class="row items-center no-wrap">
+        <div class="col">
+          <div class="text-subtitle2">Quick Test (Subset Processing)</div>
+          <div class="text-caption">Process only the first N spectra to quickly test parameters.</div>
+        </div>
+        <div class="col-auto">
+          <q-toggle v-model="enable_subset_processing" color="primary" :disable="is_processing" />
+        </div>
+      </div>
+      <div v-if="enable_subset_processing" class="q-mt-sm">
+        <q-input standout="custom-standout" type="number" v-model.number="spectra_subset_size" label="Number of Spectra to Process" :min="1" :readonly="is_processing">
+          <template v-slot:prepend>
+            <q-icon name="functions" />
+          </template>
+        </q-input>
+      </div>
+    </q-card-section>
+  </q-card>
+  <p>{{msg}}</p>
 
   <!-- Spectrum Selection for Visualization -->
   <div class="row items-center q-mb-md">
     <div class="text-subtitle2 q-mr-md">Preview Spectrum:</div>
-    <q-btn-dropdown class="q-ma-sm" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+    <q-btn-dropdown class="q-ma-sm" :loading="is_processing" :disable="is_processing"
       label="Generate Spectra" icon="play_arrow">
       <q-list>
         <q-item clickable v-close-popup v-on:click="createMeanPlot=true">
@@ -72,73 +95,78 @@
     <div class="row col-6">
       <div class="st-col col-3 col-sm-3 q-ma-sm">
         <q-input standout="custom-standout" step="1" v-model="idSpectrum" label="Spectrum ID" type="number"
-                  hint="Not for Mean/Sum plots."></q-input>
+                  hint="Not for Mean/Sum plots." :readonly="is_processing"></q-input>
       </div>
       <div class="st-col col-3 col-sm-3 q-ma-sm">
         <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord" type="number" :rules="[
-                  val => !btnSpectraDisable ? ( val >= 0 || 'Needs to be bigger than 0') : true
-                  ]"></q-input>
+                  val => !SpectraEnabled ? ( val >= 0 || 'Needs to be bigger than 0') : true
+                  ]" :readonly="is_processing"></q-input>
       </div>
       <div class="st-col col-3 col-sm-3 q-ma-sm">
         <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord" type="number" :rules="[
-                  val => !btnSpectraDisable ? ( val >= 0 || 'Needs to be bigger than 0') : true
-                  ]"></q-input>
+                  val => !SpectraEnabled ? ( val >= 0 || 'Needs to be bigger than 0') : true
+                  ]" :readonly="is_processing"></q-input>
       </div>
     </div>
   </div>
 
-  <!-- Internal Standards (Fixed First Item) -->
-  <q-card class="q-mb-md">
-    <q-card-section>
-      <div class="text-h6">Internal Standards</div>
-      <div class="text-caption">Reference peaks for calibration, alignment and precise suggestion calculations</div>
-    </q-card-section>
-    <q-card-section>
-      <q-toggle v-model="enable_standards" v-on:click="enable_standards" label="Use Internal Standards" color="primary" class="q-mb-md" />
-      <!-- Keep your existing reference_peaks_list implementation -->
-      <q-list bordered separator class="q-mt-md">
-        <q-item v-for="(peak, index) in reference_peaks_list" :key="index">
-          <q-item-section avatar>
-            <q-btn flat round icon="delete" color="negative" v-on:click="action_index = index; remove_peak_trigger = true"></q-btn>
-          </q-item-section>
-          <q-item-section>
-            <div class="row q-col-gutter-sm">
-              <div class="col-6">
-                <q-input standout="custom-standout" label="m/z" type="number" step="0.0001"
-                  v-model="peak.mz" :rules="[val => !!val || 'Required', val => val > 0 || 'Must be positive']"></q-input>
-              </div>
-              <div class="col-6">
-                <q-input standout="custom-standout" label="Label (optional)" v-model="peak.label"></q-input>
-              </div>
-            </div>
-          </q-item-section>
-        </q-item>
-        <q-item>
-          <q-item-section>
-            <q-btn class="q-ma-sm btn-style" icon="add" label="Add Reference Peak" v-on:click="addReferencePeak=true"></q-btn>
-          </q-item-section>
-        </q-item>
-                </q-list>
-                <div class="row justify-end q-mt-sm">
-                  <q-btn class="q-ma-sm" icon="functions" v-on:click="recalculate_suggestions_btn=true" label="Recalculate Suggestions" outline hint="Re-run automatic parameter suggestion using the current list of internal standards."/>
+  <!-- Internal Standards (Collapsible) -->
+  <q-expansion-item
+    icon="science"
+    label="Internal Standards"
+    caption="Manage reference peaks for calibration"
+    class="q-mb-md"
+  >
+    <q-card>
+      <q-card-section>
+        <q-toggle v-model="enable_standards" v-on:click="enable_standards" label="Use Internal Standards" color="primary" class="q-mb-md" :disable="is_processing" />
+        <!-- Keep your existing reference_peaks_list implementation -->
+        <q-list bordered separator class="q-mt-md">
+          <q-item v-for="(peak, index) in reference_peaks_list" :key="index">
+            <q-item-section avatar>
+              <q-btn flat round icon="delete" color="negative" v-on:click="action_index = index; remove_peak_trigger = true" :disable="is_processing"></q-btn>
+            </q-item-section>
+            <q-item-section>
+              <div class="row q-col-gutter-sm">
+                <div class="col-6">
+                  <q-input standout="custom-standout" label="m/z" type="number" step="0.0001"
+                    v-model="peak.mz" :rules="[val => !!val || 'Required', val => val > 0 || 'Must be positive']" :readonly="is_processing"></q-input>
                 </div>
-              </q-card-section>
-            </q-card>
+                <div class="col-6">
+                  <q-input standout="custom-standout" label="Label (optional)" v-model="peak.label" :readonly="is_processing"></q-input>
+                </div>
+              </div>
+            </q-item-section>
+          </q-item>
+          <q-item>
+            <q-item-section>
+              <q-btn class="q-ma-sm btn-style" icon="add" label="Add Reference Peak" v-on:click="addReferencePeak=true" :disable="is_processing"></q-btn>
+            </q-item-section>
+          </q-item>
+                  </q-list>
+                  <div class="row justify-end q-mt-sm">
+                    <q-btn class="q-ma-sm" dense icon="get_app" v-on:click="export_standards_btn=true" label="Export" outline :disable="is_processing" hint="Export standards list to a JSON file." />
+                    <q-btn class="q-ma-sm" dense icon="upload_file" v-on:click="import_standards_btn=true" label="Import" outline :disable="is_processing" hint="Import standards list from a JSON file." />
+                    <q-btn class="q-ma-sm" icon="functions" v-on:click="recalculate_suggestions_btn=true" label="Recalculate Suggestions" outline hint="Re-run automatic parameter suggestion using the current list of internal standards." :disable="is_processing"/>
+                  </div>
+                </q-card-section>
+    </q-card>
+  </q-expansion-item>
   <!-- Reorderable Preprocessing Steps -->
   <div class="text-h6 q-mb-md">Preprocessing Pipeline</div>
-  <q-list bordered>
+  <q-list bordered :disable="is_processing">
     <q-expansion-item v-for="(step, index) in pipeline_step_order" :key="step.name" 
                       :label="step.label" group="preprocessing-steps"
-                      :class="step.enabled ? '' : 'text-grey'">
+                      :class="step.enabled ? '' : 'text-grey'" :disable="is_processing">
       
       <!-- Header with controls -->
       <template v-slot:header>
         <q-item-section avatar>
           <div class="row no-wrap">
             <q-btn flat round icon="arrow_upward" size="sm" 
-                   :disable="index === 0" v-on:click.stop="action_index = index; move_step_up_trigger = true"></q-btn>
+                   :disable="is_processing || index === 0" v-on:click.stop="action_index = index; move_step_up_trigger = true"></q-btn>
             <q-btn flat round icon="arrow_downward" size="sm" 
-                   :disable="index === pipeline_step_order.length - 1" v-on:click.stop="action_index = index; move_step_down_trigger = true"></q-btn>
+                   :disable="is_processing || index === pipeline_step_order.length - 1" v-on:click.stop="action_index = index; move_step_down_trigger = true"></q-btn>
           </div>
         </q-item-section>
         
@@ -147,31 +175,31 @@
         </q-item-section>
         
         <q-item-section side>
-          <q-toggle v-model="step.enabled" color="green" v-on:click.stop="action_index = index; toggle_step_trigger = true" />
+          <q-toggle v-model="step.enabled" color="green" v-on:click.stop="action_index = index; toggle_step_trigger = true" :disable="is_processing" />
         </q-item-section>
       </template>
 
       <!-- Step-specific parameters -->
       <q-card v-if="step.name === 'stabilization'">
         <q-card-section>
-          <q-radio v-model="stabilization_method" val="sqrt" label="SQRT" />
-          <q-radio v-model="stabilization_method" val="log" label="LOG" />
-          <q-radio v-model="stabilization_method" val="log2" label="LOG 2" />
-          <q-radio v-model="stabilization_method" val="log10" label="LOG 10" />
-          <q-radio v-model="stabilization_method" val="log1p" label="LOG 1P" />
+          <q-radio v-model="stabilization_method" val="sqrt" label="SQRT" :disable="is_processing" />
+          <q-radio v-model="stabilization_method" val="log" label="LOG" :disable="is_processing" />
+          <q-radio v-model="stabilization_method" val="log2" label="LOG 2" :disable="is_processing" />
+          <q-radio v-model="stabilization_method" val="log10" label="LOG 10" :disable="is_processing" />
+          <q-radio v-model="stabilization_method" val="log1p" label="LOG 1P" :disable="is_processing" />
         </q-card-section>
       </q-card>
 
       <q-card v-if="step.name === 'smoothing'">
         <q-card-section>
-          <q-radio v-model="smoothing_method" val="sg" label="Savitzky-Golay" />
-          <q-radio v-model="smoothing_method" val="ma" label="Moving Average" />
+          <q-radio v-model="smoothing_method" val="sg" label="Savitzky-Golay" :disable="is_processing" />
+          <q-radio v-model="smoothing_method" val="ma" label="Moving Average" :disable="is_processing" />
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
-              <q-input standout="custom-standout" label="Window Size" v-model="smoothing_window" type="number" />
+              <q-input standout="custom-standout" label="Window Size" v-model="smoothing_window" type="number" :readonly="is_processing" />
             </div>
             <div class="col-6">
-              <q-input standout="custom-standout" label="Order (Savitzky-Golay)" v-model="smoothing_order" type="number" />
+              <q-input standout="custom-standout" label="Order (Savitzky-Golay)" v-model="smoothing_order" type="number" :readonly="is_processing" />
             </div>
           </div>
         </q-card-section>
@@ -183,9 +211,9 @@
           <div class="text-caption">The algorithm to use for baseline correction.</div>
         </q-card-section>
         <q-card-section>
-          <q-radio v-model="baseline_method" val="snip" label="SNIP" hint="Sensitive Nonlinear Iterative Peak clipping." /><br>
-          <q-radio v-model="baseline_method" val="convex_hull" label="CONVEX HULL" hint="Finds the lower convex hull of the spectrum." /><br>
-          <q-radio v-model="baseline_method" val="median" label="MEDIAN" hint="Moving median filter." /><br>
+          <q-radio v-model="baseline_method" val="snip" label="SNIP" hint="Sensitive Nonlinear Iterative Peak clipping." :disable="is_processing" /><br>
+          <q-radio v-model="baseline_method" val="convex_hull" label="CONVEX HULL" hint="Finds the lower convex hull of the spectrum." :disable="is_processing" /><br>
+          <q-radio v-model="baseline_method" val="median" label="MEDIAN" hint="Moving median filter." :disable="is_processing" /><br>
         </q-card-section>
         <q-card-section>
           <div class="text-h6">Parameters</div>
@@ -194,11 +222,11 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Iterations (for SNIP)" type="number"
-                :placeholder="suggested_baseline_iterations" v-model="baseline_iterations" hint="The number of iterations for the SNIP algorithm. A higher number results in a more aggressive baseline."></q-input>
+                :placeholder="suggested_baseline_iterations" v-model="baseline_iterations" hint="The number of iterations for the SNIP algorithm. A higher number results in a more aggressive baseline." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Window (for Median)" type="number"
-                :placeholder="suggested_baseline_window" v-model="baseline_window" hint="The window size for the median method, determining the local region for median calculation."></q-input>
+                :placeholder="suggested_baseline_window" v-model="baseline_window" hint="The window size for the median method, determining the local region for median calculation." :readonly="is_processing"></q-input>
             </div>
           </div>
         </q-card-section>
@@ -210,10 +238,10 @@
           <div class="text-caption">The normalization method to apply.</div>
         </q-card-section>
         <q-card-section>
-          <q-radio v-model="normalization_method" val="tic" label="TIC" hint="Total Ion Current normalization (divides by the sum of intensities)." /><br>
-          <q-radio v-model="normalization_method" val="median" label="MEDIAN" hint="Divides by the median intensity." /><br>
-          <q-radio v-model="normalization_method" val="rms" label="RMS" hint="Root Mean Square normalization." /><br>
-          <q-radio v-model="normalization_method" val="none" label="NONE" hint="No normalization is applied." /><br>
+          <q-radio v-model="normalization_method" val="tic" label="TIC" hint="Total Ion Current normalization (divides by the sum of intensities)." :disable="is_processing" /><br>
+          <q-radio v-model="normalization_method" val="median" label="MEDIAN" hint="Divides by the median intensity." :disable="is_processing" /><br>
+          <q-radio v-model="normalization_method" val="rms" label="RMS" hint="Root Mean Square normalization." :disable="is_processing" /><br>
+          <q-radio v-model="normalization_method" val="none" label="NONE" hint="No normalization is applied." :disable="is_processing" /><br>
         </q-card-section>
       </q-card>
 
@@ -223,9 +251,9 @@
           <div class="text-caption">The alignment algorithm.</div>
         </q-card-section>
         <q-card-section>
-          <q-radio v-model="alignment_method" val="lowess" label="LOWESS" hint="Locally Weighted Scatterplot Smoothing regression." /><br>
-          <q-radio v-model="alignment_method" val="linear" label="LINEAR" hint="Linear regression." /><br>
-          <q-radio v-model="alignment_method" val="ransac" label="RANSAC" hint="Random Sample Consensus algorithm for robust fitting." /><br>
+          <q-radio v-model="alignment_method" val="lowess" label="LOWESS" hint="Locally Weighted Scatterplot Smoothing regression." :disable="is_processing" /><br>
+          <q-radio v-model="alignment_method" val="linear" label="LINEAR" hint="Linear regression." :disable="is_processing" /><br>
+          <q-radio v-model="alignment_method" val="ransac" label="RANSAC" hint="Random Sample Consensus algorithm for robust fitting." :disable="is_processing" /><br>
         </q-card-section>
         <q-card-section>
           <div class="text-h6">Parameters</div>
@@ -234,23 +262,23 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Span (for LOWESS)" type="number" step="0.01"
-                :placeholder="suggested_alignment_span" v-model="alignment_span" :rules="[val => val >= 0.0 && val <= 1.0 || 'Needs to be between 0 and 1']" hint="The span parameter for LOWESS regression, controlling smoothness (0.0 to 1.0)."></q-input>
+                :placeholder="suggested_alignment_span" v-model="alignment_span" :rules="[val => val >= 0.0 && val <= 1.0 || 'Needs to be between 0 and 1']" hint="The span parameter for LOWESS regression, controlling smoothness (0.0 to 1.0)." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Tolerance" type="number" step="0.001"
-                :placeholder="suggested_alignment_tolerance" v-model="alignment_tolerance" hint="The tolerance for matching peaks between the target and reference spectrum."></q-input>
+                :placeholder="suggested_alignment_tolerance" v-model="alignment_tolerance" hint="The tolerance for matching peaks between the target and reference spectrum." :readonly="is_processing"></q-input>
             </div>
           </div>
           <q-select standout="custom-standout" label="Tolerance Unit" v-model="alignment_tolerance_unit"
-            :options="['mz', 'ppm']" class="q-mt-md" hint="The unit for tolerance, either 'mz' (absolute) or 'ppm' (relative)."></q-select>
+            :options="['mz', 'ppm']" class="q-mt-md" hint="The unit for tolerance, either 'mz' (absolute) or 'ppm' (relative)." :disable="is_processing"></q-select>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Max Shift PPM" type="number"
-                :placeholder="suggested_alignment_max_shift_ppm" v-model="alignment_max_shift_ppm" hint="The maximum allowed m/z shift in ppm to prevent spurious peak matches."></q-input>
+                :placeholder="suggested_alignment_max_shift_ppm" v-model="alignment_max_shift_ppm" hint="The maximum allowed m/z shift in ppm to prevent spurious peak matches." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Matched Peaks" type="number"
-                :placeholder="suggested_alignment_min_matched_peaks" v-model="alignment_min_matched_peaks" hint="The minimum number of matching peaks required to perform the alignment."></q-input>
+                :placeholder="suggested_alignment_min_matched_peaks" v-model="alignment_min_matched_peaks" hint="The minimum number of matching peaks required to perform the alignment." :readonly="is_processing"></q-input>
             </div>
           </div>
         </q-card-section>
@@ -265,12 +293,12 @@
             <div class="col-6">
               <q-input standout="custom-standout" label="Fit Order" type="number"
                 :placeholder="suggested_calibration_fit_order" v-model="calibration_fit_order"
-                hint="Polynomial order for the calibration curve (e.g., 1 or 2)."></q-input>
+                hint="Polynomial order for the calibration curve (e.g., 1 or 2)." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="PPM Tolerance" type="number"
                 :placeholder="suggested_calibration_ppm_tolerance" v-model="calibration_ppm_tolerance"
-                hint="PPM tolerance for matching reference peaks to internal standards."></q-input>
+                hint="PPM tolerance for matching reference peaks to internal standards." :readonly="is_processing"></q-input>
             </div>
           </div>
         </q-card-section>
@@ -282,9 +310,9 @@
           <div class="text-caption">The peak detection algorithm.</div>
         </q-card-section>
         <q-card-section>
-          <q-radio v-model="peak_picking_method" val="profile" label="PROFILE" hint="For profile-mode data, using local maxima and quality filters." /><br>
-          <q-radio v-model="peak_picking_method" val="wavelet" label="WAVELET" hint="Continuous Wavelet Transform (CWT) based peak detection." /><br>
-          <q-radio v-model="peak_picking_method" val="centroid" label="CENTROID" hint="For centroid-mode data, essentially a filtering step." /><br>
+          <q-radio v-model="peak_picking_method" val="profile" label="PROFILE" hint="For profile-mode data, using local maxima and quality filters." :disable="is_processing" /><br>
+          <q-radio v-model="peak_picking_method" val="wavelet" label="WAVELET" hint="Continuous Wavelet Transform (CWT) based peak detection." :disable="is_processing" /><br>
+          <q-radio v-model="peak_picking_method" val="centroid" label="CENTROID" hint="For centroid-mode data, essentially a filtering step." :disable="is_processing" /><br>
         </q-card-section>
         <q-card-section>
           <div class="text-h6">Parameters</div>
@@ -293,35 +321,35 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Signal to Noise Threshold" type="number" step="0.1"
-                :placeholder="suggested_peak_picking_snr_threshold" v-model="peak_picking_snr_threshold" hint="Signal-to-Noise Ratio threshold. Peaks with SNR below this value are discarded."></q-input>
+                :placeholder="suggested_peak_picking_snr_threshold" v-model="peak_picking_snr_threshold" hint="Signal-to-Noise Ratio threshold. Peaks with SNR below this value are discarded." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Half Window Size" type="number"
-                :placeholder="suggested_peak_picking_half_window" v-model="peak_picking_half_window" hint="Number of data points to the left and right of a potential peak to consider for local maximum detection (for Profile method)."></q-input>
+                :placeholder="suggested_peak_picking_half_window" v-model="peak_picking_half_window" hint="Number of data points to the left and right of a potential peak to consider for local maximum detection (for Profile method)." :readonly="is_processing"></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Peak Prominence" type="number" step="0.01"
-                :placeholder="suggested_peak_picking_min_peak_prominence" v-model="peak_picking_min_peak_prominence" hint="Minimum required prominence of a peak, expressed as a fraction of its height."></q-input>
+                :placeholder="suggested_peak_picking_min_peak_prominence" v-model="peak_picking_min_peak_prominence" hint="Minimum required prominence of a peak, expressed as a fraction of its height." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Merge Peaks Tolerance (m/z)" type="number" step="0.001"
-                :placeholder="suggested_peak_picking_merge_peaks_tolerance" v-model="peak_picking_merge_peaks_tolerance" hint="The m/z tolerance within which to merge adjacent peaks, keeping the more intense one."></q-input>
+                :placeholder="suggested_peak_picking_merge_peaks_tolerance" v-model="peak_picking_merge_peaks_tolerance" hint="The m/z tolerance within which to merge adjacent peaks, keeping the more intense one." :readonly="is_processing"></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Peak Width (PPM)" type="number"
-                :placeholder="suggested_peak_picking_min_peak_width_ppm" v-model="peak_picking_min_peak_width_ppm" hint="Minimum acceptable peak width (FWHM) in ppm."></q-input>
+                :placeholder="suggested_peak_picking_min_peak_width_ppm" v-model="peak_picking_min_peak_width_ppm" hint="Minimum acceptable peak width (FWHM) in ppm." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Max Peak Width (PPM)" type="number"
-                :placeholder="suggested_peak_picking_max_peak_width_ppm" v-model="peak_picking_max_peak_width_ppm" hint="Maximum acceptable peak width (FWHM) in ppm."></q-input>
+                :placeholder="suggested_peak_picking_max_peak_width_ppm" v-model="peak_picking_max_peak_width_ppm" hint="Maximum acceptable peak width (FWHM) in ppm." :readonly="is_processing"></q-input>
             </div>
           </div>
           <q-input standout="custom-standout" label="Min Peak Shape R2" type="number" step="0.01" class="q-mt-md"
-            :placeholder="suggested_peak_picking_min_peak_shape_r2" v-model="peak_picking_min_peak_shape_r2" hint="Minimum R-squared value from a Gaussian fit to the peak, used as a quality measure for peak shape."></q-input>
+            :placeholder="suggested_peak_picking_min_peak_shape_r2" v-model="peak_picking_min_peak_shape_r2" hint="Minimum R-squared value from a Gaussian fit to the peak, used as a quality measure for peak shape." :readonly="is_processing"></q-input>
         </q-card-section>
       </q-card>
 
@@ -333,33 +361,33 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Min SNR" type="number" step="0.1"
-                :placeholder="suggested_peak_selection_min_snr" v-model="peak_selection_min_snr" hint="Minimum Signal-to-Noise Ratio for a peak to be kept."></q-input>
+                :placeholder="suggested_peak_selection_min_snr" v-model="peak_selection_min_snr" hint="Minimum Signal-to-Noise Ratio for a peak to be kept." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Min FWHM (PPM)" type="number"
-                :placeholder="suggested_peak_selection_min_fwhm_ppm" v-model="peak_selection_min_fwhm_ppm" hint="Minimum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept."></q-input>
+                :placeholder="suggested_peak_selection_min_fwhm_ppm" v-model="peak_selection_min_fwhm_ppm" hint="Minimum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept." :readonly="is_processing"></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Max FWHM (PPM)" type="number"
-                :placeholder="suggested_peak_selection_max_fwhm_ppm" v-model="peak_selection_max_fwhm_ppm" hint="Maximum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept."></q-input>
+                :placeholder="suggested_peak_selection_max_fwhm_ppm" v-model="peak_selection_max_fwhm_ppm" hint="Maximum Full Width at Half Maximum (FWHM) in ppm for a peak to be kept." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Peak Shape R2" type="number" step="0.01"
-                :placeholder="suggested_peak_selection_min_shape_r2" v-model="peak_selection_min_shape_r2" hint="Minimum R-squared value from a Gaussian fit, filtering for good peak shape."></q-input>
+                :placeholder="suggested_peak_selection_min_shape_r2" v-model="peak_selection_min_shape_r2" hint="Minimum R-squared value from a Gaussian fit, filtering for good peak shape." :readonly="is_processing"></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Frequency Threshold" type="number" step="0.01"
                 :placeholder="suggested_peak_selection_frequency_threshold" v-model="peak_selection_frequency_threshold"
-                hint="The minimum fraction of spectra a peak must be present in to be kept (0.0 to 1.0)."></q-input>
+                hint="The minimum fraction of spectra a peak must be present in to be kept (0.0 to 1.0)." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Correlation Threshold" type="number" step="0.01"
                 :placeholder="suggested_peak_selection_correlation_threshold" v-model="peak_selection_correlation_threshold"
-                hint="Minimum correlation with neighboring peaks (not yet implemented)."></q-input>
+                hint="Minimum correlation with neighboring peaks (not yet implemented)." :readonly="is_processing"></q-input>
             </div>
           </div>
         </q-card-section>
@@ -371,8 +399,8 @@
           <div class="text-caption">The binning strategy.</div>
         </q-card-section>
         <q-card-section>
-          <q-radio v-model="binning_method" val="adaptive" label="ADAPTIVE" hint="Creates bins based on the density of detected peaks." /><br>
-          <q-radio v-model="binning_method" val="uniform" label="UNIFORM" hint="Creates a fixed number of equally spaced bins over the m/z range." /><br>
+          <q-radio v-model="binning_method" val="adaptive" label="ADAPTIVE" hint="Creates bins based on the density of detected peaks." :disable="is_processing" /><br>
+          <q-radio v-model="binning_method" val="uniform" label="UNIFORM" hint="Creates a fixed number of equally spaced bins over the m/z range." :disable="is_processing" /><br>
         </q-card-section>
         <q-card-section>
           <div class="text-h6">Parameters</div>
@@ -381,35 +409,35 @@
           <div class="row q-col-gutter-sm">
             <div class="col-6">
               <q-input standout="custom-standout" label="Tolerance (for Adaptive)" type="number" step="0.001"
-                :placeholder="suggested_binning_tolerance" v-model="binning_tolerance" hint="Tolerance for grouping peaks into a bin in adaptive mode."></q-input>
+                :placeholder="suggested_binning_tolerance" v-model="binning_tolerance" hint="Tolerance for grouping peaks into a bin in adaptive mode." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-select standout="custom-standout" label="Tolerance Unit" v-model="binning_tolerance_unit"
-                :options="['mz', 'ppm']" hint="The unit for tolerance, either 'mz' (absolute) or 'ppm' (relative)."></q-select>
+                :options="['mz', 'ppm']" hint="The unit for tolerance, either 'mz' (absolute) or 'ppm' (relative)." :disable="is_processing"></q-select>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Frequency Threshold" type="number" step="0.01"
-                :placeholder="suggested_binning_frequency_threshold" v-model="binning_frequency_threshold" hint="The minimum fraction of spectra a bin must contain a peak in to be kept (0.0 to 1.0)."></q-input>
+                :placeholder="suggested_binning_frequency_threshold" v-model="binning_frequency_threshold" hint="The minimum fraction of spectra a bin must contain a peak in to be kept (0.0 to 1.0)." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Min Peaks Per Bin" type="number"
-                :placeholder="suggested_binning_min_peak_per_bin" v-model="binning_min_peak_per_bin" hint="The minimum number of individual peaks required to form a bin in adaptive mode."></q-input>
+                :placeholder="suggested_binning_min_peak_per_bin" v-model="binning_min_peak_per_bin" hint="The minimum number of individual peaks required to form a bin in adaptive mode." :readonly="is_processing"></q-input>
             </div>
           </div>
           <div class="row q-col-gutter-sm q-mt-md">
             <div class="col-6">
               <q-input standout="custom-standout" label="Max Bin Width (PPM)" type="number"
-                :placeholder="suggested_binning_max_bin_width_ppm" v-model="binning_max_bin_width_ppm" hint="Maximum width of a bin in ppm for adaptive mode."></q-input>
+                :placeholder="suggested_binning_max_bin_width_ppm" v-model="binning_max_bin_width_ppm" hint="Maximum width of a bin in ppm for adaptive mode." :readonly="is_processing"></q-input>
             </div>
             <div class="col-6">
               <q-input standout="custom-standout" label="Number of Uniform Bins" type="number"
-                :placeholder="suggested_binning_num_uniform_bins" v-model="binning_num_uniform_bins" hint="The number of bins to create for the uniform method."></q-input>
+                :placeholder="suggested_binning_num_uniform_bins" v-model="binning_num_uniform_bins" hint="The number of bins to create for the uniform method." :readonly="is_processing"></q-input>
             </div>
           </div>
           <q-toggle v-model="binning_intensity_weighted_centers" v-on:click="binning_intensity_weighted_centers" label="Intensity Weighted Centers"
-            class="q-mt-md" hint="If enabled, calculates bin centers as an intensity-weighted average of the peaks within it."></q-toggle>
+            class="q-mt-md" hint="If enabled, calculates bin centers as an intensity-weighted average of the peaks within it." :disable="is_processing"></q-toggle>
         </q-card-section>
       </q-card>
       
@@ -418,22 +446,10 @@
 
   <!-- Pipeline Controls -->
   <div class="row justify-end items-center q-mt-md">
-    <q-btn class="q-ma-sm" icon="save" v-on:click="export_params_btn=true" label="Export Params" outline />
-    <q-btn class="q-ma-sm" icon="upload_file" v-on:click="import_params_btn=true" label="Import Params" outline />
-    <q-btn :loading="progressPrep" class="q-ma-sm btn-style" icon="play_arrow" 
-           v-on:click="run_full_pipeline=true" padding="lg" label="Run Pipeline" />
-  </div>
-</q-tab-panel>
-      
-    </q-expansion-item>
-  </q-list>
-
-  <!-- Pipeline Controls -->
-  <div class="row justify-end items-center q-mt-md">
-    <q-btn class="q-ma-sm" icon="save" v-on:click="export_params_btn=true" label="Export Params" outline />
-    <q-btn class="q-ma-sm" icon="upload_file" v-on:click="import_params_btn=true" label="Import Params" outline />
-    <q-btn :loading="progressPrep" class="q-ma-sm btn-style" icon="play_arrow" 
-           v-on:click="run_full_pipeline=true" padding="lg" label="Run Pipeline" />
+    <q-btn class="q-ma-sm" icon="get_app" v-on:click="export_params_btn=true" label="Export Params" outline :disable="is_processing" />
+    <q-btn class="q-ma-sm" icon="upload_file" v-on:click="import_params_btn=true" label="Import Params" outline :disable="is_processing" />
+    <q-btn :loading="is_processing" class="q-ma-sm btn-style" icon="play_arrow" 
+           v-on:click="run_full_pipeline=true" padding="lg" label="Run Pipeline" :disable="is_processing" />
   </div>
 </q-tab-panel>
         <q-tab-panel name="generator">
@@ -446,13 +462,13 @@
           <div class="row items-center">
             <q-input standout="custom-standout" class="q-ma-sm cursor-pointer col" v-model="full_route" readonly
               :label="batch_file_count > 0 ? batch_file_count + ' file(s) in batch' : 'Select an imzMl / mzML file'"
-              v-on:click="btnSearch=true">
+              v-on:click="btnSearch=true" :disable="is_processing">
               <template v-slot:append>
-                <q-icon name="search" v-on:click="btnSearch=true" class="cursor-pointer" />
+                <q-icon name="search" v-on:click="btnSearch=true" class="cursor-pointer" :disable="is_processing" />
               </template>
             </q-input>
-            <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add"></q-btn>
-            <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" :disable="batch_file_count === 0"
+            <q-btn class="q-ma-sm" icon="add" v-on:click="btnAddBatch=true" label="Add" :disable="is_processing"></q-btn>
+            <q-btn class="q-ma-sm" icon="clear" v-on:click="clear_batch_btn=true" :disable="is_processing || batch_file_count === 0"
               label="Clear"></q-btn>
           </div>
           <q-list bordered separator v-if="selected_files.length > 0">
@@ -461,7 +477,7 @@
                 {{ file }}
               </q-item-section>
               <q-item-section side>
-                <q-btn flat round icon="delete" size="sm" v-on:click="selected_files.splice(index, 1)"></q-btn>
+                <q-btn flat round icon="delete" size="sm" v-on:click="selected_files.splice(index, 1)" :disable="is_processing"></q-btn>
               </q-item-section>
             </q-item>
           </q-list>
@@ -473,18 +489,18 @@
                 label="Mass-to-charge ratio(s) of interest" type="text" :rules="[ 
                     val => !!val || '* Required',
                     val => val.split(',').every(m => !isNaN(parseFloat(m.trim())) && parseFloat(m.trim()) > 0) || 'Need comma-separated positive numbers'
-                  ]">
+                  ]" :readonly="is_processing">
               </q-input>
             </div>
             <div class="st-col col-4 col-sm q-ma-sm">
               <q-input standout="custom-standout" id="textTol" step="0.005" v-model="Tol"
                 label="Mass-to-charge ratio tolerance" type="number"
-                :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']"></q-input>
+                :rules="[val => !!val || '* Required', val => val >= 0.0 &amp;&amp; val <= 1.0  || 'Needs to be in range between 0 and 1']" :readonly="is_processing"></q-input>
             </div>
             <div class="st-col col-4 col-sm q-ma-sm">
               <q-input standout="custom-standout" id="textcolorLevel" step="1" v-model="colorLevel" label="Color levels"
                 type="number"
-                :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']"></q-input>
+                :rules="[ val => !!val || '* Required', val => val >= 2 &amp;&amp; val <= 256 || 'Needs to be in range between 2 and 256']" :readonly="is_processing"></q-input>
             </div>
           </div>
           <div class="row">
@@ -492,25 +508,25 @@
             <div class="col-6">
               <div class="st-col col-6 col-sm q-ma-sm">
                 <q-toggle id="btnEnableMFilter" v-on:click="MFilterEnabled" v-model="MFilterEnabled" color="green"
-                  label="Add Median Filter"></q-toggle>
+                  label="Add Median Filter" :disable="is_processing"></q-toggle>
                 <q-toggle id="btnEnableTriq" v-on:click="triqEnabled" v-model="triqEnabled" color="blue"
-                  label="Add Threshold Intensity Quantization (TrIQ)"></q-toggle>
+                  label="Add Threshold Intensity Quantization (TrIQ)" :disable="is_processing"></q-toggle>
                 <q-toggle id="btnEnableMask" v-on:click="maskEnabled" v-model="maskEnabled" color="black"
-                  label="Use Mask To Filter Data"></q-toggle>
+                  label="Use Mask To Filter Data" :disable="is_processing"></q-toggle>
               </div>
               <div class="row">
                 <div class="st-col col-4 col-sm-4 q-ma-sm">
                   <q-input standout="custom-standout" id="textTriqProb" step="0.01" v-model="triqProb"
                     label="TrIQ probability" type="number" :rules="[
                             val => triqEnabled ? ( '* Required', val >= 0.8 &amp;&amp; val <= 1 || 'Needs to be in range between 0.8 and 1') : true
-                            ]" :readonly="!triqEnabled" :disable="!triqEnabled"></q-input>
+                            ]" :readonly="is_processing || !triqEnabled" :disable="is_processing || !triqEnabled"></q-input>
                 </div>
               </div>
             </div>
             <!-- Spectra Plot Manipulation -->
             <div class="col-6">
               <div class="st-col col-6 col-sm">
-                <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+                <q-btn-dropdown class="q-ma-sm btn-style" :loading="is_processing" :disable="is_processing"
                   label="Generate Spectra" icon="play_arrow">
                   <template v-slot:loading>
                     <q-spinner-hourglass class="on-left" />
@@ -544,23 +560,23 @@
               <div class="row col-6">
                 <div class="st-col col-4 col-sm-4 q-ma-sm">
                   <q-input standout="custom-standout" step="1" v-model="idSpectrum" label="Spectrum ID" type="number"
-                            hint="Not for Mean/Sum plots."></q-input>
+                            hint="Not for Mean/Sum plots." :readonly="is_processing"></q-input>
                 </div>
                 <div class="st-col col-4 col-sm-4 q-ma-sm">
                   <q-input standout="custom-standout" step="1" v-model="xCoord" label="X coord" type="number" :rules="[
                             val => SpectraEnabled ? ( '* Required', val >= 0|| 'Needs to be bigger than 0') : true
-                            ]"></q-input>
+                            ]" :readonly="is_processing"></q-input>
                 </div>
                 <div class="st-col col-4 col-sm-4 q-ma-sm">
                   <q-input standout="custom-standout" step="1" v-model="yCoord" label="Y coord" type="number" :rules="[
                             val => SpectraEnabled ? ( '* Required', val <= 0|| 'Needs to be lower than 0') : true
-                            ]"></q-input>
+                            ]" :readonly="is_processing"></q-input>
                 </div>
               </div>
             </div>
           </div>
           <div class="row">
-            <q-btn :loading="progress" class="q-ma-sm btn-style" :disabled="btnStartDisable" icon="play_arrow"
+            <q-btn :loading="is_processing" class="q-ma-sm btn-style" :disable="is_processing" icon="play_arrow"
               v-on:click="mainProcess=true" padding="lg" label="Generate Slice">
               <template v-slot:loading>
                 <q-spinner-hourglass class="on-left" />
@@ -568,18 +584,18 @@
               </template>
             </q-btn>
             <q-btn icon="zoom_out_map" class="q-ma-sm on-right btn-style" v-on:click="compareBtn=true" padding="sm"
-              label="Compare"></q-btn>
-            <q-btn class="q-ma-sm btn-style" icon="edit" label="Mask Editor" href="/mask"></q-btn>
+              label="Compare" :disable="is_processing"></q-btn>
+            <q-btn class="q-ma-sm btn-style" icon="edit" label="Mask Editor" href="/mask" :disable="is_processing"></q-btn>
             <q-btn class="q-ma-sm btn-style" icon="dashboard" v-on:click="showMetadataBtn=true"
-              label="Show Metadata"></q-btn>
-            <div class="q-pa-md row items-center" v-show="progress">
+              label="Show Metadata" :disable="is_processing"></q-btn>
+            <div class="q-pa-md row items-center" v-show="is_processing">
               <q-spinner color="primary" size="2em" class="q-mr-sm"></q-spinner>
               <div class="text-caption">{{ progress_message }}</div>
             </div>
           </div>
           <p>{{msg}}</p>
           <div class="row st-col col-12">
-            <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressPlot" :disable="btnPlotDisable"
+            <q-btn-dropdown class="q-ma-sm btn-style" :loading="is_processing" :disable="is_processing"
               label="Generate Plots" icon="play_arrow">
               <template v-slot:loading>
                 <q-spinner-hourglass class="on-left" />
@@ -612,7 +628,7 @@
                 </q-item>
               </q-list>
             </q-btn-dropdown>
-            <q-btn-dropdown icon="search" class="q-ma-sm btn-style" :disable="btnOpticalDisable"
+            <q-btn-dropdown icon="search" class="q-ma-sm btn-style" :disable="is_processing"
               label="Load your optical image">
               <q-item clickable v-close-popup v-on:click="btnOptical=true">
                 <q-item-section>
@@ -626,7 +642,7 @@
               </q-item>
             </q-btn-dropdown>
             <div class="q-mx-sm">
-              <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
+              <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="is_processing" />
               <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
             </div>
           </div>
@@ -636,20 +652,20 @@
           <p>Select the .mzML file and the corresponding .txt synchronization file to convert them into an .imzML/.ibd
             pair.</p>
           <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="mzml_full_route" readonly
-            label="Select your .mzML file" v-on:click="btnSearchMzml=true">
+            label="Select your .mzML file" v-on:click="btnSearchMzml=true" :disable="is_processing">
             <template v-slot:append>
-              <q-icon name="search" v-on:click="btnSearchMzml=true" class="cursor-pointer" />
+              <q-icon name="search" v-on:click="btnSearchMzml=true" class="cursor-pointer" :disable="is_processing" />
             </template>
           </q-input>
 
           <q-input standout="custom-standout" class="q-ma-sm cursor-pointer" v-model="sync_full_route" readonly
-            label="Select your .txt sync file" v-on:click="btnSearchSync=true">
+            label="Select your .txt sync file" v-on:click="btnSearchSync=true" :disable="is_processing">
             <template v-slot:append>
-              <q-icon name="search" v-on:click="btnSearchSync=true" class="cursor-pointer" />
+              <q-icon name="search" v-on:click="btnSearchSync=true" class="cursor-pointer" :disable="is_processing" />
             </template>
           </q-input>
 
-          <q-btn :loading="progress_conversion" class="q-ma-sm btn-style" :disabled="btnConvertDisable"
+          <q-btn :loading="is_processing" class="q-ma-sm btn-style" :disable="is_processing || btnConvertDisable"
             icon="swap_horiz" v-on:click="convert_process=true" padding="lg" label="Convert File">
             <template v-slot:loading>
               <q-spinner-hourglass class="on-left" />
@@ -692,10 +708,10 @@
             <h6>Image visualizer</h6>
             <div class="row items-center">
               <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
-                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
               <q-space></q-space>
-              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinus=true"></q-btn>
-              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlus=true"></q-btn>
+              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinus=true" :disable="is_processing"></q-btn>
+              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlus=true" :disable="is_processing"></q-btn>
             </div>
             <!-- Image manager -->
             <div id="image-container-normal" class="row st-col col-12">
@@ -715,10 +731,10 @@
             <h6>TrIQ visualizer</h6>
             <div class="row items-center">
               <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
-                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
               <q-space></q-space>
-              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusT=true"></q-btn>
-              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusT=true"></q-btn>
+              <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusT=true" :disable="is_processing"></q-btn>
+              <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusT=true" :disable="is_processing"></q-btn>
             </div>
             <!-- Triq Image manager -->
             <div id="image-container-triq" class="row st-col col-12">
@@ -736,8 +752,8 @@
           <q-tab-panel name="tab2">
             <div class="row items-center">
               <q-select v-model="selected_folder_main" :options="available_folders" label="Select Dataset"
-                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
-              <q-btn-dropdown class="q-ma-sm btn-style" :loading="progressSpectraPlot" :disable="btnSpectraDisable"
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
+              <q-btn-dropdown class="q-ma-sm btn-style" :loading="is_processing" :disable="is_processing"
                 label="Generate Spectra" icon="play_arrow">
                 <template v-slot:loading>
                   <q-spinner-hourglass class="on-left" />
@@ -806,11 +822,11 @@
     <q-card-section class="row items-center">
       <div class="text-h6 q-ma-sm">Compare two different images or plots</div>
       <div class="q-mx-sm">
-        <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="btnOpticalDisable" />
+        <q-slider color="black" v-model="imgTrans" :min="0.0" :max="1" :step="0.1" :disable="is_processing" />
         <q-badge style="background-color: #009f90;"> Transparency: {{ imgTrans }}</q-badge>
       </div>
       <q-toggle id="btnOpticalOver" v-on:click="opticalOverTriq" v-model="opticalOverTriq" color="black"
-        label="Optical over TrIQ"></q-toggle>
+        label="Optical over TrIQ" :disable="is_processing"></q-toggle>
     </q-card-section>
 
     <q-card-section class="q-pt-none col-12">
@@ -819,7 +835,7 @@
           <div class="row items-center">
             <q-select v-model="selected_folder_compare_left" :options="image_available_folders"
               label="Select Left Dataset" class="q-ma-sm" style="min-width: 200px;"
-              v-on:focus="refetch_folders = true"></q-select>
+              v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
             <q-space></q-space>
             <st-tabs id="tabHeaderCompareLeft" :ids="CompTabIDsLeft" :labels="CompTabLabelsLeft"
               v-model="CompSelectedTabLeft"></st-tabs>
@@ -829,9 +845,9 @@
               <!-- Content for Tab 0 -->
               <!-- Btn image changer -->
               <div>
-                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusCompLeft=true"></q-btn>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusCompLeft=true" :disable="is_processing"></q-btn>
                 <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
-                  v-on:click="imgPlusCompLeft=true"></q-btn>
+                  v-on:click="imgPlusCompLeft=true" :disable="is_processing"></q-btn>
               </div>
               <!-- Image manager -->
               <div id="image-container-compare-left-normal" class="row st-col col-12">
@@ -851,9 +867,9 @@
               <!-- Content for Tab 1 -->
               <!-- Triq Btn image changer -->
               <div>
-                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTCompLeft=true"></q-btn>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTCompLeft=true" :disable="is_processing"></q-btn>
                 <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
-                  v-on:click="imgPlusTCompLeft=true"></q-btn>
+                  v-on:click="imgPlusTCompLeft=true" :disable="is_processing"></q-btn>
               </div>
               <!-- Triq Image manager -->
               <div id="image-container-compare-left-triq" class="row st-col col-12">
@@ -889,7 +905,7 @@
           <div class="row items-center">
             <q-select v-model="selected_folder_compare_right" :options="image_available_folders"
               label="Select Right Dataset" class="q-ma-sm" style="min-width: 200px;"
-              v-on:focus="refetch_folders = true"></q-select>
+              v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
             <q-space></q-space>
             <st-tabs id="tabHeaderCompareRight" :ids="CompTabIDsRight" :labels="CompTabLabelsRight"
               v-model="CompSelectedTabRight"></st-tabs>
@@ -899,9 +915,9 @@
               <!-- Content for Tab 0 -->
               <!-- Btn image changer -->
               <div>
-                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusCompRight=true"></q-btn>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusCompRight=true" :disable="is_processing"></q-btn>
                 <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
-                  v-on:click="imgPlusCompRight=true"></q-btn>
+                  v-on:click="imgPlusCompRight=true" :disable="is_processing"></q-btn>
               </div>
               <!-- Image manager -->
               <div id="image-container-compare-right-normal" class="row st-col col-12">
@@ -921,9 +937,9 @@
               <!-- Content for Tab 1 -->
               <!-- Triq Btn image changer -->
               <div>
-                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTCompRight=true"></q-btn>
+                <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusTCompRight=true" :disable="is_processing"></q-btn>
                 <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style"
-                  v-on:click="imgPlusTCompRight=true"></q-btn>
+                  v-on:click="imgPlusTCompRight=true" :disable="is_processing"></q-btn>
               </div>
               <!-- Triq Image manager -->
               <div id="image-container-compare-right-triq" class="row st-col col-12">
@@ -986,7 +1002,7 @@
       <div class="text-h6">Dataset Summary</div>
       <q-space />
       <q-select v-model="selected_folder_metadata" :options="available_folders" label="Select Dataset" class="q-ma-sm"
-        style="min-width: 250px;" standout="custom-standout" v-on:focus="refetch_folders = true"></q-select>
+        style="min-width: 250px;" standout="custom-standout" v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
     </q-card-section>
 
     <q-card-section class="q-pt-none">

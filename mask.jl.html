@@ -26,6 +26,8 @@
                     :disable="!is_browsing_slices || !imgInt"></q-btn>
                 <q-btn class="q-ma-sm btn-style" v-on:click="btn_upload_mask = true" label="Upload to Create Mask"
                     :disable="!is_browsing_slices || !imgInt"></q-btn>
+                <q-btn class="q-ma-sm btn-style" v-on:click="btn_upload_premade_mask = true" label="Upload Pre-made Mask"
+                    :disable="!is_browsing_slices"></q-btn>
                 <q-btn class="q-ma-sm btn-style" v-on:click="btn_change_slice = true" label="Change Mask Blueprint"
                     :disable="!is_editing_mask"></q-btn>
             </div>

@@ -7,3 +7,4 @@ log/*
 R_original_scripts/
 test/results/
 test/binarization_results/
+Manifest.toml

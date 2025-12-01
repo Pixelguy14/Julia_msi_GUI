@@ -6,6 +6,7 @@ https://codeberg.org/LabABI/JuliaMSI
 1. Make sure you have Julia installed and at least Julia version 1.6, If not, follow the next installation guide which contains the latest files and instructions for [juliaup](https://github.com/JuliaLang/juliaup) (recommended) alternatively, you can follow the official Julia installation instructions at [julia](https://julialang.org/downloads/platform/).
 2. Download and decompress the following repository (You can download the repository from [download](https://codeberg.org/LabABI/JuliaMSI/archive/main.zip) or locate the option manually at the top right of the page, in the box with [•••] (More operations). For a more advanced method using Git, use this link:  https://codeberg.org/LabABI/JuliaMSI.git).
 3. Ensure that you have decompressed the ZIP file and know the working directory where it is located (the folder on your computer where you saved the JuliaMSI files).
+4. Julia Version 1.11 is required. You might need to downgrade your whole Julia installation to support it.
 
 ## Load User Interface
 1. Set the working directory to where JuliaMSI is located (the specific location of the folder on your computer where you decompressed the ZIP) in your terminal.<br>

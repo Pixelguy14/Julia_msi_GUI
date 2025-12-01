@@ -150,6 +150,7 @@ end
     @in selected_folder_main = ""
     @out available_folders = String[]
     @out image_available_folders = String[]
+    @out registry_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
     @private registry_init_done = false
     @in refetch_folders = false
 
@@ -190,6 +191,7 @@ end
     @in btn_flip_mask = false
     @in btn_save_final_mask = false
     @in btn_move_mask = false
+    @in btn_upload_premade_mask = false
 
     # --- Manual Editor State ---
     @in brush_size = 10
@@ -271,6 +273,33 @@ end
                 msgimg = "No MSI images found in this dataset."
                 show_verification_plot = false
             end
+            
+            # --- Check for mask in registry and update message ---
+            reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+            if isfile(reg_path)
+                registry = JSON.parsefile(reg_path) # Assuming JSON.jl is loaded
+                if haskey(registry, selected_folder_main)
+                    dataset_entry = registry[selected_folder_main]
+                    if get(dataset_entry, "has_mask", false) && haskey(dataset_entry, "mask_path")
+                        mask_filepath = dataset_entry["mask_path"]
+                        mask_filename = basename(mask_filepath)
+                        mask_editor_message = "Dataset has an existing mask: $(mask_filename)"
+                        # Optionally, load this mask if the user is currently editing
+                        if is_editing_mask && isempty(smoothed_mask_path)
+                             # Only auto-load if not already editing a mask and smoothed_mask_path is empty
+                            smoothed_mask_path = get_timestamped_path("/css/masks/$(mask_filename)")
+                            plotdata_verify, plotlayout_verify, show_verification_plot = update_main_plot(imgInt, smoothed_mask_path, imgTrans)
+                            mask_editor_message *= " (loaded for editing)"
+                        end
+                    else
+                        mask_editor_message = "No existing mask found for this dataset."
+                    end
+                else
+                    mask_editor_message = "Dataset entry not found in registry."
+                end
+            else
+                mask_editor_message = "Registry file (registry.json) not found."
+            end
         end
     end
     
@@ -339,6 +368,86 @@ end
             mask_editor_warning = false
             
             # Plot will be updated via mask_input_path handler after processing
+        else
+            mask_editor_message = "No file selected for upload."
+            mask_editor_warning = true
+        end
+    end
+
+    @onbutton btn_upload_premade_mask begin
+        picked_path = pick_file(; filterlist="png,bmp,jpg,jpeg")
+        if !isempty(picked_path)
+            target_dir = joinpath("public", "css", "masks")
+            mkpath(target_dir)
+            
+            uploaded_filename = "premade_mask.png"
+            destination_path = joinpath(target_dir, uploaded_filename)
+            
+            local_uploaded_path = "" # Define here for finally block cleanup
+            try
+                cp(picked_path, destination_path; force=true)
+                local_uploaded_path = destination_path # Full path to the copied image
+                
+                # --- Binary Check ---
+                img = load(local_uploaded_path)
+                gray_img = ensure_grayscale(img)
+                
+                # Check if image is effectively binary (only two distinct values, or close enough)
+                # Convert to raw pixel values for robust checking
+                pixel_values = Float64.(collect(Iterators.flatten(channelview(gray_img))))
+                unique_pixel_values = unique(pixel_values)
+                
+                # Heuristic: if more than 2 distinct values exist, it's not truly binary
+                # Allow for floating point inaccuracies
+                if length(unique_pixel_values) > 2
+                    # Find min and max for range check
+                    min_val, max_val = extrema(unique_pixel_values)
+                    # If values are not clustered at 0 and 1, it's likely not binary
+                    if !(min_val < 0.1 && max_val > 0.9 && all(v -> v < 0.1 || v > 0.9, unique_pixel_values))
+                        mask_editor_message = "Warning: Uploaded image is not purely binary (found $(length(unique_pixel_values)) distinct pixel values). Please use 'Upload to Create Mask' for processing or ensure your image is strictly black and white."
+                        mask_editor_warning = true
+                        rm(local_uploaded_path; force=true) # Clean up non-binary file
+                        return
+                    end
+                end
+
+                # If it has 2 values, or only one value, ensure it's a true BitMatrix
+                # This handles cases like 0-255 images being converted to 0.0-1.0 and then to true/false
+                binary_img = gray_img .>= 0.5 # Ensure pure binary (true/false)
+                save(local_uploaded_path, binary_img)
+                
+                # --- Resizing to Slice (if imgInt is present) ---
+                slice_path_cleaned = replace(imgInt, r"\?.*" => "")
+                slice_full_path = joinpath("public", lstrip(slice_path_cleaned, '/'))
+
+                if !isempty(imgInt) && isfile(slice_full_path) # Only resize if a slice is present
+                    slice_img = load(slice_full_path)
+                    mask_img = load(local_uploaded_path) # Reload potentially re-binarized image to get correct type/size
+                    
+                    if size(slice_img) != size(mask_img)
+                        @info "Resizing pre-made mask to match slice dimensions."
+                        resized_mask = imresize(mask_img, size(slice_img))
+                        save(local_uploaded_path, resized_mask)
+                    end
+                end
+                
+                is_browsing_slices = false
+                is_editing_mask = true
+                # Update smoothed_mask_path to the new file, with timestamp for cache busting
+                relative_path_for_web = "/css/masks/$(uploaded_filename)"
+                smoothed_mask_path = get_timestamped_path(relative_path_for_web)
+                mask_editor_message = "Pre-made mask uploaded and loaded successfully!"
+                mask_editor_warning = false
+                
+                # Trigger plot update
+                plotdata_verify, plotlayout_verify, show_verification_plot = update_main_plot(imgInt, smoothed_mask_path, imgTrans)
+
+            catch e
+                @error "Failed to upload pre-made mask" exception=(e, catch_backtrace())
+                mask_editor_message = "Error uploading pre-made mask: $(sprint(showerror, e))"
+                mask_editor_warning = true
+                if !isempty(local_uploaded_path) && isfile(local_uploaded_path) rm(local_uploaded_path; force=true) end # Clean up
+            end
         else
             mask_editor_message = "No file selected for upload."
             mask_editor_warning = true

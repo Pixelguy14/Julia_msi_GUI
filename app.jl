@@ -91,6 +91,72 @@ function is_step_enabled(step_name::String, pipeline_order::Vector{Dict{String, 
     return false # Default to disabled if step not found
 end
 
+function get_processed_mean_spectrum(spectra::Vector{MutableSpectrum}; num_bins=2000)
+    # 1. Find global m/z range from all spectra
+    min_mz, max_mz = Inf, -Inf
+    for s in spectra
+        if !isempty(s.mz)
+            min_mz = min(min_mz, minimum(s.mz))
+            max_mz = max(max_mz, maximum(s.mz))
+        end
+    end
+
+    if !isfinite(min_mz)
+        return Float64[], Float64[]
+    end
+
+    # 2. Create bins
+    mz_bins = range(min_mz, stop=max_mz, length=num_bins)
+    intensity_sum = zeros(Float64, num_bins)
+    bin_step = step(mz_bins)
+    inv_bin_step = 1.0 / bin_step
+
+    # 3. Bin intensities
+    for s in spectra
+        for i in eachindex(s.mz)
+            bin_index = trunc(Int, (s.mz[i] - min_mz) * inv_bin_step + 1.0)
+            final_index = clamp(bin_index, 1, num_bins)
+            intensity_sum[final_index] += s.intensity[i]
+        end
+    end
+
+    # 4. Average and return
+    if isempty(spectra)
+        return collect(mz_bins), intensity_sum
+    end
+    average_intensity = intensity_sum ./ length(spectra)
+    return collect(mz_bins), average_intensity
+end
+
+function get_processed_sum_spectrum(spectra::Vector{MutableSpectrum}; num_bins=2000)
+    min_mz, max_mz = Inf, -Inf
+    for s in spectra
+        if !isempty(s.mz)
+            min_mz = min(min_mz, minimum(s.mz))
+            max_mz = max(max_mz, maximum(s.mz))
+        end
+    end
+
+    if !isfinite(min_mz)
+        return Float64[], Float64[]
+    end
+
+    mz_bins = range(min_mz, stop=max_mz, length=num_bins)
+    intensity_sum = zeros(Float64, num_bins)
+    bin_step = step(mz_bins)
+    inv_bin_step = 1.0 / bin_step
+
+    for s in spectra
+        for i in eachindex(s.mz)
+            bin_index = trunc(Int, (s.mz[i] - min_mz) * inv_bin_step + 1.0)
+            final_index = clamp(bin_index, 1, num_bins)
+            intensity_sum[final_index] += s.intensity[i]
+        end
+    end
+    
+    return collect(mz_bins), intensity_sum
+end
+
 @genietools
 
 # == Reactive code ==
@@ -99,145 +165,114 @@ end
     # == Loading Screen Variables ==
     @in is_initializing = true
     @in initialization_message = "Initializing..."
+    # Loading animations and readonly / disable elements are all handled by this variable.
+    @in is_processing = false
 
-    # == Reactive variables ==
-    # reactive variables exist in both the Julia backend and the browser with two-way synchronization
-    # @out variables can only be modified by the backend
-    # @in variables can be modified by both the backend and the browser
-    # variables must be initialized with constant values, or variables defined outside of the @app block
-
-    ## Interface non Variables
-    @out btnStartDisable=true
-    @out btnPlotDisable=false
-    @out btnSpectraDisable=false
-    # Loading animations
-    @in progress=false
-    @in progressPlot=false
-    @in progressSpectraPlot=false
-    # Text field validations
-    @in triqEnabled=false
-    @in SpectraEnabled=false
-    @in MFilterEnabled=false
-    @in maskEnabled=false
-    # Dialogs
-    @in warning_msg=false
-    @in CompareDialog=false
-
-    ## Interface Variables
+    # == SLICE GENERATOR TAB VARIABLES ==
+    # File selection and batch processing
     @in file_route=""
     @in file_name=""
-    @in Nmass="0.0"
-    @in Tol=0.1
-    @in triqProb=0.98
-    @in colorLevel=20
-
-    ## Interface Buttons
     @in btnSearch=false # To search for files in your device
     @in btnAddBatch = false
     @in clear_batch_btn = false
     @out batch_file_count = 0
-    @in mainProcess=false # To generate images
-    @in compareBtn=false # To open dialog
+    @in selected_files = String[]
+    @out full_route="" # Saves the route where imzML and mzML files are located
+
+    # Mass-to-charge parameters
+    @in Nmass="0.0" # Mass-to-charge ratio(s) of interest
+    @in Tol=0.1 # Mass-to-charge ratio tolerance
+    @in colorLevel=20 # Color levels for visualization
+
+    # Processing toggles
+    @in triqEnabled=false # Threshold Intensity Quantization
+    @in MFilterEnabled=false # Median Filter
+    @in maskEnabled=false # Use Mask To Filter Data
+    @in triqProb=0.98 # TrIQ probability parameter
+
+    # Spectrum selection and coordinates
+    @in idSpectrum=0 # Spectrum ID for ID-based plots
+    @in xCoord=0 # X coordinate for coordinate-based plots
+    @in yCoord=0 # Y coordinate for coordinate-based plots
+    @in SpectraEnabled=false # Enables xCoord and yCoord inputs when spectral data is loaded
+
+    # Plot generation triggers
+    @in mainProcess=false # To generate images/slices
     @in createMeanPlot=false # To generate mean spectrum plot
-    @in createXYPlot=false # To generate an spectrum plot according to the xy values inputed
-    @in createNSpectrumPlot=false # To generate an spectrum plot according to spectrum order
-    @in createSumPlot=false # To generate a sum of all the spectrum plots
+    @in createXYPlot=false # To generate spectrum plot according to xy values
+    @in createNSpectrumPlot=false # To generate spectrum plot according to spectrum order
+    @in createSumPlot=false # To generate sum of all spectrum plots
     @in image3dPlot=false # To generate 3d plot based on current image
     @in triq3dPlot=false # To generate 3d plot based on current triq image
     @in imageCPlot=false # To generate contour plots of current image
     @in triqCPlot=false # To generate contour plots of current triq image
-    # Image change buttons
-    @in imgPlus=false
-    @in imgMinus=false
-    @in imgPlusT=false
-    @in imgMinusT=false
-    # Image change comparative buttons
-    @in imgPlusCompLeft=false
-    @in imgMinusCompLeft=false
-    @in imgPlusTCompLeft=false
-    @in imgMinusTCompLeft=false
-    @in imgPlusCompRight=false
-    @in imgMinusCompRight=false
-    @in imgPlusTCompRight=false
-    @in imgMinusTCompRight=false
 
-    ## Tabulation variables
-    @out tabIDs=["tab0","tab1","tab2","tab3","tab4"]
-    @out tabLabels=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
-    @in selectedTab="tab0"
-    @out CompTabIDsLeft=["tab0","tab1","tab2","tab3","tab4"]
-    @out CompTabLabelsLeft=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
-    @in CompSelectedTabLeft="tab0"
-    @out CompTabIDsRight=["tab0","tab1","tab2","tab3","tab4"]
-    @out CompTabLabelsRight=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
-    @in CompSelectedTabRight="tab0"
+    # Image navigation controls
+    @in imgPlus=false # Next image in normal mode
+    @in imgMinus=false # Previous image in normal mode
+    @in imgPlusT=false # Next image in TrIQ mode
+    @in imgMinusT=false # Previous image in TrIQ mode
 
-    # Interface Images
-    @out imgInt="/.bmp" # image Interface
-    @out imgIntT="/.bmp" # image Interface TrIQ
-    @out colorbar="/.png"
-    @out colorbarT="/.png"
-    # Interface controlling for the comparative view
-    @out imgIntCompLeft="/.bmp"
-    @out imgIntTCompLeft="/.bmp"
-    @out colorbarCompLeft="/.png"
-    @out colorbarTCompLeft="/.png"
-    @out imgIntCompRight="/.bmp"
-    @out imgIntTCompRight="/.bmp"
-    @out colorbarCompRight="/.png"
-    @out colorbarTCompRight="/.png"
-    @out imgWidth=0
-    @out imgHeight=0
+    # Optical image overlay
+    @in imgTrans=1.0 # Transparency level for optical overlay
+    @in btnOptical=false # Load optical image over normal image
+    @in btnOpticalT=false # Load optical image over TrIQ image
+    @in opticalOverTriq=false # Toggle optical overlay mode
 
-    # Optical Image Overlay & Transparency
-    @in imgTrans=1.0
-    @in progressOptical=false
-    @out btnOpticalDisable=true
-    @in btnOptical=false
-    @in btnOpticalT=false
-    @in opticalOverTriq=false
-    @out imgRoute=""
+    # Messages and status
+    @out msg="" # Main status message
+    @out msgimg="" # Image status message
+    @out msgtriq="" # TrIQ status message
 
-    # Messages to interface variables
-    @out msg=""
-    @out msgimg=""
-    @out msgtriq=""
-    # Reiteration of the messages under the image to know which spectra is being visualized
-    @out msgimgCompLeft=""
-    @out msgtriqCompLeft=""
-    @out msgimgCompRight=""
-    @out msgtriqCompRight=""
+    # == CONVERTER TAB VARIABLES ==
+    @in left_tab = "generator" # Active left tab (generator, converter, pre_treatment)
+    @out mzml_full_route = "" # Path to .mzML file
+    @out sync_full_route = "" # Path to .txt synchronization file
+    @in btnSearchMzml = false # Trigger mzML file search
+    @in btnSearchSync = false # Trigger sync file search
+    @in convert_process = false # Start conversion process
+    @out progress_conversion = false # Conversion progress indicator
+    @out msg_conversion = "" # Conversion status message
+    @out btnConvertDisable = true # Disable convert button when files not selected
 
-    # Centralized MSIData object
-    @out msi_data::Union{MSIData, Nothing} = nothing
+    # == PRE-TREATMENT TAB VARIABLES ==
+    # File selection and batch
+    @in pre_tab = "stabilization" # Active preprocessing subtab
 
-    # Metadata table variables
-    @in showMetadataDialog = false
-    @in showMetadataBtn = false
-    @out metadata_columns = []
-    @out metadata_rows = []
-    @out btnMetadataDisable = false
-    @in selected_folder_metadata = ""
+    # Subset processing
+    @in enable_subset_processing = false # Enable processing only first N spectra
+    @in spectra_subset_size = 100 # Number of spectra for subset processing
 
-    # Saves the route where imzML and mzML files are located
-    @out full_route=""
+    # Internal standards management
+    @in enable_standards = true # Use internal standards for calibration
+    @in reference_peaks_list = [
+        Dict("mz" => 137.0244, "label" => "DHB_fragment"),
+        Dict("mz" => 155.0349, "label" => "DHB_M+H"),
+    ]
+    @in addReferencePeak = false # Add new reference peak
+    @in remove_peak_trigger = false # Remove reference peak
+    @in export_standards_btn = false # Export standards to JSON
+    @in import_standards_btn = false # Import standards from JSON
 
-    # == Converter Tab Variables ==
-    @in left_tab = "generator"
-    @out mzml_full_route = ""
-    @out sync_full_route = ""
-    @in btnSearchMzml = false
-    @in btnSearchSync = false
-    @in convert_process = false
-    @out progress_conversion = false
-    @out msg_conversion = ""
-    @out btnConvertDisable = true
+    # Pipeline step management
+    @in pipeline_step_order = [
+        Dict("name" => "stabilization", "label" => "Stabilization", "enabled" => true),
+        Dict("name" => "smoothing", "label" => "Smoothing", "enabled" => true),
+        Dict("name" => "baseline_correction", "label" => "Baseline Correction", "enabled" => true),
+        Dict("name" => "peak_picking", "label" => "Peak Picking", "enabled" => true),
+        Dict("name" => "peak_selection", "label" => "Peak Selection", "enabled" => true),
+        Dict("name" => "calibration", "label" => "Calibration", "enabled" => true),
+        Dict("name" => "peak_alignment", "label" => "Peak Alignment", "enabled" => true),
+        Dict("name" => "normalization", "label" => "Normalization", "enabled" => true),
+        Dict("name" => "peak_binning", "label" => "Peak Binning", "enabled" => true)
+    ]
+    @in action_index = -1 # Index for step operations
+    @in move_step_up_trigger = false # Move step up in pipeline
+    @in move_step_down_trigger = false # Move step down in pipeline
+    @in toggle_step_trigger = false # Toggle step enabled/disabled
+    @out current_pipeline_step = "" # Current running step in full pipeline
 
-    # == Pre Processing Variables ==
-    @in pre_tab = "stabilization"
-
-    ## Preprocessing Parameters
-    @in progressPrep=false
+    # Preprocessing method parameters
     @in stabilization_method="sqrt"
     @in smoothing_method="sg"
     @in smoothing_window = ""
@@ -277,48 +312,7 @@ end
     @in peak_selection_frequency_threshold = ""
     @in peak_selection_correlation_threshold = ""
 
-    # == Pipeline Step Order and Mask Route Variables ==
-    @in pipeline_step_order = [
-        Dict("name" => "stabilization", "label" => "Stabilization", "enabled" => true),
-        Dict("name" => "smoothing", "label" => "Smoothing", "enabled" => true),
-        Dict("name" => "baseline_correction", "label" => "Baseline Correction", "enabled" => true),
-        Dict("name" => "peak_picking", "label" => "Peak Picking", "enabled" => true),
-        Dict("name" => "peak_selection", "label" => "Peak Selection", "enabled" => true),
-        Dict("name" => "calibration", "label" => "Calibration", "enabled" => true),
-        Dict("name" => "peak_alignment", "label" => "Peak Alignment", "enabled" => true),
-        Dict("name" => "normalization", "label" => "Normalization", "enabled" => true),
-        Dict("name" => "peak_binning", "label" => "Peak Binning", "enabled" => true)
-    ]
-    @in selected_spectrum_id_for_plot = 1
-    @in feature_matrix_result = nothing
-    @in bin_info_result = nothing
-
-    @in reference_peaks_list = [
-        Dict("mz" => 137.0244, "label" => "DHB_fragment"),
-        Dict("mz" => 155.0349, "label" => "DHB_M+H"),
-    ]
-
-    @in save_feature_matrix_btn = false
-    @in recalculate_suggestions_btn = false
-    @in addReferencePeak = false
-    @in removeReferencePeak = false
-    @in moveStepUp = false
-    @in moveStepDown = false
-
-    # Trigger for running the full pipeline
-    @in run_full_pipeline = false
-    @in enable_standards = true
-    @in action_index = -1
-    @in remove_peak_trigger = false
-    @in move_step_up_trigger = false
-    @in move_step_down_trigger = false
-    @in toggle_step_trigger = false
-    @out current_pipeline_step = "" # To indicate which step is currently running in the full pipeline
-
-    @in export_params_btn = false
-    @in import_params_btn = false
-    @in imported_params_file = nothing
-
+    # Suggested parameter values
     @in suggested_smoothing_window = ""
     @in suggested_smoothing_order = ""
     @in suggested_baseline_iterations = ""
@@ -348,42 +342,114 @@ end
     @in suggested_peak_selection_frequency_threshold = ""
     @in suggested_peak_selection_correlation_threshold = ""
 
-    # == Batch Summary Dialog ==
-    @in showBatchSummary = false
-    @out batch_summary = ""
+    # Pipeline control triggers
+    @in run_full_pipeline = false # Trigger full pipeline execution
+    @in recalculate_suggestions_btn = false # Recalculate parameter suggestions
+    @in export_params_btn = false # Export parameters to file
+    @in import_params_btn = false # Import parameters from file
+    @in save_feature_matrix_btn = false # Save feature matrix results
 
-    # == Batch Processing & Registry Variables ==
+    # Preprocessing results
+    @in selected_spectrum_id_for_plot = 1
+    @in last_plot_type = "single"
+    @in feature_matrix_result::Union{Nothing, Matrix{Float64}} = nothing
+    @in bin_info_result::Union{Nothing, Vector} = nothing
+
+    # == RIGHT PANEL VARIABLES (intDivStyle-right) ==
+    # Tab management
+    @out tabIDs=["tab0","tab1","tab2","tab3","tab4"]
+    @out tabLabels=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
+    @in selectedTab="tab0"
+
+    # Compare dialog tabs
+    @out CompTabIDsLeft=["tab0","tab1","tab2","tab3","tab4"]
+    @out CompTabLabelsLeft=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
+    @in CompSelectedTabLeft="tab0"
+    @out CompTabIDsRight=["tab0","tab1","tab2","tab3","tab4"]
+    @out CompTabLabelsRight=["Image", "TrIQ", "Spectrum Plot", "Topography Plot","Surface Plot"]
+    @in CompSelectedTabRight="tab0"
+
+    # Compare dialog controls
+    @in CompareDialog=false
+    @in compareBtn=false # Open compare dialog
+    @in imgPlusCompLeft=false # Next image in compare left panel
+    @in imgMinusCompLeft=false # Previous image in compare left panel
+    @in imgPlusTCompLeft=false # Next TrIQ image in compare left panel
+    @in imgMinusTCompLeft=false # Previous TrIQ image in compare left panel
+    @in imgPlusCompRight=false # Next image in compare right panel
+    @in imgMinusCompRight=false # Previous image in compare right panel
+    @in imgPlusTCompRight=false # Next TrIQ image in compare right panel
+    @in imgMinusTCompRight=false # Previous TrIQ image in compare right panel
+
+    # Image display variables
+    @out imgInt="/.bmp" # Normal image interface
+    @out imgIntT="/.bmp" # TrIQ image interface
+    @out colorbar="/.png" # Normal colorbar
+    @out colorbarT="/.png" # TrIQ colorbar
+
+    # Compare dialog images
+    @out imgIntCompLeft="/.bmp" # Left compare normal image
+    @out imgIntTCompLeft="/.bmp" # Left compare TrIQ image
+    @out colorbarCompLeft="/.png" # Left compare normal colorbar
+    @out colorbarTCompLeft="/.png" # Left compare TrIQ colorbar
+    @out imgIntCompRight="/.bmp" # Right compare normal image
+    @out imgIntTCompRight="/.bmp" # Right compare TrIQ image
+    @out colorbarCompRight="/.png" # Right compare normal colorbar
+    @out colorbarTCompRight="/.png" # Right compare TrIQ colorbar
+
+    @out imgWidth=0
+    @out imgHeight=0
+
+    # Compare dialog messages
+    @out msgimgCompLeft=""
+    @out msgtriqCompLeft=""
+    @out msgimgCompRight=""
+    @out msgtriqCompRight=""
+
+    # == BATCH PROCESSING & REGISTRY VARIABLES ==
     @private registry_init_done = false
     @in refetch_folders = false
-    @in selected_files = String[]
     @in available_folders = String[]
     @in image_available_folders = String[]
     @out registry_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
-    # Progress reporting
-    @out overall_progress = 0.0
-    @out progress_message = ""
 
-    # == Folder-based UI State ==
+    # Folder selection state
     @in selected_folder_main = ""
     @in selected_folder_compare_left = ""
     @in selected_folder_compare_right = ""
 
+    # Progress reporting
+    @out overall_progress = 0.0
+    @out progress_message = ""
 
-    # For the creation of images with a more specific mass charge
-    @out text_nmass=""
+    # Batch summary
+    @in showBatchSummary = false
+    @out batch_summary = ""
 
-    # For image search image lists we apply a filter that searches specific type of images into our public folder, then we sort it in a "numerical" order
+    # == METADATA VARIABLES ==
+    @in showMetadataDialog = false
+    @in showMetadataBtn = false
+    @out metadata_columns = []
+    @out metadata_rows = []
+    @out btnMetadataDisable = false
+    @in selected_folder_metadata = ""
+
+    # == DATA MANAGEMENT VARIABLES ==
+    # Centralized MSIData object
+    @out msi_data::Union{MSIData, Nothing} = nothing
+
+    # Image file management
+    @out text_nmass="" # For specific mass charge image creation
     @in msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
     @in col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
     @in triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
     @in col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-    
-    # Set current image for the list to display
+
+    # Current image display
     @out current_msi=""
     @out current_col_msi=""
     @out current_triq=""
     @out current_col_triq=""
-    # We reiterate the process to display in the comparative view
     @out current_msiCompLeft=""
     @out current_col_msiCompLeft=""
     @out current_triqCompLeft=""
@@ -393,13 +459,11 @@ end
     @out current_triqCompRight=""
     @out current_col_triqCompRight=""
 
-    ## Time measurement variables
-    @out sTime=time()
-    @out fTime=time()
-    @out eTime=time()
+    # Optical image
+    @out imgRoute=""
 
-    ## Plots
-    # Local image to plot
+    # == PLOTTING VARIABLES ==
+    # Image plots
     layoutImg=PlotlyBase.Layout(
         title=PlotlyBase.attr(
             text="",
@@ -423,21 +487,20 @@ end
     traceImg=PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
     @out plotdataImg=[traceImg]
     @out plotlayoutImg=layoutImg
-    # For the image in the comparative view
     @out plotdataImgCompLeft=[traceImg]
     @out plotlayoutImgCompLeft=layoutImg
     @out plotdataImgCompRight=[traceImg]
     @out plotlayoutImgCompRight=layoutImg
 
-    # For triq image 
+    # TrIQ image plots
     @out plotdataImgT=[traceImg]
     @out plotlayoutImgT=layoutImg
-    # For the triq image in the comparative view
     @out plotdataImgTCompLeft=[traceImg]
     @out plotlayoutImgTCompLeft=layoutImg
     @out plotdataImgTCompRight=[traceImg]
     @out plotlayoutImgTCompRight=layoutImg
-    # Interface Plot Spectrum
+
+    # Spectrum plots
     layoutSpectra=PlotlyBase.Layout(
         title=PlotlyBase.attr(
             text="Spectrum plot",
@@ -465,30 +528,21 @@ end
             yanchor="top"
         )
     )
-    # Dummy 2D scatter plot
     traceSpectra=PlotlyBase.scatter(x=Vector{Float64}(), y=Vector{Float64}(), mode="lines", marker=attr(size=1, color="blue", opacity=0.1))
-    # Create conection to frontend
     @out plotdata=[traceSpectra]
     @out plotlayout=layoutSpectra
 
-    @in idSpectrum=0
-    @in xCoord=0
-    @in yCoord=0
-    @out xSpectraMz = Vector{Float64}()
-    @out ySpectraMz = Vector{Float64}()
-
-    # UI plot data for Preprocessing
+    # Preprocessing spectrum plots
     @out plotdata_before = [traceSpectra]
     @out plotlayout_before = layoutSpectra
     @out plotdata_after = [traceSpectra]
     @out plotlayout_after = layoutSpectra
 
-    # Interactive plot reactions
-    @in data_click=Dict{String,Any}()
-    #@in data_selected=Dict{String,Any}() # Selected is for areas, this can work for the masks
-    #<plotly id="plotStyle" :data="plotdata" :layout="plotlayout" @click="data_selected" class="q-pa-none q-ma-none sync_data"></plotly>
+    # Spectrum data
+    @out xSpectraMz = Vector{Float64}()
+    @out ySpectraMz = Vector{Float64}()
 
-    # Interface Plot Surface
+    # Contour plots
     layoutContour=PlotlyBase.Layout(
         title=PlotlyBase.attr(
             text="2D Topographic map",
@@ -507,14 +561,11 @@ end
         ),
         margin=attr(l=0,r=0,t=100,b=0,pad=0)
     )
-    # Dummy 2D surface plot
     traceContour=PlotlyBase.contour(x=Vector{Float64}(), y=Vector{Float64}(), mode="lines")
-    # Create conection to frontend
     @out plotdataC=[traceContour]
     @out plotlayoutC=layoutContour
 
-    # Interface Plot 3d
-    # Define the layout for the 3D plot
+    # 3D surface plots
     layout3D=PlotlyBase.Layout(
         title=PlotlyBase.attr(
             text="3D Surface plot",
@@ -536,8 +587,6 @@ end
         ),
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
     )
-
-    # Dummy 3D surface plot
     x=1:10
     y=1:10
     z=[sin(i * j / 10) for i in x, j in y]
@@ -548,9 +597,19 @@ end
                                     highlightcolor="limegreen",
                                     project_z=true
                                 ), colorscale="Viridis")
-    # Create conection to frontend
     @out plotdata3d=[trace3D]
     @out plotlayout3d=layout3D
+
+    # Interactive plot reactions
+    @in data_click=Dict{String,Any}()
+
+    # == TIME MEASUREMENT VARIABLES ==
+    @out sTime=time()
+    @out fTime=time()
+    @out eTime=time()
+
+    # == DIALOGS AND MESSAGES ==
+    @in warning_msg=false
 
     # == Reactive handlers ==
     # Reactive handlers watch a variable and execute a block of code when its value changes
@@ -559,12 +618,13 @@ end
     # This handler correctly uses pick_file and loads the selected file
     # as the active dataset for the UI.
     @onbutton btnSearch begin
+        is_processing = true
         picked_route = pick_file(; filterlist="imzML,imzml,mzML,mzml")
         if isempty(picked_route)
+            is_processing = false
             return
         end
 
-        progress = true
         msg = "Opening file: $(basename(picked_route))..."
 
         try
@@ -588,9 +648,6 @@ end
                 msi_data = nothing # Ensure data is not held in memory
                 log_memory_usage("Fast Load (msi_data cleared)", msi_data)
                 btnMetadataDisable = false
-                btnStartDisable = false
-                btnPlotDisable = false
-                btnSpectraDisable = false
                 SpectraEnabled = true
                 selected_folder_main = dataset_name
                 
@@ -601,12 +658,12 @@ end
                 image_available_folders = deepcopy(img_folders)
 
                 msg = "Successfully loaded pre-processed dataset: $(dataset_name)"
-                progress = false
-                return
+                
             end
 
+
             # --- Full Load Path ---
-            msg = "Performing first-time analysis for: $(basename(picked_route))..."
+            
             local local_full_route
             if endswith(picked_route, r"imzml"i)
                 local_full_route = replace(picked_route, r"\.imzml$"i => ".imzML")
@@ -621,13 +678,17 @@ end
             sTime = time()
             loaded_data = OpenMSIData(local_full_route)
             is_imzML = loaded_data.source isa ImzMLSource
-            
-            precompute_analytics(loaded_data)
+
+            if isempty(get(existing_entry, "metadata", Dict()))
+                msg = "Performing first-time metadata analysis for: $(basename(picked_route))..."
+                precompute_analytics(loaded_data)
+            end
             
             # Auto-suggest parameters
             try
                 println("Calling main_precalculation to get recommended parameters...")
                 recommended_params = main_precalculation(loaded_data)
+                
                 
                 for (step_name, params) in recommended_params
                     for (param_key, value) in params
@@ -833,17 +894,12 @@ end
             eTime = round(time() - sTime, digits=3)
             msg = "Active file loaded in $(eTime) seconds. Dataset '$(dataset_name)' is ready for analysis."
 
-            btnStartDisable = false
-            btnPlotDisable = false
-            btnSpectraDisable = false
             SpectraEnabled = true
             
         catch e
             msi_data = nothing
             msg = "Error loading active file: $e"
             warning_msg = true
-            btnStartDisable = true
-            btnSpectraDisable = true
             SpectraEnabled = false
             btnMetadataDisable = true
             @error "File loading failed" exception=(e, catch_backtrace())
@@ -852,12 +908,12 @@ end
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
             end
-            progress = false
-            progressSpectraPlot = false
+            is_processing = false
         end
     end
 
     @onbutton export_params_btn begin
+        is_processing = true
         params_to_export = Dict(
             "pipeline_step_order" => pipeline_step_order,
             "enable_standards" => enable_standards, # Export global flag
@@ -901,52 +957,135 @@ end
             "peak_selection_correlation_threshold" => peak_selection_correlation_threshold,
             "reference_peaks_list" => reference_peaks_list
         )
+        
+        # 1. Generate the JSON string
         json_string = JSON.json(params_to_export)
+
+        # 2. ESCAPING (Crucial for stability)
+        # We must escape backslashes (for Windows paths) and single quotes
+        # so they don't break the JavaScript string literal.
+        safe_json = replace(json_string, "\\" => "\\\\") 
+        safe_json = replace(safe_json, "'" => "\\'")
+
+        # 3. Create the JavaScript payload
+        # We inject 'safe_json' into the JS 'encodeURIComponent'
         js_script = """
             var element = document.createElement('a');
-            element.setAttribute('href', 'data:text/json;charset=utf-8,' + encodeURIComponent(`$json_string`));
+            element.setAttribute('href', 'data:text/json;charset=utf-8,' + encodeURIComponent('$safe_json'));
             element.setAttribute('download', 'preprocessing_params.json');
             element.style.display = 'none';
             document.body.appendChild(element);
             element.click();
             document.body.removeChild(element);
         """
-        run_js(js_script)
+
+        # 4. Execute on the client
+        run(__model__, js_script)
+        is_processing = false
         msg = "Parameters exported."
     end
 
-    @onchange import_params_btn begin
-        if import_params_btn
-            try
-                json_string = String(imported_params_file.data)
-                params = JSON.parse(json_string)
-
-                for (key, value) in params
-                    if key == "reference_peaks_list"
-                        reference_peaks_list = value
-                    elseif key == "pipeline_step_order"
-                        pipeline_step_order = value
-                    elseif key == "enable_standards" # Import global flag
-                        enable_standards = value
-                    else
-                        # Use getfield and setproperty! to update reactive variables by name
-                        if hasfield(typeof(@__MODULE__), Symbol(key))
-                            getfield(@__MODULE__, Symbol(key))[] = value
-                        end
-                    end
-                end
-                msg = "Parameters imported successfully."
-            catch e
-                msg = "Failed to import parameters: $e"
-                warning_msg = true
-            finally
-                import_params_btn = false # Reset button state
-            end
+    @onbutton import_params_btn begin
+        is_processing = true
+        picked_file = pick_file(filterlist="json")
+        if isempty(picked_file)
+            is_processing = false
+            return
         end
+
+        try
+            json_string = read(picked_file, String)
+            params = JSON.parse(json_string)
+
+            # This is a list of all known reactive variables that can be imported.
+            # This prevents arbitrary variable assignment.
+            known_params = [
+                "stabilization_method", "smoothing_method", "smoothing_window", "smoothing_order",
+                "baseline_method", "baseline_iterations", "baseline_window", "normalization_method",
+                "alignment_method", "alignment_span", "alignment_tolerance", "alignment_tolerance_unit",
+                "alignment_max_shift_ppm", "alignment_min_matched_peaks", "peak_picking_method",
+                "peak_picking_snr_threshold", "peak_picking_half_window", "peak_picking_min_peak_prominence",
+                "peak_picking_merge_peaks_tolerance", "peak_picking_min_peak_width_ppm",
+                "peak_picking_max_peak_width_ppm", "peak_picking_min_peak_shape_r2", "binning_method",
+                "binning_tolerance", "binning_tolerance_unit", "binning_frequency_threshold",
+                "binning_min_peak_per_bin", "binning_max_bin_width_ppm", "binning_intensity_weighted_centers",
+                "binning_num_uniform_bins", "calibration_fit_order", "calibration_ppm_tolerance",
+                "peak_selection_min_snr", "peak_selection_min_fwhm_ppm", "peak_selection_max_fwhm_ppm",
+                "peak_selection_min_shape_r2", "peak_selection_frequency_threshold", "peak_selection_correlation_threshold"
+            ]
+
+            for (key, value) in params
+                if key == "reference_peaks_list"
+                    reference_peaks_list = value
+                elseif key == "pipeline_step_order"
+                    pipeline_step_order = value
+                elseif key == "enable_standards"
+                    enable_standards = value
+                elseif key in known_params
+                    # Use getfield and setproperty! to update reactive variables by name
+                    if hasfield(typeof(@__MODULE__), Symbol(key))
+                        getfield(@__MODULE__, Symbol(key))[] = value
+                    end
+                else
+                    @warn "Unknown parameter '$key' found in JSON file. Skipping."
+                end
+            end
+            msg = "Parameters imported successfully from $(basename(picked_file))."
+        catch e
+            msg = "Failed to import parameters: $e"
+            warning_msg = true
+            @error "Parameter import failed" exception=(e, catch_backtrace())
+        end
+        is_processing = false
+    end
+
+    @onbutton export_standards_btn begin
+        is_processing = true
+        json_string = JSON.json(reference_peaks_list)
+        safe_json = replace(json_string, "\\" => "\\\\")
+        safe_json = replace(safe_json, "'" => "\\'")
+        js_script = """
+            var element = document.createElement('a');
+            element.setAttribute('href', 'data:text/json;charset=utf-8,' + encodeURIComponent('$safe_json'));
+            element.setAttribute('download', 'internal_standards.json');
+            element.style.display = 'none';
+            document.body.appendChild(element);
+            element.click();
+            document.body.removeChild(element);
+        """
+        run(__model__, js_script)
+        is_processing = false
+        msg = "Internal standards exported."
+    end
+
+    @onbutton import_standards_btn begin
+        is_processing = true
+        picked_file = pick_file(filterlist="json")
+        if isempty(picked_file)
+            return
+        end
+
+        try
+            json_string = read(picked_file, String)
+            new_standards = JSON.parse(json_string)
+            # Basic validation
+            if new_standards isa Vector && all(p -> p isa Dict && haskey(p, "mz") && haskey(p, "label"), new_standards)
+                reference_peaks_list = new_standards
+                msg = "Internal standards imported successfully from $(basename(picked_file))."
+            else
+                msg = "Invalid format for internal standards file."
+                warning_msg = true
+            end
+        catch e
+            msg = "Failed to import internal standards: $e"
+            warning_msg = true
+            @error "Standards import failed" exception=(e, catch_backtrace())
+        end
+        is_processing = false
     end
 
     @onbutton run_full_pipeline begin
-        progressPrep = true
+        is_processing = true
         current_pipeline_step = "Initializing..."
         println("DEBUG: run_full_pipeline started.")
         # println("DEBUG: Current pipeline_step_order configuration: $pipeline_step_order")
@@ -958,6 +1097,7 @@ end
                 msg = "No dataset loaded. Please load a file using 'Select an imzMl / mzML file'."
                 warning_msg = true
                 println("DEBUG: $msg")
+                is_processing = false
                 return
             end
 
@@ -1028,6 +1168,14 @@ end
                 println("DEBUG: No mask applied. Processing all $(length(msi_data.spectra_metadata)) spectra.")
             end
 
+            # Apply subset processing if enabled
+            if enable_subset_processing && spectra_subset_size > 0
+                n_total = length(spectrum_indices_to_process)
+                n_to_process = min(spectra_subset_size, n_total)
+                spectrum_indices_to_process = spectrum_indices_to_process[1:n_to_process]
+                println("DEBUG: Subset processing enabled. Processing first $(length(spectrum_indices_to_process)) of $n_total spectra.")
+            end
+
             # Initialize spectra data structure
             current_pipeline_step = "Loading spectra..."
             println("DEBUG: Loading $(length(spectrum_indices_to_process)) spectra into MutableSpectrum objects...")
@@ -1036,7 +1184,7 @@ end
             Threads.@threads for i in 1:length(spectrum_indices_to_process)
                 original_idx = spectrum_indices_to_process[i]
                 mz, intensity = GetSpectrum(msi_data, original_idx) # Fetch mz and intensity for the current spectrum
-                current_spectra[i] = MutableSpectrum(original_idx, Float64.(mz), Float64.(intensity), NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), NTuple{6, Float64}}[])
+                current_spectra[i] = MutableSpectrum(original_idx, copy(Float64.(mz)), copy(Float64.(intensity)), NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), NTuple{6, Float64}}[])
             end
             println("DEBUG: All spectra loaded into temporary structure for processing.")
 
@@ -1273,47 +1421,65 @@ end
 
             # 4. Update Results Display
             current_pipeline_step = "Updating results..."
-            println("DEBUG: Updating results display after pipeline completion.")
-            
-            # Find the spectrum to display in "after" plot
-            display_spectrum_idx = findfirst(s -> s.id == selected_spectrum_id_for_plot, current_spectra)
-            if display_spectrum_idx !== nothing
-                processed_spectrum = current_spectra[display_spectrum_idx]
-                println("DEBUG: Displaying spectrum $(selected_spectrum_id_for_plot) after processing.")
-                
-                after_trace = PlotlyBase.scatter(
-                    x=processed_spectrum.mz, 
-                    y=processed_spectrum.intensity, 
-                    mode="lines", 
-                    name="Processed Spectrum"
-                )
-                
-                traces_after = [after_trace]
+            subset_label = enable_subset_processing ? " (from subset of $(length(current_spectra)) spectra)" : ""
+            println("DEBUG: Updating results display after pipeline completion for plot type: $(last_plot_type)")
 
-                if !isempty(processed_spectrum.peaks)
-                    peak_mzs = [p.mz for p in processed_spectrum.peaks]
-                    peak_intensities = [p.intensity for p in processed_spectrum.peaks]
-                    peak_trace = PlotlyBase.scatter(
-                        x=peak_mzs, 
-                        y=peak_intensities, 
-                        mode="markers", 
-                        name="Picked Peaks", 
-                        marker=attr(color="red", size=8)
+            if last_plot_type == "single"
+                display_spectrum_idx = findfirst(s -> s.id == selected_spectrum_id_for_plot, current_spectra)
+                if display_spectrum_idx !== nothing
+                    processed_spectrum = current_spectra[display_spectrum_idx]
+                    println("DEBUG: Displaying spectrum $(selected_spectrum_id_for_plot) after processing.")
+                    
+                    after_trace = PlotlyBase.scatter(
+                        x=processed_spectrum.mz, 
+                        y=processed_spectrum.intensity, 
+                        mode="lines", 
+                        name="Processed Spectrum"
                     )
-                    push!(traces_after, peak_trace)
-                    println("DEBUG: $(length(processed_spectrum.peaks)) peaks picked for spectrum $(selected_spectrum_id_for_plot).")
+                    
+                    traces_after = [after_trace]
+
+                    if !isempty(processed_spectrum.peaks)
+                        peak_mzs = [p.mz for p in processed_spectrum.peaks]
+                        peak_intensities = [p.intensity for p in processed_spectrum.peaks]
+                        peak_trace = PlotlyBase.scatter(
+                            x=peak_mzs, 
+                            y=peak_intensities, 
+                            mode="markers", 
+                            name="Picked Peaks", 
+                            marker=attr(color="red", size=8)
+                        )
+                        push!(traces_after, peak_trace)
+                    end
+                    
+                    plotdata_after = traces_after
+                    plotlayout_after = PlotlyBase.Layout(
+                        title="After Preprocessing (Spectrum $(selected_spectrum_id_for_plot))$(subset_label)",
+                        xaxis_title="m/z",
+                        yaxis_title="Intensity",
+                        legend=attr(x=0.98, y=0.98, xanchor="right", yanchor="top")
+                    )
                 else
-                    println("DEBUG: No peaks picked for spectrum $(selected_spectrum_id_for_plot).")
+                    println("DEBUG: Selected spectrum for display ($(selected_spectrum_id_for_plot)) not found in processed spectra.")
                 end
-                
-                plotdata_after = traces_after
+            elseif last_plot_type == "mean"
+                mz, intensity = get_processed_mean_spectrum(current_spectra)
+                plotdata_after = [PlotlyBase.scatter(x=mz, y=intensity, mode="lines", name="Processed Mean Spectrum")]
                 plotlayout_after = PlotlyBase.Layout(
-                    title="After Preprocessing (Spectrum $(selected_spectrum_id_for_plot))",
+                    title="After Preprocessing (Mean Spectrum)$(subset_label)",
                     xaxis_title="m/z",
-                    yaxis_title="Intensity"
+                    yaxis_title="Average Intensity",
+                    legend=attr(x=0.98, y=0.98, xanchor="right", yanchor="top")
                 )
-            else
-                println("DEBUG: Selected spectrum for display ($(selected_spectrum_id_for_plot)) not found in processed spectra.")
+            elseif last_plot_type == "sum"
+                mz, intensity = get_processed_sum_spectrum(current_spectra)
+                plotdata_after = [PlotlyBase.scatter(x=mz, y=intensity, mode="lines", name="Processed Sum Spectrum")]
+                plotlayout_after = PlotlyBase.Layout(
+                    title="After Preprocessing (Sum Spectrum)$(subset_label)",
+                    xaxis_title="m/z",
+                    yaxis_title="Total Intensity",
+                    legend=attr(x=0.98, y=0.98, xanchor="right", yanchor="top")
+                )
             end
 
             # Save feature matrix if binning was performed
@@ -1334,7 +1500,7 @@ end
             @error "Pipeline failed" exception=(e, catch_backtrace())
             println("DEBUG: Pipeline caught an exception: $e")
         finally
-            progressPrep = false
+            is_processing = false
             current_pipeline_step = ""
             println("DEBUG: run_full_pipeline finished (finally block).")
             GC.gc() # Trigger garbage collection
@@ -1345,6 +1511,7 @@ end
     end
 
     @onbutton recalculate_suggestions_btn begin
+        is_processing = true
         if msi_data === nothing
             msg = "Please load a file first."
             warning_msg = true
@@ -1353,10 +1520,10 @@ end
         
         try
             msg = "Recalculating suggestions..."
-            progressPrep = true
             
             ref_peaks = Dict(p["mz"] => p["label"] for p in reference_peaks_list)
             recommended_params = main_precalculation(msi_data, reference_peaks=ref_peaks)
+            
 
             for (step_name, params) in recommended_params
                 for (param_key, value) in params
@@ -1511,17 +1678,20 @@ end
             warning_msg = true
             @error "Recalculation failed" exception=(e, catch_backtrace())
         finally
-            progressPrep = false
+            is_processing = false
         end
     end
 
     @onbutton addReferencePeak begin
+        is_processing = true
         new_list = deepcopy(reference_peaks_list)
         push!(new_list, Dict("mz" => 0.0, "label" => ""))
         reference_peaks_list = new_list # Assign new list to trigger reactivity
+        is_processing = false
     end
 
     @onbutton remove_peak_trigger begin
+        is_processing = true
         if action_index > -1
             julia_index = action_index + 1
             new_list = deepcopy(reference_peaks_list)
@@ -1531,9 +1701,11 @@ end
             end
             action_index = -1 # Reset
         end
+        is_processing = false
     end
 
     @onbutton move_step_up_trigger begin
+        is_processing = true
         if action_index > -1
             julia_index = action_index + 1
             if julia_index > 1
@@ -1545,9 +1717,11 @@ end
             end
             action_index = -1 # Reset
         end
+        is_processing = false
     end
 
     @onbutton move_step_down_trigger begin
+        is_processing = true
         if action_index > -1
             julia_index = action_index + 1
             if julia_index < length(pipeline_step_order)
@@ -1559,9 +1733,11 @@ end
             end
             action_index = -1 # Reset
         end
+        is_processing = false
     end
     
     @onbutton toggle_step_trigger begin
+        is_processing = true
         if action_index > -1
             julia_index = action_index + 1
             if 1 <= julia_index <= length(pipeline_step_order)
@@ -1571,10 +1747,12 @@ end
             end
             action_index = -1 # Reset
         end
+        is_processing = false
     end
 
     # This new handler correctly adds the file from full_route to the batch list.
     @onbutton btnAddBatch begin
+        is_processing = true
         if isempty(full_route) || full_route == "unknown (manually added)"
             msg = "No active file selected to add to batch."
             warning_msg = true
@@ -1590,12 +1768,15 @@ end
             msg = "File is already in the batch list."
             warning_msg = true
         end
+        is_processing = false
     end
 
     @onbutton clear_batch_btn begin
+        is_processing = true
         selected_files = String[]
         batch_file_count = 0
         msg = "Batch cleared"
+        is_processing = false
     end
 
     @onchange selected_files begin
@@ -1642,6 +1823,7 @@ end
     end
 
     @onchange btnSearchMzml, btnSearchSync begin
+        is_processing = true
         if btnSearchMzml
             picked_route = pick_file(; filterlist="mzML,mzml")
             if !isempty(picked_route)
@@ -1660,17 +1842,17 @@ end
 
         # Enable button only if both files are selected
         btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
+        is_processing = false
     end
 
     @onbutton convert_process begin
+        is_processing = true
         if isempty(mzml_full_route) || isempty(sync_full_route)
             msg_conversion = "Please select both an .mzML file and a .txt sync file."
             warning_msg = true
             return
         end
 
-        progress_conversion = true
-        btnConvertDisable = true
         msg_conversion = "Starting conversion process..."
 
         try
@@ -1696,7 +1878,7 @@ end
             warning_msg = true
             @error "Conversion failed" exception=(e, catch_backtrace())
         finally
-            progress_conversion = false
+            is_processing = false
             # Re-enable button if files are still selected
             btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
         end
@@ -1704,10 +1886,6 @@ end
     
     @onbutton mainProcess @time begin
         # --- UI State Update ---
-        progress = true
-        btnStartDisable = true
-        btnPlotDisable = true
-        btnSpectraDisable = true
         overall_progress = 0.0
         progress_message = "Preparing batch process..."
 
@@ -1732,6 +1910,7 @@ end
                 println(progress_message)
                 return
             end
+            is_processing = true
 
             masses = Float64[]
             try
@@ -1877,14 +2056,10 @@ end
             @error "Main process failed" exception=(e, catch_backtrace())
         finally
             # --- UI State Reset ---
-            progress = false
-            btnStartDisable = false
-            btnPlotDisable = false
-            btnOpticalDisable = false
-            btnSpectraDisable = false
+            is_processing = false
             SpectraEnabled = true
             overall_progress = 0.0
-            println("Done")
+            #println("Done")
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
@@ -1899,10 +2074,7 @@ end
             return
         end
 
-        progressSpectraPlot = true
-        btnPlotDisable = true
-        btnStartDisable = true
-        msg = "Loading plot for $(selected_folder_main)..."
+        is_processing = true
 
         try
             sTime = time()
@@ -1946,21 +2118,19 @@ end
             plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
+            last_plot_type = "mean"
             selectedTab = "tab2"
             fTime = time()
             eTime = round(fTime - sTime, digits=3)
             msg = "Plot loaded in $(eTime) seconds"
             log_memory_usage("Mean Plot Generated", msi_data)
         catch e
-            msg = "Could not generate mean spectrum plot: $e"
-            warning_msg = true
-            @error "Mean spectrum plotting failed" exception=(e, catch_backtrace())
-        finally
-            progressSpectraPlot = false
-            btnPlotDisable = false
-            btnSpectraDisable = false
-            btnStartDisable = false
-            GC.gc() # Trigger garbage collection
+                    msg = "Could not generate mean spectrum plot: $e"
+                    warning_msg = true
+                    @error "Mean spectrum plotting failed" exception=(e, catch_backtrace())
+                finally
+                    is_processing = false
+                    GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
             end
@@ -1974,9 +2144,7 @@ end
             return
         end
 
-        progressSpectraPlot = true
-        btnPlotDisable = true
-        btnStartDisable = true
+        is_processing = true
         msg = "Loading total spectrum plot for $(selected_folder_main)..."
         
         try
@@ -2020,6 +2188,7 @@ end
             plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
+            last_plot_type = "sum"
             selectedTab = "tab2"
             fTime = time()
             eTime = round(fTime - sTime, digits=3)
@@ -2030,10 +2199,7 @@ end
             warning_msg = true
             @error "Total spectrum plotting failed" exception=(e, catch_backtrace())
         finally
-            progressSpectraPlot = false
-            btnPlotDisable = false
-            btnSpectraDisable = false
-            btnStartDisable = false
+            is_processing = false
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
@@ -2048,10 +2214,7 @@ end
             return
         end
 
-        progressSpectraPlot = true
-        btnStartDisable = true
-        btnPlotDisable = true
-        btnSpectraDisable = true
+        is_processing = true
         msg = "Loading plot for $(selected_folder_main)..."
 
         try
@@ -2106,6 +2269,7 @@ end
             plotdata, plotlayout, xSpectraMz, ySpectraMz, spectrum_id = xySpectrumPlot(msi_data, xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
+            last_plot_type = "single"
             selected_spectrum_id_for_plot = spectrum_id
             idSpectrum = spectrum_id # we set the same obtained spectrum id to the UI
             
@@ -2149,10 +2313,7 @@ end
             warning_msg = true
             @error "Spectrum plotting failed" exception=(e, catch_backtrace())
         finally
-            progressSpectraPlot = false
-            btnPlotDisable = false
-            btnSpectraDisable = false
-            btnStartDisable = false
+            is_processing = false
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
@@ -2167,10 +2328,7 @@ end
             return
         end
 
-        progressSpectraPlot = true
-        btnStartDisable = true
-        btnPlotDisable = true
-        btnSpectraDisable = true
+        is_processing = true
         msg = "Loading plot for $(selected_folder_main)..."
 
         try
@@ -2224,6 +2382,7 @@ end
             plotdata, plotlayout, xSpectraMz, ySpectraMz, spectrum_id = nSpectrumPlot(msi_data, idSpectrum, selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
+            last_plot_type = "single"
             selected_spectrum_id_for_plot = spectrum_id
             
             selectedTab = "tab2"
@@ -2236,10 +2395,7 @@ end
             warning_msg = true
             @error "nSpectrum plotting failed" exception=(e, catch_backtrace())
         finally
-            progressSpectraPlot = false
-            btnPlotDisable = false
-            btnSpectraDisable = false
-            btnStartDisable = false
+            is_processing = false
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
@@ -2268,7 +2424,6 @@ end
             text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
             msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
             plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
-            btnOpticalDisable = false
         end
     end
     @onbutton imgPlus begin
@@ -2290,7 +2445,6 @@ end
             text_nmass = replace(current_msi, r"MSI_|.bmp" => "")
             msgimg = "<i>m/z</i>: $(replace(text_nmass, "_" => "."))"
             plotdataImg, plotlayoutImg, _, _ = loadImgPlot(imgInt)
-            btnOpticalDisable = false
         end
     end
 
@@ -2313,7 +2467,6 @@ end
             text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
             msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
             plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
-            btnOpticalDisable = false
         end
     end
     @onbutton imgPlusT begin
@@ -2335,7 +2488,6 @@ end
             text_nmass = replace(current_triq, r"TrIQ_|.bmp" => "")
             msgtriq = "TrIQ <i>m/z</i>: $(replace(text_nmass, "_" => "."))"
             plotdataImgT, plotlayoutImgT, _, _ = loadImgPlot(imgIntT)
-            btnOpticalDisable = false
         end
     end
 
@@ -2726,11 +2878,7 @@ end
             warning_msg = true
             return
         end
-
-        progressPlot = true
-        btnPlotDisable = true
-        btnStartDisable = true
-        btnSpectraDisable = true
+        is_processing = true
 
         try
             # --- Get Mask Path ---
@@ -2766,10 +2914,7 @@ end
             warning_msg = true
             @error "3D plot generation failed" exception=(e, catch_backtrace())
         finally
-            progressPlot=false
-            btnPlotDisable=false
-            btnStartDisable=false
-            btnSpectraDisable=false
+            is_processing = true
             SpectraEnabled=true
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
@@ -2790,10 +2935,7 @@ end
             return
         end
 
-        progressPlot = true
-        btnPlotDisable = true
-        btnStartDisable = true
-        btnSpectraDisable = true
+        is_processing = true
 
         try
             # --- Get Mask Path ---
@@ -2829,10 +2971,7 @@ end
             warning_msg = true
             @error "3D TrIQ plot generation failed" exception=(e, catch_backtrace())
         finally
-            progressPlot=false
-            btnPlotDisable=false
-            btnStartDisable=false
-            btnSpectraDisable=false
+            is_processing = true
             SpectraEnabled=true
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
@@ -2854,10 +2993,7 @@ end
             return
         end
 
-        progressPlot=true
-        btnPlotDisable=true
-        btnStartDisable=true
-        btnSpectraDisable=true
+        is_processing = true
         
         try
             sTime=time()
@@ -2874,10 +3010,7 @@ end
             msg="Failed to load and process image: $e"
             warning_msg=true
         finally
-            progressPlot=false
-            btnPlotDisable=false
-            btnStartDisable=false
-            btnSpectraDisable=false
+            is_processing = true
             SpectraEnabled=true
             GC.gc()
             if Sys.islinux()
@@ -2898,10 +3031,7 @@ end
             return
         end
 
-        progressPlot=true
-        btnPlotDisable=true
-        btnStartDisable=true
-        btnSpectraDisable=true
+        is_processing = true
         
         try
             sTime=time()
@@ -2918,10 +3048,7 @@ end
             msg="Failed to load and process image: $e"
             warning_msg=true
         finally
-            progressPlot=false
-            btnPlotDisable=false
-            btnStartDisable=false
-            btnSpectraDisable=false
+            is_processing = true
             SpectraEnabled=true
             GC.gc()
             if Sys.islinux()
@@ -3040,6 +3167,7 @@ end
     end
 
     @onbutton btnOptical begin
+        is_processing = true
         imgRoute=pick_file(; filterlist="png,bmp,jpg,jpeg")
         if imgRoute==""
             msg="No optical image selected"
@@ -3050,10 +3178,11 @@ end
             save("./public/css/imgOver.png",img)
             plotdataImg, plotlayoutImg, imgWidth, imgHeight=loadImgPlot(imgInt,"/css/imgOver.png",imgTrans)
         end
-        
+        is_processing = false
     end
 
     @onbutton btnOpticalT begin
+        is_processing = true
         imgRoute=pick_file(; filterlist="png,bmp,jpg,jpeg")
         if imgRoute==""
             msg="No optical image selected"
@@ -3065,6 +3194,7 @@ end
             plotdataImgT, plotlayoutImgT, imgWidth, imgHeight=loadImgPlot(imgIntT,"/css/imgOver.png",imgTrans)
             opticalOverTriq=true
         end
+        is_processing = false
     end
 
     @onchange imgTrans begin
@@ -3088,6 +3218,7 @@ end
     end
 
     @onbutton refetch_folders begin
+        is_processing = true
         # Re-load registry and update folder lists
         registry = load_registry(registry_path)
         all_folders = sort(collect(keys(registry)), lt=natural)
@@ -3116,11 +3247,13 @@ end
                 selected_folder_metadata = first(available_folders)
             end
         end
+        is_processing = false
     end
 
     @mounted watchplots()
 
     @onchange isready @time begin
+        # is_processing = true
         if isready && !registry_init_done
             initialization_message = "Pre-compiling functions at startup..."
             warmup_init()
@@ -3180,7 +3313,7 @@ end
         initialization_message = "Done."
         log_memory_usage("App Ready", msi_data)
     end
-
+    # is_processing = false
     GC.gc() # Trigger garbage collection
     if Sys.islinux()
         ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure julia returns the freed memory to OS
