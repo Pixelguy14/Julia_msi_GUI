@@ -708,7 +708,7 @@
             <h6>Image visualizer</h6>
             <div class="row items-center">
               <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
-                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
               <q-space></q-space>
               <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinus=true" :disable="is_processing"></q-btn>
               <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlus=true" :disable="is_processing"></q-btn>
@@ -731,7 +731,7 @@
             <h6>TrIQ visualizer</h6>
             <div class="row items-center">
               <q-select v-model="selected_folder_main" :options="image_available_folders" label="Select Dataset"
-                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
               <q-space></q-space>
               <q-btn icon="arrow_back" class="q-my-sm btn-style" v-on:click="imgMinusT=true" :disable="is_processing"></q-btn>
               <q-btn icon="arrow_forward" class="q-my-sm on-right btn-style" v-on:click="imgPlusT=true" :disable="is_processing"></q-btn>
@@ -752,7 +752,7 @@
           <q-tab-panel name="tab2">
             <div class="row items-center">
               <q-select v-model="selected_folder_main" :options="available_folders" label="Select Dataset"
-                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
+                class="q-ma-sm" style="min-width: 200px;" v-on:focus="refetch_folders = true"></q-select>
               <q-btn-dropdown class="q-ma-sm btn-style" :loading="is_processing" :disable="is_processing"
                 label="Generate Spectra" icon="play_arrow">
                 <template v-slot:loading>
@@ -1002,7 +1002,7 @@
       <div class="text-h6">Dataset Summary</div>
       <q-space />
       <q-select v-model="selected_folder_metadata" :options="available_folders" label="Select Dataset" class="q-ma-sm"
-        style="min-width: 250px;" standout="custom-standout" v-on:focus="refetch_folders = true" :disable="is_processing"></q-select>
+        style="min-width: 250px;" standout="custom-standout" v-on:focus="refetch_folders = true"></q-select>
     </q-card-section>
 
     <q-card-section class="q-pt-none">

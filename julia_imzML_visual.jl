@@ -550,12 +550,13 @@ function meanSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Uni
         layout.title.text = "Empty " * layout.title.text
     else
         df = data.spectrum_stats_df
-        profile_count = 0
-        if df !== nothing && hasproperty(df, :Mode)
+        plot_as_lines = false # Default to stem for safety if no mode info
+        if df !== nothing && hasproperty(df, :Mode) && !isempty(df.Mode)
             profile_count = count(==(MSI_src.PROFILE), df.Mode)
+            plot_as_lines = profile_count > length(df.Mode) / 2
         end
 
-        if profile_count > 0
+        if plot_as_lines
             trace = PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
         else
             trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
@@ -715,7 +716,7 @@ Generates a plot for a spectrum specified by its linear `id` for any type of MSI
 function nSpectrumPlot(data::MSIData, id::Int, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
     local mz::AbstractVector, intensity::AbstractVector
     local plot_title::String
-    local spectrum_mode = MSI_src.CENTROID # Default to centroid
+    local spectrum_mode = MSI_src.PROFILE # Default to profile
     local spectrum_id::Int = id # Spectrum ID is the input id
 
     # Validate ID
@@ -848,12 +849,13 @@ function sumSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Unio
         layout.title.text = "Empty " * layout.title.text
     else
         df = data.spectrum_stats_df
-        profile_count = 0
-        if df !== nothing && hasproperty(df, :Mode)
+        plot_as_lines = false # Default to stem for safety
+        if df !== nothing && hasproperty(df, :Mode) && !isempty(df.Mode)
             profile_count = count(==(MSI_src.PROFILE), df.Mode)
+            plot_as_lines = profile_count > length(df.Mode) / 2
         end
 
-        if profile_count > 0
+        if plot_as_lines
             trace = PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
         else
             trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")

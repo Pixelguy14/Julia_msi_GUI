@@ -352,6 +352,7 @@ end
     # Preprocessing results
     @in selected_spectrum_id_for_plot = 1
     @in last_plot_type = "single"
+    @in last_plot_mode = "lines"
     @in feature_matrix_result::Union{Nothing, Matrix{Float64}} = nothing
     @in bin_info_result::Union{Nothing, Vector} = nothing
 
@@ -625,6 +626,17 @@ end
             return
         end
 
+        # --- Close previous dataset if one is open ---
+        if msi_data !== nothing
+            println("DEBUG: Closing previously loaded dataset before opening new one: $(basename(full_route))")
+            close(msi_data)
+            msi_data = nothing
+            GC.gc()
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
+            end
+        end
+
         msg = "Opening file: $(basename(picked_route))..."
 
         try
@@ -679,7 +691,7 @@ end
             loaded_data = OpenMSIData(local_full_route)
             is_imzML = loaded_data.source isa ImzMLSource
 
-            if isempty(get(existing_entry, "metadata", Dict()))
+            if existing_entry == nothing
                 msg = "Performing first-time metadata analysis for: $(basename(picked_route))..."
                 precompute_analytics(loaded_data)
             end
@@ -889,6 +901,18 @@ end
 
             selected_folder_main = dataset_name
             msi_data = loaded_data
+
+            # Determine plot mode from loaded data
+            df = msi_data.spectrum_stats_df
+            if df !== nothing && "Mode" in names(df)
+                profile_count = count(==(MSI_src.PROFILE), df.Mode)
+                total_count = length(df.Mode)
+                last_plot_mode = profile_count > total_count / 2 ? "lines" : "stem"
+                println("DEBUG: Auto-detected plot mode: $(last_plot_mode)")
+            else
+                last_plot_mode = "lines" # Default
+            end
+
             log_memory_usage("Full Load", msi_data)
 
             eTime = round(time() - sTime, digits=3)
@@ -1093,7 +1117,7 @@ end
         try
             # --- 1. Initial Checks and Data Loading ---
             println("DEBUG: Performing initial checks and data loading...")
-            if msi_data === nothing || isempty(selected_folder_main)
+            if isempty(selected_folder_main)
                 msg = "No dataset loaded. Please load a file using 'Select an imzMl / mzML file'."
                 warning_msg = true
                 println("DEBUG: $msg")
@@ -1111,13 +1135,24 @@ end
             end
             target_path = entry["source_path"]
 
-            # Ensure msi_data is for the currently selected file
-            if full_route != target_path
-                println("DEBUG: Active file path changed. Reloading MSI data: $(basename(target_path))")
+            # Ensure msi_data is for the currently selected file and load if needed
+            if msi_data === nothing || full_route != target_path
+                println("DEBUG: Active file path changed or data not in memory. Reloading MSI data: $(basename(target_path))")
                 if msi_data !== nothing; close(msi_data); end
                 msg = "Reloading $(basename(target_path)) for analysis..."
                 full_route = target_path
                 msi_data = OpenMSIData(target_path)
+                
+                # Determine plot mode from loaded data
+                df = msi_data.spectrum_stats_df
+                if df !== nothing && "Mode" in names(df)
+                    profile_count = count(==(MSI_src.PROFILE), df.Mode)
+                    total_count = length(df.Mode)
+                    last_plot_mode = profile_count > total_count / 2 ? "lines" : "stem"
+                    println("DEBUG: Auto-detected plot mode for pipeline: $(last_plot_mode)")
+                else
+                    last_plot_mode = "lines" # Default
+                end
             else
                 println("DEBUG: Using already loaded MSI data for $(basename(target_path)).")
             end
@@ -1422,7 +1457,7 @@ end
             # 4. Update Results Display
             current_pipeline_step = "Updating results..."
             subset_label = enable_subset_processing ? " (from subset of $(length(current_spectra)) spectra)" : ""
-            println("DEBUG: Updating results display after pipeline completion for plot type: $(last_plot_type)")
+            println("DEBUG: Updating results display after pipeline completion for plot type: $(last_plot_type), mode: $(last_plot_mode)")
 
             if last_plot_type == "single"
                 display_spectrum_idx = findfirst(s -> s.id == selected_spectrum_id_for_plot, current_spectra)
@@ -1430,12 +1465,35 @@ end
                     processed_spectrum = current_spectra[display_spectrum_idx]
                     println("DEBUG: Displaying spectrum $(selected_spectrum_id_for_plot) after processing.")
                     
-                    after_trace = PlotlyBase.scatter(
-                        x=processed_spectrum.mz, 
-                        y=processed_spectrum.intensity, 
-                        mode="lines", 
-                        name="Processed Spectrum"
-                    )
+                    # Determine plot mode for this specific spectrum
+                    spectrum_mode_for_plot = "lines" # Default to lines
+                    if msi_data.spectrum_stats_df !== nothing && "Mode" in names(msi_data.spectrum_stats_df)
+                        if selected_spectrum_id_for_plot > 0 && selected_spectrum_id_for_plot <= length(msi_data.spectrum_stats_df.Mode)
+                            mode = msi_data.spectrum_stats_df.Mode[selected_spectrum_id_for_plot]
+                            if mode == MSI_src.CENTROID
+                                spectrum_mode_for_plot = "stem"
+                            end
+                        end
+                    end
+                    
+                    mz_down, int_down = downsample_spectrum(processed_spectrum.mz, processed_spectrum.intensity)
+                    
+                    local after_trace
+                    if spectrum_mode_for_plot == "stem"
+                        after_trace = PlotlyBase.stem(
+                            x=mz_down, 
+                            y=int_down, 
+                            name="Processed Spectrum", 
+                            marker=attr(size=1, color="blue", opacity=0)
+                        )
+                    else # lines
+                        after_trace = PlotlyBase.scatter(
+                            x=mz_down, 
+                            y=int_down, 
+                            mode="lines", 
+                            name="Processed Spectrum"
+                        )
+                    end
                     
                     traces_after = [after_trace]
 
@@ -1454,9 +1512,25 @@ end
                     
                     plotdata_after = traces_after
                     plotlayout_after = PlotlyBase.Layout(
-                        title="After Preprocessing (Spectrum $(selected_spectrum_id_for_plot))$(subset_label)",
-                        xaxis_title="m/z",
-                        yaxis_title="Intensity",
+                        title=PlotlyBase.attr(
+                            text="After Preprocessing (Spectrum $(selected_spectrum_id_for_plot))$(subset_label)",
+                            font=PlotlyBase.attr(
+                                family="Roboto, Lato, sans-serif",
+                                size=18,
+                                color="black"
+                            )
+                        ),
+                        hovermode="closest",
+                        xaxis=PlotlyBase.attr(
+                            title="<i>m/z</i>",
+                            showgrid=true
+                        ),
+                        yaxis=PlotlyBase.attr(
+                            title="Intensity",
+                            showgrid=true,
+                            tickformat=".3g"
+                        ),
+                        margin=attr(l=0, r=0, t=120, b=0, pad=0),
                         legend=attr(x=0.98, y=0.98, xanchor="right", yanchor="top")
                     )
                 else
@@ -1464,21 +1538,97 @@ end
                 end
             elseif last_plot_type == "mean"
                 mz, intensity = get_processed_mean_spectrum(current_spectra)
-                plotdata_after = [PlotlyBase.scatter(x=mz, y=intensity, mode="lines", name="Processed Mean Spectrum")]
+                mz_down, int_down = downsample_spectrum(mz, intensity)
+                local trace
+                if last_plot_mode == "stem"
+                    trace = PlotlyBase.stem(
+                        x=mz_down, 
+                        y=int_down, 
+                        name="Processed Mean Spectrum",
+                        marker=attr(size=1, color="blue", opacity=0.5),
+                        hoverinfo="x",
+                        hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>"
+                    )
+                else
+                    trace = PlotlyBase.scatter(
+                        x=mz_down, 
+                        y=int_down, 
+                        mode="lines", 
+                        name="Processed Mean Spectrum",
+                        marker=attr(size=1, color="blue", opacity=0.5),
+                        hoverinfo="x",
+                        hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>"
+                    )
+                end
+                plotdata_after = [trace]
                 plotlayout_after = PlotlyBase.Layout(
-                    title="After Preprocessing (Mean Spectrum)$(subset_label)",
-                    xaxis_title="m/z",
-                    yaxis_title="Average Intensity",
-                    legend=attr(x=0.98, y=0.98, xanchor="right", yanchor="top")
+                    title=PlotlyBase.attr(
+                        text="After Preprocessing (Mean Spectrum)$(subset_label)",
+                        font=PlotlyBase.attr(
+                            family="Roboto, Lato, sans-serif",
+                            size=18,
+                            color="black"
+                        )
+                    ),
+                    hovermode="closest",
+                    xaxis=PlotlyBase.attr(
+                        title="<i>m/z</i>",
+                        showgrid=true
+                    ),
+                    yaxis=PlotlyBase.attr(
+                        title="Average Intensity",
+                        showgrid=true,
+                        tickformat=".3g"
+                    ),
+                    margin=attr(l=0, r=0, t=120, b=0, pad=0),
+                    legend=attr(x=1.0, y=1.0, xanchor="right", yanchor="top")
                 )
             elseif last_plot_type == "sum"
                 mz, intensity = get_processed_sum_spectrum(current_spectra)
-                plotdata_after = [PlotlyBase.scatter(x=mz, y=intensity, mode="lines", name="Processed Sum Spectrum")]
+                mz_down, int_down = downsample_spectrum(mz, intensity)
+                local trace
+                if last_plot_mode == "stem"
+                    trace = PlotlyBase.stem(
+                        x=mz_down, 
+                        y=int_down, 
+                        name="Processed Sum Spectrum",
+                        marker=attr(size=1, color="blue", opacity=0.5),
+                        hoverinfo="x",
+                        hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>"
+                    )
+                else
+                    trace = PlotlyBase.scatter(
+                        x=mz_down, 
+                        y=int_down, 
+                        mode="lines", 
+                        name="Processed Sum Spectrum",
+                        marker=attr(size=1, color="blue", opacity=0.5),
+                        hoverinfo="x",
+                        hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>"
+                    )
+                end
+                plotdata_after = [trace]
                 plotlayout_after = PlotlyBase.Layout(
-                    title="After Preprocessing (Sum Spectrum)$(subset_label)",
-                    xaxis_title="m/z",
-                    yaxis_title="Total Intensity",
-                    legend=attr(x=0.98, y=0.98, xanchor="right", yanchor="top")
+                    title=PlotlyBase.attr(
+                        text="After Preprocessing (Sum Spectrum)$(subset_label)",
+                        font=PlotlyBase.attr(
+                            family="Roboto, Lato, sans-serif",
+                            size=18,
+                            color="black"
+                        )
+                    ),
+                    hovermode="closest",
+                    xaxis=PlotlyBase.attr(
+                        title="<i>m/z</i>",
+                        showgrid=true
+                    ),
+                    yaxis=PlotlyBase.attr(
+                        title="Total Intensity",
+                        showgrid=true,
+                        tickformat=".3g"
+                    ),
+                    margin=attr(l=0, r=0, t=120, b=0, pad=0),
+                    legend=attr(x=1.0, y=1.0, xanchor="right", yanchor="top")
                 )
             end
 
@@ -2670,15 +2820,8 @@ end
 
     # This handler will now correctly load the first image from the newly selected folder.
     @onchange selected_folder_main begin
-        if msi_data !== nothing
-            close(msi_data)
-        end
-        msi_data = nothing
-        log_memory_usage("Folder Changed (msi_data cleared)", msi_data)
-        GC.gc() # Trigger garbage collection
-        if Sys.islinux()
-            ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
-        end
+        # The msi_data object lifecycle is managed by the btnSearch handler.
+        # This handler is now only for updating the UI images when the folder changes.
 
         if !isempty(selected_folder_main)
             folder_path = joinpath("public", selected_folder_main)
@@ -2914,7 +3057,7 @@ end
             warning_msg = true
             @error "3D plot generation failed" exception=(e, catch_backtrace())
         finally
-            is_processing = true
+            is_processing = false
             SpectraEnabled=true
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
@@ -2971,7 +3114,7 @@ end
             warning_msg = true
             @error "3D TrIQ plot generation failed" exception=(e, catch_backtrace())
         finally
-            is_processing = true
+            is_processing = false
             SpectraEnabled=true
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
@@ -3010,7 +3153,7 @@ end
             msg="Failed to load and process image: $e"
             warning_msg=true
         finally
-            is_processing = true
+            is_processing = false
             SpectraEnabled=true
             GC.gc()
             if Sys.islinux()
@@ -3048,7 +3191,7 @@ end
             msg="Failed to load and process image: $e"
             warning_msg=true
         finally
-            is_processing = true
+            is_processing = false
             SpectraEnabled=true
             GC.gc()
             if Sys.islinux()
@@ -3065,16 +3208,21 @@ end
     @onchange Nmass begin
         if !isempty(xSpectraMz)
             df = msi_data.spectrum_stats_df
-            profile_count = 0
-            if df !== nothing && hasproperty(df, :Mode)
+            plot_as_lines = false # Default to stem
+            if df !== nothing && hasproperty(df, :Mode) && !isempty(df.Mode)
                 profile_count = count(==(MSI_src.PROFILE), df.Mode)
+                plot_as_lines = profile_count > length(df.Mode) / 2
             end
 
-            if profile_count > 0
+            # Downsample for plotting performance
+            mz_down, int_down = MSI_src.downsample_spectrum(xSpectraMz, ySpectraMz)
+
+            local traceSpectra
+            if plot_as_lines
                 # Main spectrum trace
                 traceSpectra = PlotlyBase.scatter(
-                    x=xSpectraMz, 
-                    y=ySpectraMz, 
+                    x=mz_down, 
+                    y=int_down, 
                     marker=attr(size=1, color="blue", opacity=0.5), 
                     name="Spectrum", 
                     hoverinfo="x", 
@@ -3084,8 +3232,8 @@ end
             else
                 # Main spectrum trace
                 traceSpectra = PlotlyBase.stem(
-                    x=xSpectraMz, 
-                    y=ySpectraMz, 
+                    x=mz_down, 
+                    y=int_down, 
                     marker=attr(size=1, color="blue", opacity=0.5), 
                     name="Spectrum", 
                     hoverinfo="x", 
@@ -3252,14 +3400,15 @@ end
 
     @mounted watchplots()
 
-    @onchange isready @time begin
+    @onchange isready begin
         # is_processing = true
         if isready && !registry_init_done
-            initialization_message = "Pre-compiling functions at startup..."
+            sTime=time()
+            msg = "Pre-compiling functions at startup..."
             warmup_init()
-            initialization_message = "Pre-compilation finished."
+            msg = "Pre-compilation finished."
             try
-                initialization_message = "Synchronizing registry with filesystem on backend init..."
+                msg = "Synchronizing registry with filesystem on backend init..."
                 reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
                 registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
 
@@ -3288,7 +3437,7 @@ end
                 end
 
                 if !isempty(new_folders) || !isempty(removed_folders)
-                    initialization_message = "Registry changed, saving..."
+                    msg = "Registry changed, saving..."
                     save_registry(reg_path, registry)
                 end
                 
@@ -3309,8 +3458,10 @@ end
                 is_initializing = false # Hide loading screen when initialization is complete
             end
         end
+        fTime=time()
+        eTime=round(fTime-sTime,digits=3)
         is_initializing = false # Hide loading screen when initialization is complete (current code is hidden due to incompatibility)
-        initialization_message = "Done."
+        msg = "The app took $(eTime) seconds to get ready."
         log_memory_usage("App Ready", msi_data)
     end
     # is_processing = false

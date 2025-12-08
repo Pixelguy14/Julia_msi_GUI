@@ -1,8 +1,8 @@
 using Pkg
 sTime=time()
 Pkg.activate(".")
-#ENV["GENIE_ENV"] = "dev"
-ENV["GENIE_ENV"] = "prod"
+ENV["GENIE_ENV"] = "dev"
+#ENV["GENIE_ENV"] = "prod"
 
 manifest_path = joinpath(@__DIR__, "Manifest.toml")
 

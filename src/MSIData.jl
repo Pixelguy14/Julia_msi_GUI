@@ -6,9 +6,43 @@ including caching and iteration logic, for handling large mzML and imzML dataset
 efficiently.
 """
 
-using Base64, Libz, Serialization, Printf, DataFrames, Base.Threads, StatsBase # For reading binary data
+using Base64, Libz, Serialization, Printf, DataFrames, Base.Threads, StatsBase
+using .Platform # Import the new Platform module
 
 const FILE_HANDLE_LOCK = ReentrantLock()
+
+"""
+    calculate_optimal_analytics_chunk_size(total_spectra::Int, system_caps::NamedTuple) -> Int
+
+Calculates an optimal chunk size for analytics processing based on total number of spectra
+and detected system capabilities (total memory, number of CPU threads).
+
+The heuristic aims to balance memory usage and parallelism:
+- Smaller chunks for less memory or fewer threads.
+- Larger chunks for more memory or more threads, but with a practical upper limit.
+"""
+function calculate_optimal_analytics_chunk_size(total_spectra::Int, system_caps::NamedTuple)::Int
+    # Base chunk size - can be refined with more profiling
+    base_chunk_size = 5000
+
+    # Adjust based on available RAM (heuristic: more RAM, larger chunks)
+    # Assume 1GB RAM can handle a certain chunk size comfortably
+    # E.g., for 32GB RAM, allow 2x more than for 16GB
+    memory_factor = max(1.0, system_caps.total_memory_gb / 16.0) # Scale based on 16GB baseline
+
+    # Adjust based on CPU threads (heuristic: more threads, potentially more, smaller chunks to keep threads busy, or fewer large chunks)
+    # A simple approach for now: scale with sqrt of threads to avoid overly large chunks with many threads
+    thread_factor = max(1.0, sqrt(system_caps.num_cpu_threads / 4.0)) # Scale based on 4-thread baseline
+
+    # Combine factors, with a practical minimum and maximum
+    dynamic_chunk_size = round(Int, base_chunk_size * memory_factor * thread_factor)
+    
+    # Ensure chunk size is within reasonable bounds
+    min_chunk_size = 500
+    max_chunk_size = 20000
+
+    return clamp(dynamic_chunk_size, min_chunk_size, max_chunk_size)
+end
 
 """
     ThreadSafeFileHandle
@@ -737,7 +771,7 @@ function precompute_analytics(msi_data::MSIData)
         bloom_filters = nothing
 
         # Process in chunks to reduce memory pressure
-        chunk_size = min(1000, num_spectra)
+        chunk_size = min(10000, num_spectra)
         
         for chunk_start in 1:chunk_size:num_spectra
             chunk_end = min(chunk_start + chunk_size - 1, num_spectra)

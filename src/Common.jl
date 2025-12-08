@@ -129,7 +129,7 @@ end
 # --- Shared Constants ---
 const DEFAULT_CACHE_SIZE = 100
 const DEFAULT_NUM_BINS = 2000
-const DEFAULT_BLOOM_FILTER_SIZE = 1000  # Default size for empty spectra
+const DEFAULT_BLOOM_FILTER_SIZE = 10000  # Default size for empty spectra
 const DEFAULT_FALSE_POSITIVE_RATE = 0.01
 
 """
