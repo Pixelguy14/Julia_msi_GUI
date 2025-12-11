@@ -721,65 +721,6 @@ function find_mass(mz_array::AbstractVector{<:Real}, intensity_array::AbstractVe
     return max_intensity
 end
 
-#=
-"""
-    load_slices(folder, masses, tolerance)
-
-Loads image slices for multiple masses from all `.imzML` files in a directory.
-This function is now refactored to use the new MSIData architecture and its
-caching capabilities.
-"""
-function load_slices(folder::String, masses::AbstractVector{<:Real}, tolerance::Real)
-    files = filter(f -> endswith(f, ".imzML"), readdir(folder, join=true))
-    if isempty(files)
-        @warn "No .imzML files found in the specified directory: $folder"
-        return (Array{Matrix{Float64}}(undef, 0, 0), String[])
-    end
-    n_files = length(files)
-    n_slices = length(masses)
-
-    # FIXED: Use concrete type instead of Any
-    img_list = Array{Matrix{Float64}}(undef, n_files, n_slices)
-    names = String[]
-
-    for (i, file) in enumerate(files)
-        name = basename(file)
-        push!(names, name)
-        @info "Processing $(i)/$(n_files): $(name)"
-        
-        # Load data using the new lazy loader, returning an MSIData object
-        msi_data = @time load_imzml_lazy(file)
-
-        # Create empty images for all slices for the current file
-        width, height = msi_data.image_dims
-        current_file_slices = [zeros(Float64, width, height) for _ in 1:n_slices]
-
-        # Use the high-performance iterator to process all spectra
-        _iterate_spectra_fast(msi_data) do spec_idx, mz_array, intensity_array
-            meta = msi_data.spectra_metadata[spec_idx]
-            
-            # Now, check for all masses of interest in this single spectrum
-            for (j, mass) in enumerate(masses)
-                intensity = find_mass(mz_array, intensity_array, mass, tolerance)
-                if intensity > 0.0
-                    if 1 <= meta.x <= width && 1 <= meta.y <= height
-                        current_file_slices[j][meta.y, meta.x] = intensity
-                    end
-                end
-            end
-        end # end of fast iterator
-
-        # Assign the generated images to the main list
-        for j in 1:n_slices
-            img_list[i, j] = current_file_slices[j]
-        end
-
-    end # end of files loop
-    
-    return (img_list, names)
-end
-=#
-
 """
     get_mz_slice(data::MSIData, mass::Real, tolerance::Real)
 
@@ -1294,49 +1235,6 @@ end
 # Analysis and Visualization
 #
 # ============================================================================
-#=
-"""
-    display_statistics(slices::AbstractArray{<:AbstractMatrix{<:Real}, 2}, 
-                           names::AbstractVector{String}, masses::AbstractVector{<:Real})
-
-Calculates and prints key statistics for each slice.
-"""
-function display_statistics(slices::AbstractArray{<:AbstractMatrix{<:Real}, 2}, 
-                           names::AbstractVector{String}, masses::AbstractVector{<:Real})
-    if isempty(slices)
-        @warn "Cannot display statistics for empty slice list."
-        return nothing
-    end
-
-    n_files, n_masses = size(slices)
-    stats_to_calc = Dict{String, Function}("Mean" => mean)
-    all_dfs = Dict{String, DataFrame}()
-
-    for (stat_name, stat_func) in stats_to_calc
-        # Pre-allocate matrix for better performance
-        stat_matrix = zeros(Float64, n_files, n_masses)
-        
-        @inbounds for i in 1:n_files, j in 1:n_masses
-            flat_slice = vec(slices[i, j])
-            if !isempty(flat_slice)
-                stat_matrix[i, j] = stat_func(flat_slice)
-            end
-        end
-
-        # Create the DataFrame with masses as column headers
-        df = DataFrame(stat_matrix, Symbol.(masses))
-        # Insert the file names as the first column
-        insertcols!(df, 1, :Data => names)
-        mz_row = ["m/z"; masses...]
-        push!(df, mz_row)
-
-        println("\n--- Statistics: $(stat_name) ---")
-        println(df)
-        all_dfs[stat_name] = df
-    end
-    return all_dfs
-end
-=#
 
 """
     plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dpi=150, global_bounds=nothing)
