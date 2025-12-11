@@ -1,5 +1,7 @@
 # src/imzML.jl
+
 using Images, Statistics, CairoMakie, DataFrames, Printf, ColorSchemes, StatsBase
+using Mmap # For memory-mapped I/O
 
 """
 This file provides a library for parsing `.imzML` and `.ibd` files in pure Julia.
@@ -52,11 +54,11 @@ function parse_imzml_header(stream::IO)
             
             # --- Parse Scan Settings for Image Dimensions ---
             if in_scan_settings && occursin("<cvParam", line) && dim_axes_found < 2
-                accession_match = get_attribute(line, "accession")
+                accession_match = match(ACCESSION_REGEX, line)
                 if accession_match !== nothing
                     accession = accession_match.captures[1]
                     if accession == "IMS:1000042" || accession == "IMS:1000043" # max dimension x or y
-                        value_match = get_attribute(line, "value")
+                        value_match = match(VALUE_REGEX, line)
                         if value_match !== nothing
                             axis_idx = (accession == "IMS:1000042") ? 1 : 2
                             img_dims[axis_idx] = parse(Int32, value_match.captures[1])
@@ -68,7 +70,7 @@ function parse_imzml_header(stream::IO)
 
             # --- Parse Spectrum List for total count ---
             if occursin("<spectrumList", line)
-                count_match = get_attribute(line, "count")
+                count_match = match(COUNT_REGEX, line)
                 if count_match !== nothing
                     img_dims[3] = parse(Int32, count_match.captures[1])
                     found_spectrum_count = true
@@ -77,14 +79,14 @@ function parse_imzml_header(stream::IO)
 
             # --- Parse general CV params for InstrumentMetadata ---
             if occursin("<cvParam", line)
-                accession_match = get_attribute(line, "accession")
-                value_match = get_attribute(line, "value")
-                name_match = get_attribute(line, "name") # For laser attributes and vendor_preprocessing names
+                accession_match = match(ACCESSION_REGEX, line)
+                value_match = match(VALUE_REGEX, line)
+                name_match = match(NAME_REGEX, line)
                 
                 if accession_match !== nothing
                     acc = accession_match.captures[1]
                     val = (value_match !== nothing) ? value_match.captures[1] : ""
-                    cv_name = (name_match !== nothing) ? name_match.captures[1] : "" # Use cv_name to avoid conflict
+                    cv_name = (name_match !== nothing) ? name_match.captures[1] : ""
 
                     if acc == "MS:1000031" # instrument model
                         instrument_model = val
@@ -152,7 +154,7 @@ Determines the storage order of the m/z and intensity arrays.
 """
 function axes_config_img(stream::IO)
     param_groups = Dict{String, SpecDim}()
-    find_tag(stream, r"<referenceableParamGroupList")
+    find_tag(stream, REF_PARAM_GROUP_LIST_REGEX)
 
     while true
         pos = position(stream)
@@ -162,7 +164,7 @@ function axes_config_img(stream::IO)
             break
         end
 
-        id_match = match(r"<referenceableParamGroup id=\"([^\"]+)\"", line)
+        id_match = match(REF_PARAM_GROUP_ID_REGEX, line)
         if id_match !== nothing
             id = id_match.captures[1]
             spec_dim = configure_spec_dim(stream)
@@ -344,7 +346,7 @@ end
 
 
 # Unified function to parse spectrum metadata
-function parse_imzml_spectrum_block(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_groups::Dict{String, SpecDim},
+function parse_imzml_spectrum_block(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle, Vector{UInt8}}, param_groups::Dict{String, SpecDim},
                                     width::Int32, height::Int32, num_spectra::Int32,
                                     default_mz_format::DataType, default_intensity_format::DataType, 
                                     mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
@@ -412,7 +414,30 @@ function parse_imzml_spectrum_block(stream::IO, hIbd::Union{IO, ThreadSafeFileHa
     return spectra_metadata
 end
 
-function load_imzml_lazy(file_path::String; cache_size::Int=100)
+"""
+    load_imzml_lazy(file_path::String; cache_size::Int=100, platform_profile::PlatformProfile, mmap_preload_strategy::Symbol=:auto)
+
+Lazily loads an `.imzML` file by parsing metadata and preparing for on-demand spectrum access.
+
+This function orchestrates the parsing of both the `.imzML` (XML) and `.ibd` (binary) files,
+creating an `MSIData` object that enables efficient data access through caching and optional
+memory-mapping.
+
+# Arguments
+- `file_path::String`: The path to the `.imzML` file.
+
+# Keyword Arguments
+- `cache_size::Int=100`: The number of spectra to hold in the L1 (in-memory) LRU cache.
+- `platform_profile::PlatformProfile`: A struct containing detected system capabilities, used to guide performance optimizations.
+- `mmap_preload_strategy::Symbol=:auto`: Strategy for memory-mapping the `.ibd` file.
+    - `:auto`: Memory-map the file if it's a reasonable size relative to system RAM.
+    - `:always`: Always attempt to memory-map the file.
+    - `:never`: Do not memory-map the file; use standard file I/O.
+
+# Returns
+- An `MSIData` object ready for lazy data access.
+"""
+function load_imzml_lazy(file_path::String; cache_size::Int=100, use_mmap::Bool=false)
     println("DEBUG: Checking for .imzML file at $file_path")
     if !isfile(file_path)
         throw(FileFormatError("Provided path is not a file: $(file_path)"))
@@ -424,28 +449,21 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
         throw(FileFormatError("Corresponding .ibd file not found for: $(file_path)"))
     end
 
-    println("DEBUG: Opening file streams for .imzML and .ibd")
     stream = open(file_path, "r")
-    ts_hIbd = ThreadSafeFileHandle(ibd_path)
+    local ibd_source::ImzMLSource # Use the new constructor here to get the actual source
 
     try
-        # --- NEW: Parse all header information in a more efficient single pass ---
+        # This will call the new ImzMLSource constructor that handles mmap
+        ibd_source = ImzMLSource(ibd_path, Float32, Float32, use_mmap) # Placeholder formats, will be updated later
+        
+        # We need the original file path to get the actual file size for the
+        # ImzMLSource constructor, which should now return the correct handle.
+        # However, for header parsing, we still need the main XML stream.
+        
         println("DEBUG: Parsing imzML header...")
         (instrument_meta, param_groups, imgDim) = parse_imzml_header(stream)
-        # The header parser will have reset the stream for the next step (spectrum parsing)
-
-        println("--- Extracted Instrument Metadata ---")
-        println("Resolution: ", instrument_meta.resolution)
-        println("Acquisition Mode (pre-check): ", instrument_meta.acquisition_mode)
-        println("Calibration Status: ", instrument_meta.calibration_status)
-        println("Instrument Model: ", instrument_meta.instrument_model)
-        println("Mass Accuracy (ppm): ", instrument_meta.mass_accuracy_ppm)
-        println("Laser Settings: ", instrument_meta.laser_settings)
-        println("Polarity: ", instrument_meta.polarity)
-        println("------------------------------------")
 
         width, height, num_spectra = imgDim
-        println("DEBUG: Image dimensions: $(width)x$(height), $num_spectra spectra.")
 
         # Extract default formats from the parsed param_groups
         mz_group = nothing
@@ -458,6 +476,12 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
                 int_group = group
             end
         end
+
+        local default_mz_format::DataType
+        local default_intensity_format::DataType
+        local mz_is_compressed::Bool
+        local int_is_compressed::Bool
+        local global_mode::SpectrumMode
 
         if mz_group === nothing || int_group === nothing
             @warn "Could not find global definitions for m/z and intensity arrays. Using hardcoded defaults (Float64)."
@@ -474,30 +498,22 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
             global_mode = mz_group.Mode != UNKNOWN ? mz_group.Mode : int_group.Mode
         end
 
-        println("DEBUG: m/z format: $default_mz_format, Intensity format: $default_intensity_format")
-        println("DEBUG: m/z compressed: $mz_is_compressed, Intensity compressed: $int_is_compressed")
-        println("DEBUG: Global mode: $global_mode")
+        # Update the ibd_source with correct formats after parsing header
+        ibd_source = ImzMLSource(ibd_source.ibd_handle, default_mz_format, default_intensity_format)
 
-        local spectra_metadata = parse_imzml_spectrum_block(stream, ts_hIbd, param_groups, width, height, num_spectra,
+        local spectra_metadata = parse_imzml_spectrum_block(stream, ibd_source.ibd_handle, param_groups, width, height, num_spectra,
                                                           default_mz_format, default_intensity_format,
                                                           mz_is_compressed, int_is_compressed, global_mode)
 
-        println("DEBUG: Metadata parsing complete.")
-        
         # Build coordinate map for imzML files
-        println("DEBUG: Building coordinate map...")
         coordinate_map = zeros(Int, width, height)
         for (idx, meta) in enumerate(spectra_metadata)
-            if idx == 1
-                println("DIAGNOSTIC_WRITE: For index 1, attempting to write to coordinate_map[$(meta.x), $(meta.y)]")
-            end
             if 1 <= meta.x <= width && 1 <= meta.y <= height
                 coordinate_map[meta.x, meta.y] = idx
             end
         end
-        println("DEBUG: Coordinate map built.")
 
-        # --- NEW: Update acquisition mode based on spectrum parsing ---
+        # Update acquisition mode based on spectrum parsing
         acq_mode_symbol = if global_mode == CENTROID
             :centroid
         elseif global_mode == PROFILE
@@ -505,22 +521,20 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
         else
             :unknown
         end
-        
+
         final_instrument_meta = InstrumentMetadata(
             instrument_meta.resolution,
-            acq_mode_symbol, # Update with parsed mode
+            acq_mode_symbol,
             instrument_meta.mz_axis_type,
             instrument_meta.calibration_status,
             instrument_meta.instrument_model,
             instrument_meta.mass_accuracy_ppm,
             instrument_meta.laser_settings,
             instrument_meta.polarity,
-            instrument_meta.vendor_preprocessing_steps # Add this new field
+            instrument_meta.vendor_preprocessing_steps
         )
 
-        source = ImzMLSource(ts_hIbd, default_mz_format, default_intensity_format)
-        println("DEBUG: Creating MSIData object.")
-        msi_data = MSIData(source, spectra_metadata, final_instrument_meta, (width, height), coordinate_map, cache_size)
+        msi_data = MSIData(ibd_source, spectra_metadata, final_instrument_meta, (width, height), coordinate_map, cache_size)
 
         # Close the XML stream as it's no longer needed
         close(stream)
@@ -529,7 +543,10 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
 
     catch e
         close(stream)
-        close(ts_hIbd) # Ensure IBD handle is closed on error
+        # Ensure IBD source handle is closed on error
+        if ibd_source.ibd_handle isa ThreadSafeFileHandle
+            close(ibd_source.ibd_handle)
+        end
         rethrow(e)
     end
 end
@@ -571,19 +588,19 @@ function parse_compressed(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, par
             end
 
             # Parse coordinates
-            x_match = match(r"IMS:1000050.*?value=\"(\d+)\"", line)
+            x_match = match(X_COORD_REGEX, line)
             if x_match !== nothing
                 x = parse(Int32, x_match.captures[1])
             end
-            y_match = match(r"IMS:1000051.*?value=\"(\d+)\"", line)
+            y_match = match(Y_COORD_REGEX, line)
             if y_match !== nothing
                 y = parse(Int32, y_match.captures[1])
             end
 
             # Parse mode
-            if occursin("MS:1000127", line) 
+            if occursin(CENTROID_SPECTRUM_ACCESSION, line) 
                 spectrum_mode = CENTROID
-            elseif occursin("MS:1000128", line)
+            elseif occursin(PROFILE_SPECTRUM_ACCESSION, line)
                 spectrum_mode = PROFILE
             end
 
@@ -602,9 +619,9 @@ function parse_compressed(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, par
                 bda_content = join(bda_lines, "\n")
 
                 # Parse from bda_content
-                is_mz = occursin("MS:1000514", bda_content) || occursin("mzArray", bda_content)
+                is_mz = occursin(MZ_AXIS_ACCESSION, bda_content) || occursin("mzArray", bda_content)
                 
-                array_len_cv_match = match(r"IMS:1000103.*?value=\"(\d+)\"", bda_content)
+                array_len_cv_match = match(ARRAY_LENGTH_CV_REGEX, bda_content)
                 array_length = Int32(0)
                 if array_len_cv_match !== nothing
                     array_length = parse(Int32, array_len_cv_match.captures[1])
@@ -612,24 +629,24 @@ function parse_compressed(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, par
                 
                 # Fallback for defaultArrayLength
                 if array_length == 0
-                    default_match = match(r"defaultArrayLength=\"(\d+)\"", spectrum_start_line)
+                    default_match = match(DEFAULT_ARRAY_LENGTH_REGEX, spectrum_start_line)
                     if default_match !== nothing
                         array_length = parse(Int32, default_match.captures[1])
                     end
                 end
 
-                encoded_len_cv_match = match(r"IMS:1000104.*?value=\"(\d+)\"", bda_content)
+                encoded_len_cv_match = match(ENCODED_LEN_CV_REGEX, bda_content)
                 encoded_length = Int64(0)
                 if encoded_len_cv_match !== nothing
                     encoded_length = parse(Int64, encoded_len_cv_match.captures[1])
                 else
-                    encoded_len_attr_match = match(r"encodedLength=\"(\d+)\"", bda_content)
+                    encoded_len_attr_match = match(ENCODED_LENGTH_ATTR_REGEX, bda_content)
                     if encoded_len_attr_match !== nothing
                         encoded_length = parse(Int64, encoded_len_attr_match.captures[1])
                     end
                 end
 
-                offset_match = match(r"IMS:1000102.*?value=\"(\d+)\"", bda_content)
+                offset_match = match(OFFSET_CV_REGEX, bda_content)
                 offset = Int64(0)
                 if offset_match !== nothing
                     offset = parse(Int64, offset_match.captures[1])
@@ -720,65 +737,6 @@ function find_mass(mz_array::AbstractVector{<:Real}, intensity_array::AbstractVe
     
     return max_intensity
 end
-
-#=
-"""
-    load_slices(folder, masses, tolerance)
-
-Loads image slices for multiple masses from all `.imzML` files in a directory.
-This function is now refactored to use the new MSIData architecture and its
-caching capabilities.
-"""
-function load_slices(folder::String, masses::AbstractVector{<:Real}, tolerance::Real)
-    files = filter(f -> endswith(f, ".imzML"), readdir(folder, join=true))
-    if isempty(files)
-        @warn "No .imzML files found in the specified directory: $folder"
-        return (Array{Matrix{Float64}}(undef, 0, 0), String[])
-    end
-    n_files = length(files)
-    n_slices = length(masses)
-
-    # FIXED: Use concrete type instead of Any
-    img_list = Array{Matrix{Float64}}(undef, n_files, n_slices)
-    names = String[]
-
-    for (i, file) in enumerate(files)
-        name = basename(file)
-        push!(names, name)
-        @info "Processing $(i)/$(n_files): $(name)"
-        
-        # Load data using the new lazy loader, returning an MSIData object
-        msi_data = @time load_imzml_lazy(file)
-
-        # Create empty images for all slices for the current file
-        width, height = msi_data.image_dims
-        current_file_slices = [zeros(Float64, width, height) for _ in 1:n_slices]
-
-        # Use the high-performance iterator to process all spectra
-        _iterate_spectra_fast(msi_data) do spec_idx, mz_array, intensity_array
-            meta = msi_data.spectra_metadata[spec_idx]
-            
-            # Now, check for all masses of interest in this single spectrum
-            for (j, mass) in enumerate(masses)
-                intensity = find_mass(mz_array, intensity_array, mass, tolerance)
-                if intensity > 0.0
-                    if 1 <= meta.x <= width && 1 <= meta.y <= height
-                        current_file_slices[j][meta.y, meta.x] = intensity
-                    end
-                end
-            end
-        end # end of fast iterator
-
-        # Assign the generated images to the main list
-        for j in 1:n_slices
-            img_list[i, j] = current_file_slices[j]
-        end
-
-    end # end of files loop
-    
-    return (img_list, names)
-end
-=#
 
 """
     get_mz_slice(data::MSIData, mass::Real, tolerance::Real)
@@ -1294,49 +1252,6 @@ end
 # Analysis and Visualization
 #
 # ============================================================================
-#=
-"""
-    display_statistics(slices::AbstractArray{<:AbstractMatrix{<:Real}, 2}, 
-                           names::AbstractVector{String}, masses::AbstractVector{<:Real})
-
-Calculates and prints key statistics for each slice.
-"""
-function display_statistics(slices::AbstractArray{<:AbstractMatrix{<:Real}, 2}, 
-                           names::AbstractVector{String}, masses::AbstractVector{<:Real})
-    if isempty(slices)
-        @warn "Cannot display statistics for empty slice list."
-        return nothing
-    end
-
-    n_files, n_masses = size(slices)
-    stats_to_calc = Dict{String, Function}("Mean" => mean)
-    all_dfs = Dict{String, DataFrame}()
-
-    for (stat_name, stat_func) in stats_to_calc
-        # Pre-allocate matrix for better performance
-        stat_matrix = zeros(Float64, n_files, n_masses)
-        
-        @inbounds for i in 1:n_files, j in 1:n_masses
-            flat_slice = vec(slices[i, j])
-            if !isempty(flat_slice)
-                stat_matrix[i, j] = stat_func(flat_slice)
-            end
-        end
-
-        # Create the DataFrame with masses as column headers
-        df = DataFrame(stat_matrix, Symbol.(masses))
-        # Insert the file names as the first column
-        insertcols!(df, 1, :Data => names)
-        mz_row = ["m/z"; masses...]
-        push!(df, mz_row)
-
-        println("\n--- Statistics: $(stat_name) ---")
-        println(df)
-        all_dfs[stat_name] = df
-    end
-    return all_dfs
-end
-=#
 
 """
     plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dpi=150, global_bounds=nothing)

@@ -8,6 +8,24 @@ const MZ_AXIS_ACCESSION = "MS:1000514"
 const INTENSITY_AXIS_ACCESSION = "MS:1000515"
 const COMPRESSION_ACCESSION = "MS:1000574"
 const NO_COMPRESSION_ACCESSION = "MS:1000576"
+const CENTROID_SPECTRUM_ACCESSION = "MS:1000127"
+const PROFILE_SPECTRUM_ACCESSION = "MS:1000128"
+const INSTRUMENT_MODEL_ACCESSION = "MS:1000031"
+const MASS_RESOLVING_POWER_ACCESSION = "MS:1001496"
+const RESOLUTION_ACCESSION = "MS:1000011"
+const MASS_ACCURACY_PPM_ACCESSION = "MS:1000016"
+const POSITIVE_SCAN_ACCESSION = "MS:1000130"
+const NEGATIVE_SCAN_ACCESSION = "MS:1000129"
+const EXTERNAL_CALIBRATION_ACCESSION = "MS:1000592"
+const INTERNAL_CALIBRATION_ACCESSION = "MS:1000593"
+const INSTRUMENT_SPECIFIC_CALIBRATION_ACCESSION = "MS:1000747"
+const LASER_WAVELENGTH_ACCESSION = "MS:1000867"
+const LASER_FLUENCE_ACCESSION = "MS:1000868"
+const LASER_REPETITION_RATE_ACCESSION = "MS:1000869"
+const BASELINE_CORRECTION_ACCESSION = "MS:1000579"
+const SMOOTHING_ACCESSION = "MS:1000580"
+const DATA_TRANSFORMATION_ACCESSION = "MS:1000578"
+const DEISOTOPING_ACCESSION = "MS:1000800"
 
 # Data format accessions as constants
 const DATA_FORMAT_ACCESSIONS = Dict{String, DataType}(
@@ -34,12 +52,17 @@ function parse_instrument_metadata_mzml(stream::IO)
     vendor_preprocessing_steps = String[] # Initialize vendor_preprocessing_steps
 
     try
-        # Reset stream and read a sufficiently large header block to find metadata.
+        # Reset stream to ensure we read from the beginning of the relevant section
         seekstart(stream)
-        header_block = ""
-        header_read_limit = 50000 # Read up to 50KB of header
-        bytes_read = 0
         
+        # Define state variables for parsing
+        in_instrument_config_list = false
+        in_data_processing_list = false
+
+        header_read_limit = 50000 # Read up to 50KB of header, or until main data section
+        bytes_read = 0
+        current_pos = position(stream)
+
         while !eof(stream) && bytes_read < header_read_limit
             line_pos = position(stream)
             line = readline(stream)
@@ -49,78 +72,74 @@ function parse_instrument_metadata_mzml(stream::IO)
             if occursin("<run>", line) || occursin("<spectrumList>", line)
                 break
             end
-            header_block *= line * "\n"
-        end
 
-        header_io = IOBuffer(header_block)
-        while !eof(header_io)
-            line = readline(header_io)
+            # State management for nested sections
+            if occursin("<instrumentConfigurationList", line)
+                in_instrument_config_list = true
+            elseif occursin("</instrumentConfigurationList>", line)
+                in_instrument_config_list = false
+            elseif occursin("<dataProcessingList", line)
+                in_data_processing_list = true
+            elseif occursin("</dataProcessingList>", line)
+                in_data_processing_list = false
+            end
             
             if occursin("<cvParam", line)
-                accession_match = get_attribute(line, "accession")
-                value_match = get_attribute(line, "value")
-                name_match = get_attribute(line, "name") # For laser attributes and vendor_preprocessing names
+                accession_match = match(ACCESSION_REGEX, line)
+                value_match = match(VALUE_REGEX, line)
+                name_match = match(NAME_REGEX, line)
                 
                 if accession_match !== nothing
                     acc = accession_match.captures[1]
                     val = (value_match !== nothing) ? value_match.captures[1] : ""
-                    name = (name_match !== nothing) ? name_match.captures[1] : "" # NEW: Get name for logging
+                    name = (name_match !== nothing) ? name_match.captures[1] : ""
 
-                    if acc == "MS:1000031" # instrument model
-                        instrument_model = val
-                        #println("DEBUG: Instrument model: $instrument_model")
-                    elseif acc == "MS:1001496" # mass resolving power (more specific)
-                        resolution = tryparse(Float64, val)
-                        #println("DEBUG: Resolution (specific): $resolution")
-                    elseif acc == "MS:1000011" && resolution === nothing # resolution (less specific)
-                        resolution = tryparse(Float64, val)
-                        #println("DEBUG: Resolution (less specific): $resolution")
-                    elseif acc == "MS:1000016" # mass accuracy (ppm)
-                        mass_accuracy_ppm = tryparse(Float64, val)
-                        #println("DEBUG: Mass accuracy (ppm): $mass_accuracy_ppm")
-                    elseif acc == "MS:1000130" # positive scan
-                        polarity = :positive
-                        #println("DEBUG: Polarity: positive")
-                    elseif acc == "MS:1000129" # negative scan
-                        polarity = :negative
-                        #println("DEBUG: Polarity: negative")
-                    elseif acc == "MS:1000592" # external calibration
-                        calibration_status = :external
-                        #println("DEBUG: Calibration status: external")
-                    elseif acc == "MS:1000593" # internal calibration
-                        calibration_status = :internal
-                        #println("DEBUG: Calibration status: internal")
-                    elseif acc == "MS:1000747" && calibration_status == :uncalibrated # instrument specific calibration
-                        calibration_status = :internal # Assume as a form of internal calibration
-                        #println("DEBUG: Calibration status: instrument specific (internal)")
-                    elseif acc == "MS:1000867" # laser wavelength
-                        laser_settings["wavelength_nm"] = tryparse(Float64, val)
-                        #println("DEBUG: Laser wavelength: $(laser_settings["wavelength_nm"]) nm")
-                    elseif acc == "MS:1000868" # laser fluence
-                        laser_settings["fluence"] = tryparse(Float64, val)
-                        #println("DEBUG: Laser fluence: $(laser_settings["fluence"])")
-                    elseif acc == "MS:1000869" # laser repetition rate
-                        laser_settings["repetition_rate_hz"] = tryparse(Float64, val)
-                        #println("DEBUG: Laser repetition rate: $(laser_settings["repetition_rate_hz"]) Hz")
-                    # NEW: Vendor Preprocessing terms
-                    elseif acc == "MS:1000579" # baseline correction
-                        push!(vendor_preprocessing_steps, "Baseline Correction")
-                        #println("DEBUG: Vendor preprocessing step: Baseline Correction")
-                    elseif acc == "MS:1000580" # smoothing
-                        push!(vendor_preprocessing_steps, "Smoothing")
-                        #println("DEBUG: Vendor preprocessing step: Smoothing")
-                    elseif acc == "MS:1000578" # data transformation (e.g., centroiding)
-                        push!(vendor_preprocessing_steps, "Data Transformation: $(name)")
-                        #println("DEBUG: Vendor preprocessing step: Data Transformation: $(name)")
-                    elseif acc == "MS:1000800" # deisotoping
-                        push!(vendor_preprocessing_steps, "Deisotoping")
-                        #println("DEBUG: Vendor preprocessing step: Deisotoping")
+                    if in_instrument_config_list # Process instrument configuration details
+                        if acc == INSTRUMENT_MODEL_ACCESSION # instrument model
+                            instrument_model = val
+                        elseif acc == MASS_RESOLVING_POWER_ACCESSION # mass resolving power (more specific)
+                            resolution = tryparse(Float64, val)
+                        elseif acc == RESOLUTION_ACCESSION && resolution === nothing # resolution (less specific)
+                            resolution = tryparse(Float64, val)
+                        elseif acc == MASS_ACCURACY_PPM_ACCESSION # mass accuracy (ppm)
+                            mass_accuracy_ppm = tryparse(Float64, val)
+                        elseif acc == POSITIVE_SCAN_ACCESSION # positive scan
+                            polarity = :positive
+                        elseif acc == NEGATIVE_SCAN_ACCESSION # negative scan
+                            polarity = :negative
+                        end
+                    elseif in_data_processing_list # Process vendor preprocessing steps
+                        if acc == BASELINE_CORRECTION_ACCESSION # baseline correction
+                            push!(vendor_preprocessing_steps, "Baseline Correction")
+                        elseif acc == SMOOTHING_ACCESSION # smoothing
+                            push!(vendor_preprocessing_steps, "Smoothing")
+                        elseif acc == DATA_TRANSFORMATION_ACCESSION # data transformation (e.g., centroiding)
+                            push!(vendor_preprocessing_steps, "Data Transformation: $(name)")
+                        elseif acc == DEISOTOPING_ACCESSION # deisotoping
+                            push!(vendor_preprocessing_steps, "Deisotoping")
+                        end
+                    else # General CV params outside specific lists
+                        if acc == EXTERNAL_CALIBRATION_ACCESSION # external calibration
+                            calibration_status = :external
+                        elseif acc == INTERNAL_CALIBRATION_ACCESSION # internal calibration
+                            calibration_status = :internal
+                        elseif acc == INSTRUMENT_SPECIFIC_CALIBRATION_ACCESSION && calibration_status == :uncalibrated # instrument specific calibration
+                            calibration_status = :internal # Assume as a form of internal calibration
+                        elseif acc == LASER_WAVELENGTH_ACCESSION # laser wavelength
+                            laser_settings["wavelength_nm"] = tryparse(Float64, val)
+                        elseif acc == LASER_FLUENCE_ACCESSION # laser fluence
+                            laser_settings["fluence"] = tryparse(Float64, val)
+                        elseif acc == LASER_REPETITION_RATE_ACCESSION # laser repetition rate
+                            laser_settings["repetition_rate_hz"] = tryparse(Float64, val)
+                        end
                     end
                 end
             end
         end
     catch e
         @warn "Could not fully parse instrument metadata from mzML header. Using defaults. Error: $e"
+    finally
+        seekstart(stream) # Ensure stream is reset after header parsing for subsequent operations
     end
     
     println("DEBUG: Finished mzML instrument metadata parsing.")
@@ -154,65 +173,56 @@ determine the data type, compression, and axis type.
   data offset, encoded length, format, and compression status.
 """
 function get_spectrum_asset_metadata(stream::IO)
-    start_pos = position(stream)
+    start_pos_bda_block = position(stream) # Mark start of potential BDA block
     
-    #println("DEBUG: Entering get_spectrum_asset_metadata to parse binaryDataArray...")
+    # Find the <binaryDataArray> tag and extract encodedLength
+    # We read the entire tag line into a string, then parse.
+    bda_tag_line = find_tag(stream, r"<binaryDataArray\s+encodedLength=\"(\d+)\"") # This is still using `find_tag` for now
+    encoded_length = parse(Int32, bda_tag_line.captures[1])
+    
+    # Mark the position right after the <binaryDataArray> opening tag (and its attributes)
+    # This is needed to seek back to find the <binary> tag.
+    pos_after_bda_open = position(stream)
 
-    bda_tag = find_tag(stream, r"<binaryDataArray\s+encodedLength=\"(\d+)\"")
-
-    if bda_tag === nothing
-        throw(FileFormatError("Cannot find binaryDataArray"))
-    end
-    encoded_length = parse(Int32, bda_tag.captures[1])
-    #println("DEBUG:   Encoded length: $encoded_length")
-
-    # Initialize parameters as separate variables with concrete types
+    # Now, read the entire block content between the opening <binaryDataArray> and closing </binaryDataArray>
+    # This captures all cvParams and the <binary> tag.
+    # Note: readuntil consumes the delimiter.
+    # To avoid repeated allocations by readline, we read the whole inner block once.
+    bda_inner_content = readuntil(stream, "</binaryDataArray>") 
+    
+    # Initialize parameters
     data_format::DataType = Float64
     compression_flag::Bool = false
     axis::Symbol = :mz
 
-    while !eof(stream)
-        line = readline(stream)
-        if occursin("</binaryDataArray>", line)
-            break
-        end
-        if occursin("<cvParam", line)
-            accession = get_attribute(line, "accession")
-            if accession === nothing
-                continue
-            end
-            acc_str = accession.captures[1]
-            
-            # Use constant comparisons and dictionary lookup for better performance
-            if acc_str == MZ_AXIS_ACCESSION
-                axis = :mz
-                #println("DEBUG:   Axis type identified as: m/z")
-            elseif acc_str == INTENSITY_AXIS_ACCESSION
-                axis = :intensity
-                #println("DEBUG:   Axis type identified as: intensity")
-            elseif haskey(DATA_FORMAT_ACCESSIONS, acc_str)
-                data_format = DATA_FORMAT_ACCESSIONS[acc_str]
-                #println("DEBUG:   Data format identified as: $data_format")
-            elseif acc_str == COMPRESSION_ACCESSION
-                compression_flag = true
-                #println("DEBUG:   Compression: true")
-            elseif acc_str == NO_COMPRESSION_ACCESSION
-                compression_flag = false
-                #println("DEBUG:   Compression: false")
-            end
+    # Parse bda_inner_content for cvParams
+    # Iterate over matches of cvParam tags within the content string
+    cvparam_matches = eachmatch(r"<cvParam\s+accession=\"([^\"]+)\"[^>]*>", bda_inner_content)
+    for cv_match in cvparam_matches
+        acc_str = cv_match.captures[1]
+        
+        # Use constant comparisons and dictionary lookup for better performance
+        if acc_str == MZ_AXIS_ACCESSION
+            axis = :mz
+        elseif acc_str == INTENSITY_AXIS_ACCESSION
+            axis = :intensity
+        elseif haskey(DATA_FORMAT_ACCESSIONS, acc_str)
+            data_format = DATA_FORMAT_ACCESSIONS[acc_str]
+        elseif acc_str == COMPRESSION_ACCESSION
+            compression_flag = true
+        elseif acc_str == NO_COMPRESSION_ACCESSION
+            compression_flag = false
         end
     end
 
-    seek(stream, start_pos)
-    readuntil(stream, "<binary>")
-    binary_offset = position(stream)
-    #println("DEBUG:   Binary data offset: $binary_offset")
+    # Find binary_offset by seeking back and using readuntil for "<binary>"
+    seek(stream, pos_after_bda_open) # Seek to just after the opening <binaryDataArray> tag
+    readuntil(stream, "<binary>") # Read until "<binary>"
+    binary_offset = position(stream) # Position is now after "<binary>"
 
-    # Move stream to the end of the binary data array for the next iteration
-    readuntil(stream, "</binaryDataArray>")
-    #println("DEBUG: Exiting get_spectrum_asset_metadata.")
+    # The stream is already positioned at the end of the </binaryDataArray> block because of the first readuntil.
+    # So no need to readuntil again.
 
-    # Create SpectrumAsset directly from the variables
     return SpectrumAsset(data_format, compression_flag, binary_offset, encoded_length, axis)
 end
 
@@ -234,56 +244,68 @@ the m/z and intensity array metadata.
 function parse_spectrum_metadata(stream::IO, offset::Int64)
     seek(stream, offset)
     
-    # Read the whole spectrum block to parse mode
-    spectrum_start_pos = position(stream)
-    line = ""
-    spectrum_buffer = IOBuffer()
+    local id::String = ""
+    local mode::SpectrumMode = UNKNOWN
+    local mz_asset::Union{SpectrumAsset, Nothing} = nothing
+    local int_asset::Union{SpectrumAsset, Nothing} = nothing
+    
+    # Read line by line to extract information
+    spectrum_start_line = readline(stream) # Read the <spectrum> tag
+    
+    id_match = match(SPECTRUM_TAG_ID_REGEX, spectrum_start_line)
+    id = id_match === nothing ? "" : id_match.captures[1]
+
     while !eof(stream)
         line = readline(stream)
-        write(spectrum_buffer, line)
+
         if occursin("</spectrum>", line)
             break
         end
+
+        # Check for mode
+        if mode == UNKNOWN # Only set if not already determined
+            accession_match = match(ACCESSION_REGEX, line)
+            if accession_match !== nothing
+                acc = accession_match.captures[1]
+                if acc == CENTROID_SPECTRUM_ACCESSION
+                    mode = CENTROID
+                elseif acc == PROFILE_SPECTRUM_ACCESSION
+                    mode = PROFILE
+                end
+            end
+        end
+
+        # Find binaryDataArrayList and parse assets
+        if occursin("<binaryDataArrayList", line)
+            # We are now positioned at the line after <binaryDataArrayList>
+            # The next two binaryDataArray tags should be immediately following.
+            asset1 = get_spectrum_asset_metadata(stream)
+            asset2 = get_spectrum_asset_metadata(stream)
+
+            # Determine which asset is m/z and which is intensity
+            mz_asset, int_asset = if asset1.axis_type == :mz
+                (asset1, asset2)
+            else
+                (asset2, asset1)
+            end
+            
+            # After parsing binaryDataArrays, we can expect to quickly hit </spectrumList> or other closing tags.
+            # We can break early if we have all necessary info, or continue to ensure stream is advanced.
+            break # All essential info is found
+        end
     end
-    spectrum_xml = String(take!(spectrum_buffer))
-    seek(stream, spectrum_start_pos) # Reset for other parsing
 
-    id_match = match(r"<spectrum\s+index=\"\d+\"\s+id=\"([^\"]+)", spectrum_xml)
-    id = id_match === nothing ? "" : id_match.captures[1]
-    #println("DEBUG:   Parsing spectrum ID: $id")
-
-    # Determine mode from the XML block
-    mode = UNKNOWN
-    if occursin("MS:1000127", spectrum_xml)
-        mode = CENTROID
-        #println("DEBUG:   Spectrum mode: CENTROID")
-    elseif occursin("MS:1000128", spectrum_xml)
-        mode = PROFILE
-        #println("DEBUG:   Spectrum mode: PROFILE")
+    if mz_asset === nothing || int_asset === nothing
+        # Handle cases where assets weren't found (e.g., empty spectrum or parsing error)
+        # Provide default/placeholder assets to avoid errors downstream
+        @warn "mzML: Binary assets not found for spectrum $id at offset $offset. Using placeholder assets."
+        # These default formats should ideally come from global context if available, otherwise assume typical
+        default_mz_format = Float64 
+        default_intensity_format = Float64
+        mz_asset = SpectrumAsset(default_mz_format, false, Int64(0), 0, :mz)
+        int_asset = SpectrumAsset(default_intensity_format, false, Int64(0), 0, :intensity)
     end
 
-    # Find where the binary data list starts to parse assets
-    binary_list_match = findfirst("<binaryDataArrayList", spectrum_xml)
-    if binary_list_match !== nothing
-        seek(stream, spectrum_start_pos + binary_list_match.start - 1)
-    end
-
-    asset1 = get_spectrum_asset_metadata(stream)
-    asset2 = get_spectrum_asset_metadata(stream)
-
-    # Determine which asset is m/z and which is intensity
-    mz_asset, int_asset = if asset1.axis_type == :mz
-        (asset1, asset2)
-    else
-        (asset2, asset1)
-    end
-
-    #println("DEBUG:     m/z Asset - Format: $(mz_asset.format), Compressed: $(mz_asset.is_compressed), Offset: $(mz_asset.offset), Encoded Length: $(mz_asset.encoded_length)")
-    #println("DEBUG:     Intensity Asset - Format: $(int_asset.format), Compressed: $(int_asset.is_compressed), Offset: $(int_asset.offset), Encoded Length: $(int_asset.encoded_length)")
-    #println("DEBUG:   Finished parsing spectrum ID: $id metadata.")
-
-    # Create the new unified metadata object
-    # For mzML, x and y coordinates are not applicable, so we use 0.
     return SpectrumMetadata(Int32(0), Int32(0), id, :sample, mode, mz_asset, int_asset)
 end
 
@@ -301,7 +323,6 @@ the byte offsets for each spectrum.
 """
 function parse_offset_list(stream::IO)
     offsets = Int64[]
-    offset_regex = r"<offset[^>]*>(\d+)</offset>"
     
     # Actively search for offset tags, ignoring other lines until the end of the index is found.
     while !eof(stream)
@@ -313,7 +334,7 @@ function parse_offset_list(stream::IO)
         end
 
         # If it's not the end, see if it's an offset tag.
-        m = match(offset_regex, line)
+        m = match(OFFSET_TAG_REGEX, line)
         if m !== nothing
             push!(offsets, parse(Int64, m.captures[1]))
         end
@@ -338,7 +359,7 @@ function find_index_offset(stream::IO)::Int64
     seek(stream, file_size - chunk_size)
     footer = read(stream, String)
     
-    index_offset_match = match(r"<indexListOffset>(\d+)</indexListOffset>", footer)
+    index_offset_match = match(INDEX_LIST_OFFSET_REGEX, footer)
     if index_offset_match === nothing
         throw(FileFormatError("Could not find <indexListOffset>. File may not be an indexed mzML."))
     end
@@ -361,7 +382,7 @@ then parses the metadata for each spectrum without loading the binary data.
 # Returns
 - An `MSIData` object ready for lazy data access.
 """
-function load_mzml_lazy(file_path::String; cache_size::Int=100)
+function load_mzml_lazy(file_path::String; cache_size::Int=100, use_mmap::Bool=false) # use_mmap is ignored for mzML files
     println("DEBUG: Opening file stream for $file_path")
     ts_stream = ThreadSafeFileHandle(file_path, "r")
 
@@ -388,7 +409,7 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         seek(ts_stream.handle, index_offset)
         
         println("DEBUG: Searching for '<index name=\"spectrum\">'.")
-        if find_tag(ts_stream.handle, r"<index\s+name=\"spectrum\"") === nothing
+        if find_tag(ts_stream.handle, INDEX_SPECTRUM_TAG_REGEX) === nothing
             throw(FileFormatError("Could not find spectrum index."))
         end
         println("DEBUG: Found spectrum index tag.")
@@ -460,127 +481,3 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         rethrow(e)
     end
 end
-
-#=
-"""
-    LoadMzml(fileName::String)
-
-Eagerly loads all spectra from a .mzML file into memory.
-This function now uses the new lazy-loading
-architecture internally but presents the data in the old format.
-
-# Arguments
-- `fileName`: The path to the `.mzML` file.
-
-# Returns
-- A `2xN` matrix where `N` is the number of spectra. The first row contains
-  m/z arrays and the second row contains intensity arrays.
-"""
-function LoadMzml(fileName::String)
-    # Use the lazy loader to get the MSIData object
-    msi_data = load_mzml_lazy(fileName, cache_size=0) # No need to cache if we load all
-    
-    num_spectra = length(msi_data.spectra_metadata)
-    
-    # FIXED: Use concrete typed arrays instead of Array{Any}
-    spectra_matrix = Vector{Tuple{Vector{Float64}, Vector{Float64}}}(undef, num_spectra)
-    
-    # Pre-allocate and use bounds checking optimization
-    @inbounds for i in 1:num_spectra
-        # Use the new GetSpectrum API
-        mz, intensity = GetSpectrum(msi_data, i)
-        spectra_matrix[i] = (mz, intensity)
-    end
-    
-    # Convert to the expected 2xN format if needed by downstream code
-    # Note: This maintains the original interface but with better typing
-    result_matrix = Array{Any}(undef, (2, num_spectra))
-    @inbounds for i in 1:num_spectra
-        result_matrix[1, i] = spectra_matrix[i][1]
-        result_matrix[2, i] = spectra_matrix[i][2]
-    end
-    
-    return result_matrix
-end
-=#
-
-#=
-"""
-    load_mzml_batch(file_path::String, spectrum_indices::AbstractVector{Int})
-
-Loads a specific batch of spectra from an mzML file efficiently.
-Useful for parallel processing or when only specific spectra are needed.
-
-# Arguments
-- `file_path`: Path to the mzML file
-- `spectrum_indices`: Indices of spectra to load
-
-# Returns
-- Vector of (mz_array, intensity_array) tuples
-"""
-function load_mzml_batch(file_path::String, spectrum_indices::AbstractVector{Int})
-    msi_data = load_mzml_lazy(file_path)
-    num_to_load = length(spectrum_indices)
-    
-    # Pre-allocate result with concrete types
-    results = Vector{Tuple{Vector{Float64}, Vector{Float64}}}(undef, num_to_load)
-    
-    @inbounds for (i, idx) in enumerate(spectrum_indices)
-        mz, intensity = GetSpectrum(msi_data, idx)
-        results[i] = (mz, intensity)
-    end
-    
-    return results
-end
-=#
-
-#=
-"""
-    get_mzml_summary(file_path::String)::NamedTuple
-
-Quickly extracts summary information from an mzML file without loading all metadata.
-
-# Returns
-- Named tuple with: num_spectra, mz_range, intensity_range, data_formats
-"""
-function get_mzml_summary(file_path::String)::NamedTuple
-    ts_stream = ThreadSafeFileHandle(file_path, "r")
-    try
-        index_offset = find_index_offset(ts_stream.handle)
-        seek(ts_stream.handle, index_offset)
-        
-        if find_tag(ts_stream.handle, r"<index\s+name=\"spectrum\"") === nothing
-            throw(FileFormatError("Could not find spectrum index."))
-        end
-        
-        spectrum_offsets = parse_offset_list(ts_stream.handle)
-        num_spectra = length(spectrum_offsets)
-        
-        # Sample first few spectra to determine formats and ranges
-        sample_size = min(10, num_spectra)
-        sample_metadata = [parse_spectrum_metadata(ts_stream.handle, spectrum_offsets[i]) for i in 1:sample_size]
-        
-        # Extract formats from sample
-        mz_format = sample_metadata[1].mz_asset.format
-        intensity_format = sample_metadata[1].int_asset.format
-        
-        return (num_spectra=num_spectra, 
-                mz_format=mz_format, 
-                intensity_format=intensity_format,
-                sample_spectra=sample_size)
-    finally
-        close(ts_stream)
-    end
-end
-=#
-
-#=
-# Performance optimization: Cache frequently used regex patterns
-const PRE_COMPILED_REGEX = (
-    encoded_length = r"<binaryDataArray\s+encodedLength=\"(\d+)\"",
-    spectrum_id = r"<spectrum\s+index=\"\d+\"\s+id=\"([^\"]+)",
-    offset = r"<offset[^>]*>(\d+)</offset>",
-    index_list = r"<index\s+name=\"spectrum\"",
-    index_offset = r"<indexListOffset>(\d+)</indexListOffset>"
-)
-=#

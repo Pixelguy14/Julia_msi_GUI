@@ -59,6 +59,7 @@ export apply_baseline_correction,
 # Include all source files directly into the main module
 include("BloomFilters.jl")
 include("Common.jl")
+include("Platform.jl")
 include("MSIData.jl")
 include("ParserHelpers.jl")
 include("mzML.jl")
@@ -81,12 +82,16 @@ Opens a .mzML or .imzML file and prepares it for data access.
 
 This is the main entry point for the new data access API.
 """
-function OpenMSIData(filepath::String; cache_size=300, spectrum_type_map::Union{Dict{Int, Symbol}, Nothing}=nothing)
+function OpenMSIData(filepath::String; cache_size=300, spectrum_type_map::Union{Dict{Int, Symbol}, Nothing}=nothing, use_mmap::Bool=false)
     local msi_data
+
+    # Detect platform profile once at the entry point
+    platform_profile = detect_platform_profile()
+
     if endswith(lowercase(filepath), ".mzml")
-        msi_data = load_mzml_lazy(filepath, cache_size=cache_size)
+        msi_data = load_mzml_lazy(filepath, cache_size=cache_size, use_mmap=use_mmap)
     elseif endswith(lowercase(filepath), ".imzml")
-        msi_data = load_imzml_lazy(filepath, cache_size=cache_size)
+        msi_data = load_imzml_lazy(filepath, cache_size=cache_size, use_mmap=use_mmap)
     else
         error("Unsupported file type: $filepath. Please provide a .mzML or .imzML file.")
     end

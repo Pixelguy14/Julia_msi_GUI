@@ -1,13 +1,7 @@
 # src/MSIData.jl
 
-"""
-This file defines the unified MSIData object and the associated data access layer,
-including caching and iteration logic, for handling large mzML and imzML datasets
-efficiently.
-"""
-
 using Base64, Libz, Serialization, Printf, DataFrames, Base.Threads, StatsBase
-using .Platform # Import the new Platform module
+using Mmap
 
 const FILE_HANDLE_LOCK = ReentrantLock()
 
@@ -42,6 +36,7 @@ function calculate_optimal_analytics_chunk_size(total_spectra::Int, system_caps:
     max_chunk_size = 20000
 
     return clamp(dynamic_chunk_size, min_chunk_size, max_chunk_size)
+
 end
 
 """
@@ -70,8 +65,21 @@ way to read from a specific offset in the file.
 """
 function read_at!(tsfh::ThreadSafeFileHandle, a::AbstractArray, pos::Integer)
     lock(tsfh.lock) do
-        seek(tsfh.handle, pos)
-        read!(tsfh.handle, a)
+        try
+            seek(tsfh.handle, pos)
+            read!(tsfh.handle, a)
+        catch e
+            error_str = sprint(showerror, e)
+            if isa(e, SystemError) && occursin("Bad file descriptor", error_str)
+                @warn "Bad file descriptor detected. Attempting to re-open file handle for $(tsfh.path) and retry."
+                close(tsfh.handle) # Close the problematic handle
+                tsfh.handle = open(tsfh.path, "r") # Re-open
+                seek(tsfh.handle, pos) # Retry seek
+                read!(tsfh.handle, a) # Retry read
+            else
+                rethrow(e)
+            end
+        end
     end
 end
 
@@ -127,9 +135,25 @@ A data source for `.imzML` files, holding a handle to the binary `.ibd` file
 and the expected format for m/z and intensity arrays.
 """
 struct ImzMLSource <: MSDataSource
-    ibd_handle::Union{IO, ThreadSafeFileHandle}
+    ibd_handle::Union{IO, ThreadSafeFileHandle, Vector{UInt8}}
     mz_format::Type
     intensity_format::Type
+end
+
+function ImzMLSource(ibd_path::String, mz_format::Type, intensity_format::Type, use_mmap::Bool)
+    if use_mmap
+        println("Using memory-mapping for .ibd file.")
+        try
+            mmap_array = Mmap.mmap(ibd_path, Vector{UInt8})
+            return ImzMLSource(mmap_array, mz_format, intensity_format)
+        catch e
+            @warn "Memory mapping failed, falling back to file handles: $e"
+        end
+    end
+    
+    println("Using file handles for .ibd file.")
+    handle = ThreadSafeFileHandle(ibd_path, "r")
+    return ImzMLSource(handle, mz_format, intensity_format)
 end
 
 """
@@ -153,7 +177,7 @@ Contains metadata for a single binary data array (m/z or intensity) within a spe
 - `format`: The data type of the elements (e.g., `Float32`, `Int64`).
 - `is_compressed`: A boolean flag indicating if the data is compressed (e.g., with zlib).
 - `offset`: The byte offset of the data within the file (`.ibd` for imzML, `.mzML` for mzML).
-- `encoded_length`: The length of the data, which has different meanings depending on the format:
+- `encoded_length`:
     - **Uncompressed imzML**: The number of elements (points) in the array.
     - **Compressed imzML**: The number of bytes of the compressed data chunk in the `.ibd` file.
     - **mzML**: The number of characters in the Base64 encoded string within the `.mzML` file.
@@ -232,6 +256,7 @@ Contains all metadata for a single spectrum, common to both imzML and mzML forma
 # Fields
 - `x`, `y`: The spatial coordinates of the spectrum (for imzML only).
 - `id`: The unique identifier string for the spectrum (for mzML only).
+- `type`: e.g., :sample, :blank, :qc
 - `mode`: The spectrum mode (`CENTROID` or `PROFILE`).
 - `mz_asset`: A `SpectrumAsset` for the m/z array.
 - `int_asset`: A `SpectrumAsset` for the intensity array.
@@ -261,6 +286,7 @@ efficient repeated access to spectra.
 # Fields
 - `source`: The underlying `MSDataSource` (`ImzMLSource` or `MzMLSource`).
 - `spectra_metadata`: A vector of `SpectrumMetadata` for all spectra in the file.
+- `instrument_metadata`: Metadata about the instrument configuration.
 - `image_dims`: A tuple `(width, height)` of the spatial dimensions (for imzML).
 - `coordinate_map`: A matrix mapping `(x, y)` coordinates to a linear spectrum index (for imzML).
 - `cache`: A dictionary holding cached spectra, mapping index to `(mz, intensity)`.
@@ -270,6 +296,9 @@ efficient repeated access to spectra.
 - `global_min_mz`: Cached global minimum m/z value across all spectra.
 - `global_max_mz`: Cached global maximum m/z value across all spectra.
 - `spectrum_stats_df`: A `DataFrame` containing pre-computed per-spectrum analytics (e.g., TIC, BPI).
+- `bloom_filters`: Lazy-initialized Bloom filters for fast spectrum content checking.
+- `analytics_ready`: Flag indicating if analytics have been pre-computed.
+- `preprocessing_hints`: Dictionary for auto-determined parameters.
 """
 mutable struct MSIData
     source::MSDataSource
@@ -525,7 +554,7 @@ end
 
 # Overload for different source types
 """
-    read_spectrum_from_disk(source::ImzMLSource, meta::SpectrumMetadata)
+    read_uncompressed_array(mmap_array::Vector{UInt8}, asset::SpectrumAsset, format::Type)
 
 Reads a single spectrum's m/z and intensity arrays directly from the `.ibd`
 binary file for an `.imzML` dataset. It handles reading the raw binary data
@@ -538,24 +567,51 @@ and converting it from little-endian to the host's native byte order.
 # Returns
 - A tuple `(mz, intensity)` containing the two requested data arrays.
 """
-function read_spectrum_from_disk(source::ImzMLSource, meta::SpectrumMetadata)
-    # For imzML, the binary data is raw, not base64 encoded.
-    # The `encoded_length` field in this case holds the number of points.
-    mz = Array{source.mz_format}(undef, meta.mz_asset.encoded_length)
-    intensity = Array{source.intensity_format}(undef, meta.int_asset.encoded_length)
-
-    # Use the new atomic read_at! method for thread-safety
-    read_at!(source.ibd_handle, mz, meta.mz_asset.offset)
-    read_at!(source.ibd_handle, intensity, meta.int_asset.offset)
-
-    # imzML data is little-endian. Convert to host byte order.
-    mz .= ltoh.(mz)
-    intensity .= ltoh.(intensity)
-
-    validate_spectrum_data(mz, intensity, meta.id) 
-
-    return mz, intensity
+function read_uncompressed_array(mmap_array::Vector{UInt8}, asset::SpectrumAsset, format::Type)
+    # For uncompressed imzML, encoded_length is number of elements
+    n_elements = asset.encoded_length
+    byte_length = n_elements * sizeof(format)
+    
+    # Check bounds
+    if asset.offset + byte_length > length(mmap_array)
+        throw(BoundsError(mmap_array, asset.offset+1:asset.offset+byte_length))
+    end
+    
+    # Create a view into the mmapped array
+    byte_view = @view mmap_array[asset.offset+1:asset.offset+byte_length]
+    
+    # Reinterpret as the desired type
+    reinterpreted = reinterpret(format, byte_view)
+    
+    # Convert endianness (imzML is little-endian)
+    return [ltoh(x) for x in reinterpreted]
 end
+
+function read_spectrum_from_disk(source::ImzMLSource, meta::SpectrumMetadata)
+    if source.ibd_handle isa Vector{UInt8}
+        # Fast path: read from mmapped array
+        mz = read_uncompressed_array(source.ibd_handle, meta.mz_asset, source.mz_format)
+        intensity = read_uncompressed_array(source.ibd_handle, meta.int_asset, source.intensity_format)
+        return mz, intensity
+    else
+        # For imzML, the binary data is raw, not base64 encoded.
+        # The `encoded_length` field in this case holds the number of points.
+        mz = Array{source.mz_format}(undef, meta.mz_asset.encoded_length)
+        intensity = Array{source.intensity_format}(undef, meta.int_asset.encoded_length)
+
+        # Use the new atomic read_at! method for thread-safety
+        read_at!(source.ibd_handle, mz, meta.mz_asset.offset)
+        read_at!(source.ibd_handle, intensity, meta.int_asset.offset)
+
+        # imzML data is little-endian. Convert to host byte order.
+        mz .= ltoh.(mz)
+        intensity .= ltoh.(intensity)
+
+        validate_spectrum_data(mz, intensity, meta.id) 
+
+        return mz, intensity
+    end # This ends the else block
+end # This ends the function
 
 """
     read_spectrum_from_disk(source::MzMLSource, meta::SpectrumMetadata)
@@ -771,7 +827,8 @@ function precompute_analytics(msi_data::MSIData)
         bloom_filters = nothing
 
         # Process in chunks to reduce memory pressure
-        chunk_size = min(10000, num_spectra)
+        system_caps = detect_system_capabilities()
+        chunk_size = calculate_optimal_analytics_chunk_size(num_spectra, system_caps)
         
         for chunk_start in 1:chunk_size:num_spectra
             chunk_end = min(chunk_start + chunk_size - 1, num_spectra)
@@ -1270,12 +1327,16 @@ is significantly faster for bulk processing than reading spectra one by one.
 """
 function _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     # Optimized path for uncompressed data using buffer reuse
-    max_points = maximum(meta -> meta.mz_asset.encoded_length, data.spectra_metadata)
-    mz_buffer = Vector{source.mz_format}(undef, max_points)
-    int_buffer = Vector{source.intensity_format}(undef, max_points)
 
     # Determine which indices to iterate over
-    spectrum_indices = (indices_to_iterate === nothing) ? (1:length(data.spectra_metadata)) : indices_to_iterate
+    spectrum_indices = (indices_to_iterate === nothing) ? (1:length(data.spectra_metadata)) : collect(indices_to_iterate) # Ensure it's a concrete vector
+
+    # Determine max_points for pre-allocation (common for both paths)
+    max_points = isempty(data.spectra_metadata) ? 0 : maximum(meta -> meta.mz_asset.encoded_length, data.spectra_metadata)
+    
+    # Pre-allocate buffers for the output (mutable arrays for in-place ltoh)
+    mz_buffer = Vector{source.mz_format}(undef, max_points)
+    int_buffer = Vector{source.intensity_format}(undef, max_points)
 
     for i in spectrum_indices
         meta = data.spectra_metadata[i]
@@ -1289,16 +1350,29 @@ function _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSou
         mz_view = view(mz_buffer, 1:nPoints)
         int_view = view(int_buffer, 1:nPoints)
 
-        if meta.mz_asset.offset < meta.int_asset.offset
-            seek(source.ibd_handle, meta.mz_asset.offset)
-            read!(source.ibd_handle, mz_view)
-            seek(source.ibd_handle, meta.int_asset.offset) # FIX: Added missing seek
-            read!(source.ibd_handle, int_view)
-        else
-            seek(source.ibd_handle, meta.int_asset.offset)
-            read!(source.ibd_handle, int_view)
-            seek(source.ibd_handle, meta.mz_asset.offset) # FIX: Added missing seek
-            read!(source.ibd_handle, mz_view)
+        # Use appropriate read mechanism
+        if source.ibd_handle isa ThreadSafeFileHandle
+            # Ensure correct order of reading if offsets are close
+            if meta.mz_asset.offset < meta.int_asset.offset
+                read_at!(source.ibd_handle, mz_view, meta.mz_asset.offset)
+                read_at!(source.ibd_handle, int_view, meta.int_asset.offset)
+            else
+                read_at!(source.ibd_handle, int_view, meta.int_asset.offset)
+                read_at!(source.ibd_handle, mz_view, meta.mz_asset.offset)
+            end
+        else # Plain IOStream
+            # Ensure correct order of reading if offsets are close
+            if meta.mz_asset.offset < meta.int_asset.offset
+                seek(source.ibd_handle, meta.mz_asset.offset)
+                read!(source.ibd_handle, mz_view)
+                seek(source.ibd_handle, meta.int_asset.offset) # FIX: Added missing seek
+                read!(source.ibd_handle, int_view)
+            else
+                seek(source.ibd_handle, meta.int_asset.offset)
+                read!(source.ibd_handle, int_view)
+                seek(source.ibd_handle, meta.mz_asset.offset) # FIX: Added missing seek
+                read!(source.ibd_handle, mz_view)
+            end
         end
 
         mz_view .= ltoh.(mz_view)
@@ -1556,7 +1630,7 @@ end
 
 Retrieves the Bloom filter for a specific spectrum by its index.
 If the Bloom filter has not yet been created (due to lazy initialization),
-it will be created on-demand and cached.
+its will be created on-demand and cached.
 
 # Arguments
 - `data`: The `MSIData` object.

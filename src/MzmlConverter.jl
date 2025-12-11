@@ -506,7 +506,7 @@ m/z and intensity arrays to the `.ibd` file in little-endian byte order.
     - A vector of `(x, y)` coordinate tuples.
     - A tuple of the final image dimensions.
 """
-function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing_matrix::Matrix{Int64}, scans::Matrix{Int64})
+function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing_matrix::Matrix{Int64}, scans::Matrix{Int64}; use_mmap::Bool=false)
     if size(timing_matrix, 1) == 0
         # Create an empty .ibd file if there's nothing to process
         open(target_ibd_file, "w") do ibd_stream
@@ -518,7 +518,7 @@ function ConvertMzmlToImzml(source_file::String, target_ibd_file::String, timing
     width = maximum(timing_matrix[:, 1])
     height = maximum(timing_matrix[:, 2])
     
-    msi_data = OpenMSIData(source_file)
+    msi_data = OpenMSIData(source_file, use_mmap=use_mmap)
     
     local binary_meta_vec, coords_vec, pixel_modes, ibd_uuid
     
@@ -843,7 +843,7 @@ Main workflow function to convert a .mzML file to an .imzML file.
 * `img_width`: width dimention for the creation of the x axis
 * `img_height`: height dimention for the creation of the y axis
 """
-function ImportMzmlFile(source_file::String, sync_file::String, target_file::String; img_width::Int=0, img_height::Int=0)
+function ImportMzmlFile(source_file::String, sync_file::String, target_file::String; img_width::Int=0, img_height::Int=0, use_mmap::Bool=false)
     if !isfile(source_file)
         throw(ArgumentError("Source mzML file not found: $source_file"))
     end
@@ -856,7 +856,7 @@ function ImportMzmlFile(source_file::String, sync_file::String, target_file::Str
 
     println("Step 3: Converting spectra and writing .ibd file...")
     ibd_file = replace(target_file, r"\.imzML$"i => ".ibd")
-    binary_meta, coords, (width, height), pixel_modes, ibd_uuid, instrument_meta = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans)
+    binary_meta, coords, (width, height), pixel_modes, ibd_uuid, instrument_meta = ConvertMzmlToImzml(source_file, ibd_file, timing_matrix, scans; use_mmap=use_mmap)
 
     # Flip image vertically to match R script output
     flipped_coords = [(x, height - y + 1) for (x, y) in coords]

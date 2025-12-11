@@ -10,7 +10,7 @@
 # Instructions:
 # 1. Fill in the placeholder paths in the "CONFIG" section below.
 # 2. Run the script from the project's root directory:
-#    julia --project=. test/run_tests.jl
+#    julia --threads auto --project=. test/run_tests.jl
 # 3. Check the `test/results/` folder for the output images.
 # ===================================================================
 
@@ -58,22 +58,25 @@ const CONVERSION_TARGET_IMZML = "test/results/converted_mzml.imzML"
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging prueba Roya 1/royaimg.imzML"
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/ltpmsi-chilli.imzML" # centroid aparently?
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_compressed.imzML" # centroid compressed
-const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML" # centroid
+#const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML" # centroid
+const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Liv2_imzML_TIMSConvert-selected/Liv2.imzML" # centroid
 # The m/z value to use for creating an image slice.
 # const MZ_VALUE_FOR_SLICE = 309.06 # BF
 # const MZ_VALUE_FOR_SLICE = 896.0 # HR2MSI
 # const MZ_VALUE_FOR_SLICE = 76.03 # I PS
 # const MZ_VALUE_FOR_SLICE = 313 # ROYA
-const MZ_VALUE_FOR_SLICE = 100 # advanced processing
+#const MZ_VALUE_FOR_SLICE = 100 # advanced processing
+const MZ_VALUE_FOR_SLICE = 804.44 # liv2
 # const MZ_TOLERANCE = 0.1
 # const MZ_TOLERANCE = 1
 const MZ_TOLERANCE = 0.1
 
 # Coordinates to plot a specific spectrum from imzML
-const COORDS_TO_PLOT = (50, 50) # Example coordinates (X, Y)
+#const COORDS_TO_PLOT = (50, 50) # Example coordinates (X, Y)
+const COORDS_TO_PLOT = (400, 200) # Example coordinates (X, Y)
 
 # --- Output Directory ---
-const RESULTS_DIR = "test/results"
+const RESULTS_DIR = "test/results/new"
 
 test1 = true
 test2 = false 

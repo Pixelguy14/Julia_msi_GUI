@@ -10,6 +10,29 @@ This file provides common helper functions for parsing mzML and imzML files.
 #
 # ============================================================================
 
+# Pre-compiled Regex patterns for efficiency
+const ACCESSION_REGEX = r"accession=\"([^\"]*)\""
+const VALUE_REGEX = r"value=\"([^\"]*)\""
+const NAME_REGEX = r"name=\"([^\"]*)\""
+const CVP_START_REGEX = r"^\s*<cvParam"
+const CVP_END_TAG_REGEX = r"^\s*</"
+const SPECTRUM_TAG_ID_REGEX = r"<spectrum\s+[^>]*id=\"([^\"]+)\"" # For direct ID extraction
+const BINARY_DATA_ARRAY_ENCODED_LENGTH_REGEX = r"<binaryDataArray\s+[^>]*encodedLength=\"(\d+)\""
+const INDEX_SPECTRUM_TAG_REGEX = r"<index\s+name=\"spectrum\""
+const OFFSET_TAG_REGEX = r"<offset[^>]*>(\d+)</offset>"
+const INDEX_LIST_OFFSET_REGEX = r"<indexListOffset>(\d+)</indexListOffset>"
+const COUNT_REGEX = r"count=\"(\d+)\""
+const REF_PARAM_GROUP_LIST_REGEX = r"<referenceableParamGroupList"
+const REF_PARAM_GROUP_ID_REGEX = r"<referenceableParamGroup id=\"([^\"]+)\""
+const X_COORD_REGEX = r"IMS:1000050[^>]*value=\"(\d+)\""
+const Y_COORD_REGEX = r"IMS:1000051[^>]*value=\"(\d+)\""
+const DEFAULT_ARRAY_LENGTH_REGEX = r"defaultArrayLength=\"(\d+)\""
+const ENCODED_LENGTH_ATTR_REGEX = r"encodedLength=\"(\d+)\""
+const ARRAY_LENGTH_CV_REGEX = r"IMS:1000103.*?value=\"(\d+)\""
+const ENCODED_LEN_CV_REGEX = r"IMS:1000104.*?value=\"(\d+)\""
+const OFFSET_CV_REGEX = r"IMS:1000102.*?value=\"(\d+)\""
+
+
 """
     SpecDim
 
@@ -43,21 +66,6 @@ function find_tag(stream, regex::Regex)
 end
 
 """
-    get_attribute(source::String, tag::String = "([^=]+)")
-
-Retrieves an attribute's value from an XML tag string.
-
-# Returns
-- A `RegexMatch` object containing the attribute and its value.
-"""
-function get_attribute(source::AbstractString, tag::String = "([^=]+)")
-    # Construct the regex pattern string
-    pattern_str = "\\s*" * tag * "=\"([^\"]*)\""
-    regStr = Regex(pattern_str)
-    return match(regStr, source)
-end
-
-"""
     configure_spec_dim(stream)
 
 Parses a block of `<cvParam>` tags from an XML stream to configure a `SpecDim`
@@ -71,22 +79,24 @@ compression status (`zlib`), and axis type (m/z vs. intensity).
 - A `SpecDim` struct populated with the parsed configuration.
 """
 function configure_spec_dim(stream)
-    axis = SpecDim(Float64, false, 1, 0, UNKNOWN)  # Add UNKNOWN as default mode
+    axis = SpecDim(Float64, false, 1, 0, UNKNOWN)
     
     while !eof(stream)
         currLine = readline(stream)
-        matchInfo = match(r"^\s*<(cvParam)", currLine)
+        
+        # Check for start of cvParam
+        matchInfo = match(CVP_START_REGEX, currLine)
 
         if matchInfo === nothing
-            # Check for end of cvParam block
-            if match(r"^\s*</", currLine) !== nothing
+            # Check for end of cvParam block (any closing tag)
+            if match(CVP_END_TAG_REGEX, currLine) !== nothing
                 return axis
             end
             continue
         end
 
-        index = length(matchInfo.captures[1])
-        attr_match = get_attribute(currLine[index:end], "accession")
+        # Extract accession using the pre-compiled regex
+        attr_match = match(ACCESSION_REGEX, currLine)
 
         if attr_match !== nothing
             accession = attr_match.captures[1]
@@ -108,28 +118,4 @@ function configure_spec_dim(stream)
         end
     end
     return axis
-end
-
-# ============================================================================
-#
-# Data Structures and Helpers for mzML lazy parsing
-#
-# ============================================================================
-
-"""
-    CVParams
-
-A mutable struct used during the parsing of mzML files to temporarily hold
-CV parameter information for a data array before it is converted into a
-`SpectrumAsset`.
-
-# Fields
-- `format`: The data type (e.g., `Float64`).
-- `is_compressed`: A boolean indicating if the data is compressed.
-- `axis_type`: A symbol indicating the array type (`:mz` or `:intensity`).
-"""
-mutable struct CVParams
-    format::Type
-    is_compressed::Bool
-    axis_type::Symbol
 end

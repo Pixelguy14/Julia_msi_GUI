@@ -31,7 +31,7 @@ using .MSI_src: get_mz_slice, quantize_intensity, save_bitmap, get_multiple_mz_s
 using julia_mzML_imzML
 
 # Remember, to run this, you must enter pkg mode in julia and add this library:
-# add github.com/CINVESTAV-LABI/julia_mzML_imzML
+# add https://github.com/CINVESTAV-LABI/julia_mzML_imzML
 
 # ===================================================================
 # CONFIG: PLEASE FILL IN YOUR FILE PATHS AND PARAMETERS
