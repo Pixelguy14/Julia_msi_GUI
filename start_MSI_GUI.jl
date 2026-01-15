@@ -1,13 +1,31 @@
 using Pkg
 sTime=time()
 Pkg.activate(".")
-Pkg.instantiate()
-Pkg.gc()
+ENV["GENIE_ENV"] = "dev"
+#ENV["GENIE_ENV"] = "prod"
+
+manifest_path = joinpath(@__DIR__, "Manifest.toml")
+
+# Only instantiate in development mode
+if get(ENV, "GENIE_ENV", "dev") != "prod" || !isfile(manifest_path)
+    @info "Development environment detected. Instantiating packages..."
+    
+    if !isfile(manifest_path)
+        @info "Manifest.toml not found. Generating it based on Project.toml..."
+    end
+
+    Pkg.resolve()
+    Pkg.instantiate()
+    Pkg.gc()
+end
 
 using Genie
 
 # Load and configure Genie
 Genie.loadapp()
+
+# Remove html parser error discrepancy
+redirect_stderr(devnull)
 
 # Start the Genie server
 @async begin
