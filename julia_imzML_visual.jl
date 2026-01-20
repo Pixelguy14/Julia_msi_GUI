@@ -1,148 +1,146 @@
-# IntQuantCl is originally a function of julia mzMl imzML with the adition 
-# of altering the scale of the colors according to colorlevel.
-function IntQuantCl( slice , colorLevel)
-    # Compute scale factor for amplitude discretization
-    lower  = minimum( slice )
-    scale  = colorLevel / maximum( slice )
-    dim    = size( slice )
-    image  = zeros( UInt8, dim[1], dim[2] )
-    for i in 1:length( slice )
-        image[i] = convert( UInt8, floor( slice[i] * scale + 0.5 ) )
-    end
-    return image
-end
+# julia_imzML_visual.jl
 
-# SaveBitmap originally a function of the mzML imzML library in julia,
-# This function dinamically adjust the color palete adjusting to the ammount of colors
-# available in pixmap
-function SaveBitmapCl( name, pixMap::Array{UInt8,2}, colorTable::Array{UInt32,1} )
-    # Get image dimensions
-    dim = size( pixMap )
-    if length( dim ) != 2
-      return 0
-    end
-    # Normalize pixel values to get a more accurate reading of the image
-    minVal = minimum(pixMap)
-    maxVal = maximum(pixMap)
-    pixMap = round.(UInt8, 255 * (pixMap .- minVal) ./ (maxVal - minVal))
-    # Compute row padding
-    padding = ( 4 - dim[1] & 0x3 ) & 0x3
-    # Compute file dimensions. Header = 14 + 40 + ( 256 * 4 ) = 1078
-    offset   = 1078
-    imgBytes = dim[2] * ( dim[1] + padding )
-    # Create file
-    stream = open( name, "w" )
-    # Save file header
-    write( stream, UInt16( 0x4D42 ) )
-    write( stream, UInt32[ offset + imgBytes, 0 , offset ] )
-    # Save info header
-    write( stream, UInt32[ 40, dim[1], dim[2], 0x80001, 0 ] )
-    write( stream, UInt32[ imgBytes, 0, 0, 256, 0 ] )
-    # Save color table
-    write( stream, colorTable )
-    if length( colorTable ) < 256
-        fixTable = zeros( UInt32, 256 - length( colorTable ) )
-        write( stream, fixTable )
-    end
-    # Save image pixels
-    if padding == 0
-        for i = 1:dim[2]
-            write( stream, pixMap[:,i] )
-        end
-    else
-        zeroPad = zeros( UInt8, padding )
-        for i in 1:dim[2]
-            write( stream, pixMap[:,i] )
-            write( stream, zeroPad )
-        end
-    end
-    # Close file
-    close( stream )
-end
+const REGISTRY_LOCK = ReentrantLock()
 
-# SaveBitmap originally a function of the mzML imzML library in julia,
-# now has an adjustment for NaN values in case they exist to mantain data integrity
-function GetMzSliceJl(imzML, mass, tolerance)
-    # Alloc space for slice
-    width = maximum(imzML[1, :])
-    height = maximum(imzML[2, :])
-    image = fill(0.0, width, height)
+"""
+    increment_image(current_image, image_list)
 
-    for i in 1:size(imzML)[2]
-        index = julia_mzML_imzML.FindMass(imzML[3, i], mass, tolerance)
-        if index != 0
-            image[imzML[1, i], imzML[2, i]] = imzML[4, i][index]
-        end
-    end
-    # Adjustment for NaN values with 0
-    replace!(image, NaN => 0.0)
-    return image
-end
+Finds the next image in a list.
 
-# == Search functions ==
-# Functions that recieve a list to update, and the current direction both as string for
-# searching in the directory the position the list is going
+# Arguments
+- `current_image`: The current image file name.
+- `image_list`: The list of available image file names.
+
+# Returns
+- The file name of the next image, or the last image if the current one is the last or not found.
+- `nothing` if `image_list` is empty.
+"""
 function increment_image(current_image, image_list)
     if isempty(image_list)
         return nothing
     end
-    current_index=findfirst(isequal(current_image), image_list)
-    if current_index==nothing || current_index==length(image_list) || current_image ===""
-        return image_list[length(image_list)]  # Return the current image if it's the last one or not found
+    current_index = findfirst(isequal(current_image), image_list)
+    if current_index === nothing || current_index == length(image_list) || current_image == ""
+        return image_list[end]  # Return the last image if current is not found or is the last
     else
         return image_list[current_index + 1]  # Move to the next image
     end
 end
 
+"""
+    decrement_image(current_image, image_list)
+
+Finds the previous image in a list.
+
+# Arguments
+- `current_image`: The current image file name.
+- `image_list`: The list of available image file names.
+
+# Returns
+- The file name of the previous image, or the first image if the current one is the first or not found.
+- `nothing` if `image_list` is empty.
+"""
 function decrement_image(current_image, image_list)
     if isempty(image_list)
         return nothing
     end
-    current_index=findfirst(isequal(current_image), image_list)
-    if current_index==nothing || current_index==1 || current_image===""
-        return image_list[1]  # Return the current image if it's the first one or not found
+    current_index = findfirst(isequal(current_image), image_list)
+    if current_index === nothing || current_index == 1 || current_image == ""
+        return image_list[1]  # Return the first image if current is not found or is the first
     else
         return image_list[current_index - 1]  # Move to the previous image
     end
 end
 
-## Plot Image functions
-# loadImgPlot recieves the local directory of the image as a string,
-# returns the layout and data for the heatmap plotly plot
-# this function loads the image into a plot
+"""
+    downsample_image(img_matrix, max_dim::Int)
+
+Downsamples an image matrix to a maximum dimension while preserving aspect ratio.
+
+# Arguments
+- `img_matrix`: The image matrix to downsample.
+- `max_dim`: The maximum dimension (width or height) for the downsampled image.
+
+# Returns
+- The downsampled image matrix.
+"""
+function downsample_image(img_matrix, max_dim::Int)
+    h, w = size(img_matrix)
+    if h <= max_dim && w <= max_dim
+        return img_matrix # No downsampling needed
+    end
+
+    aspect_ratio = w / h
+    if w > h
+        new_w = max_dim
+        new_h = round(Int, max_dim / aspect_ratio)
+    else
+        new_h = max_dim
+        new_w = round(Int, max_dim * aspect_ratio)
+    end
+
+    # imresize from Images.jl is perfect for this
+    return imresize(img_matrix, (new_h, new_w))
+end
+
+"""
+    loadImgPlot(interfaceImg::String)
+
+Loads an image and creates a Plotly heatmap.
+
+# Arguments
+- `interfaceImg`: The path to the image file relative to the "public" directory.
+
+# Returns
+- `plotdata`: A vector containing the Plotly trace.
+- `plotlayout`: The Plotly layout for the plot.
+- `width`: The width of the loaded image.
+- `height`: The height of the loaded image.
+"""
 function loadImgPlot(interfaceImg::String)
     # Load the image
-    cleaned_img=replace(interfaceImg, r"\?.*" => "")
-    cleaned_img=lstrip(cleaned_img, '/')
-    var=joinpath("./public", cleaned_img)
-    img=load(var)
+    cleaned_img = replace(interfaceImg, r"\?.*" => "")
+    cleaned_img = lstrip(cleaned_img, '/')
+    var = joinpath("./public", cleaned_img)
+    img = load(var)
     # Convert to grayscale
-    img_gray=Gray.(img)
-    img_array=Array(img_gray)
-    elevation=Float32.(Array(img_array)) ./ 255.0
+    img_gray = Gray.(img)
+    img_array = Array(img_gray)
+    elevation = Float32.(Array(img_array)) ./ 255.0
     # Get the X, Y coordinates of the image
-    height, width=size(img_array)
-    X=collect(1:width)
-    Y=collect(1:height)
+    height, width = size(img_array)
+    X = 1:width
+    Y = 1:height
 
     # Create the layout
-    layout=PlotlyBase.Layout(
+    layout = PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text="",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=14,
+                color="black"
+            )
+        ),
         xaxis=PlotlyBase.attr(
             visible=false,
-            scaleanchor="y"
+            scaleanchor="y",
+            range=[0, width]
         ),
         yaxis=PlotlyBase.attr(
-            visible=false
+            visible=false,
+            range=[-height, 0]
         ),
-        margin=attr(l=0,r=0,t=0,b=0,pad=0)
+        margin=attr(l=0, r=0, t=0, b=0, pad=0)
     )
 
     # Create the trace for the image
-    trace=PlotlyBase.heatmap(
+    trace = PlotlyBase.heatmap(
         z=elevation,
         x=X,
         y=-Y,
         name="",
+        hoverinfo="x+y",
         showlegend=false,
         colorscale="Viridis",
         showscale=false,
@@ -163,15 +161,29 @@ function loadImgPlot(interfaceImg::String)
         )
     )
 
-    plotdata=[trace]
-    plotlayout=layout
+    plotdata = [trace]
+    plotlayout = layout
     return plotdata, plotlayout, width, height
 end
-# loadImgPlot recieves the local directory of the image as a string, the local directory o the overlay image
-# and the transparency its required to have. Returns the layout and data for the heatmap plotly plot
-# this function loads the image into a plot
+
+"""
+    loadImgPlot(interfaceImg::String, overlayImg::String, imgTrans::Float64)
+
+Loads a main image and overlays a second image on top, creating a Plotly heatmap.
+
+# Arguments
+- `interfaceImg`: Path to the main image file.
+- `overlayImg`: Path to the overlay image file.
+- `imgTrans`: Transparency level for the overlay image (0.0 to 1.0).
+
+# Returns
+- `plotdata`: A vector containing the Plotly trace for the main image.
+- `plotlayout`: The Plotly layout, including the overlay image.
+- `width`: The width of the main image.
+- `height`: The height of the main image.
+"""
 function loadImgPlot(interfaceImg::String, overlayImg::String, imgTrans::Float64)
-    timestamp=string(time_ns())
+    timestamp = string(time_ns())
     # Load the main image
     cleaned_img = replace(interfaceImg, r"\?.*" => "")
     cleaned_img = lstrip(cleaned_img, '/')
@@ -183,44 +195,53 @@ function loadImgPlot(interfaceImg::String, overlayImg::String, imgTrans::Float64
     elevation = Float32.(Array(img_array)) ./ 255.0
     # Get the X, Y coordinates of the image
     height, width = size(img_array)
-    X = collect(1:width)
-    Y = collect(1:height)
+    X = 1:width
+    Y = 1:height
 
     # Create the layout with overlay image
     layoutImg = PlotlyBase.Layout(
-        images = [attr(
-            source = "$(overlayImg)?t=$(timestamp)",
-            xref = "x",
-            yref = "y",
-            x = 0,
-            y = 0,
-            sizex = width,
-            sizey = -height,
-            sizing = "stretch",
-            opacity = imgTrans,
-            layer = "above"  # Place the overlay image in the foreground
+        title=PlotlyBase.attr(
+            text="",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=14,
+                color="black"
+            )
+        ),
+        images=[attr(
+            source="$(overlayImg)?t=$(timestamp)",
+            xref="x",
+            yref="y",
+            x=0,
+            y=0,
+            sizex=width,
+            sizey=-height,
+            sizing="stretch",
+            opacity=imgTrans,
+            layer="above"  # Place the overlay image in the foreground
         )],
-        xaxis = PlotlyBase.attr(
-            visible = false,
-            scaleanchor = "y",
-            range = [0, width]
+        xaxis=PlotlyBase.attr(
+            visible=false,
+            scaleanchor="y",
+            range=[0, width]
         ),
-        yaxis = PlotlyBase.attr(
-            visible = false,
-            range = [-height,0]
+        yaxis=PlotlyBase.attr(
+            visible=false,
+            range=[-height, 0]
         ),
-        margin = attr(l = 0, r = 0, t = 0, b = 0, pad = 0)
+        margin=attr(l=0, r=0, t=0, b=0, pad=0)
     )
 
     # Create the trace for the main image
     trace = PlotlyBase.heatmap(
-        z = elevation,
-        x = X,
-        y = -Y,
-        name = "",
-        showlegend = false,
-        colorscale = "Viridis",
-        showscale = false
+        z=elevation,
+        x=X,
+        y=-Y,
+        name="",
+        hoverinfo="x+y",
+        showlegend=false,
+        colorscale="Viridis",
+        showscale=false
     )
 
     plotdata = [trace]
@@ -228,10 +249,18 @@ function loadImgPlot(interfaceImg::String, overlayImg::String, imgTrans::Float64
     return plotdata, plotlayout, width, height
 end
 
-# loadContourPlot recieves the local directory of the image as a string,
-# returns the layout and data for the contour plotly plot
-# this function loads the image and applies a gaussian filter 
-# to smoothen it and loads it into a plot
+"""
+    loadContourPlot(interfaceImg::String)
+
+Loads an image, smooths it, and creates a Plotly contour plot.
+
+# Arguments
+- `interfaceImg`: Path to the image file.
+
+# Returns
+- `plotdata`: A vector containing the Plotly contour trace.
+- `plotlayout`: The Plotly layout for the plot.
+"""
 function loadContourPlot(interfaceImg::String)
     # Load the image
     cleaned_img=replace(interfaceImg, r"\?.*" => "")
@@ -246,6 +275,10 @@ function loadContourPlot(interfaceImg::String)
     sigma=3.0
     kernel=Kernel.gaussian(sigma)
     elevation_smoothed=imfilter(elevation, kernel)
+
+    # --- DOWNSAMPLING FOR PERFORMANCE ---
+    elevation_smoothed = downsample_image(elevation_smoothed, 512)
+    # ---
     
     # Create the X, Y meshgrid coordinates
     x=1:size(elevation_smoothed, 2)
@@ -260,7 +293,14 @@ function loadContourPlot(interfaceImg::String)
     tickT = log_tick_formatter(collect(tickV))
                 
     layout=PlotlyBase.Layout(
-        title="2D topographic map of $cleaned_img",
+        title=PlotlyBase.attr(
+            text="2D topographic map of $cleaned_img (downsampled)",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         xaxis=PlotlyBase.attr(
             visible=false,
             scaleanchor="y"
@@ -286,10 +326,19 @@ function loadContourPlot(interfaceImg::String)
     plotlayout=layout
     return plotdata, plotlayout
 end
-# loadSurfacePlot recieves the local directory of the image as a string,
-# returns the layout and data for the surface plotly plot
-# this function loads the image and applies a gaussian filter 
-# to smoothen it and loads it into a 3D plot
+
+"""
+    loadSurfacePlot(interfaceImg::String)
+
+Loads an image, smooths it, and creates a 3D Plotly surface plot.
+
+# Arguments
+- `interfaceImg`: Path to the image file.
+
+# Returns
+- `plotdata`: A vector containing the Plotly surface trace.
+- `plotlayout`: The Plotly layout for the 3D plot.
+"""
 function loadSurfacePlot(interfaceImg::String)
     # Load the image
     cleaned_img=replace(interfaceImg, r"\?.*" => "")
@@ -304,6 +353,10 @@ function loadSurfacePlot(interfaceImg::String)
     sigma=3.0
     kernel=Kernel.gaussian(sigma)
     elevation_smoothed=imfilter(elevation, kernel)
+
+    # --- DOWNSAMPLING FOR PERFORMANCE ---
+    elevation_smoothed = downsample_image(elevation_smoothed, 256)
+    # ---
     
     # Create the X, Y meshgrid coordinates 
     x=1:size(elevation_smoothed, 2) 
@@ -324,7 +377,14 @@ function loadSurfacePlot(interfaceImg::String)
     aspect_ratio=attr(x=1, y=length(y) / length(x), z=0.5)
     # Define the layout for the 3D plot
     layout3D=PlotlyBase.Layout(
-        title="3D surface plot of $cleaned_img",
+        title=PlotlyBase.attr(
+            text="3D surface plot of $cleaned_img (downsampled)",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
         scene=attr(
             xaxis_nticks=x_nticks,
             yaxis_nticks=y_nticks,
@@ -363,28 +423,52 @@ function loadSurfacePlot(interfaceImg::String)
     plotlayout=layout3D
     return plotdata, plotlayout
 end
-# This function recieves the x and y coords currently selected, and the dimentions of
-# the image to create two traces that will display in a cross section
+
+"""
+    crossLinesPlot(x, y, maxwidth, maxheight)
+
+Creates two line traces for a crosshair indicator on a plot.
+
+# Arguments
+- `x`: The x-coordinate of the crosshair center.
+- `y`: The y-coordinate of the crosshair center.
+- `maxwidth`: The width of the plot area.
+- `maxheight`: The height of the plot area.
+
+# Returns
+- `trace1`: The horizontal line trace.
+- `trace2`: The vertical line trace.
+"""
 function crossLinesPlot(x, y, maxwidth, maxheight)
     # Define the coordinates for the two lines
-    l1_x=[0, maxwidth]
-    l1_y=[y, y]
-    l2_x=[x, x]
-    l2_y=[0, maxheight]
+    l1_x = [0, maxwidth]
+    l1_y = [y, y]
+    l2_x = [x, x]
+    l2_y = [0, maxheight]
 
     # Create the line traces
-    trace1=PlotlyBase.scatter(x=l1_x, y=l1_y, mode="lines",line=attr(color="red", width=0.5),name="Line X",showlegend=false)
-    trace2=PlotlyBase.scatter(x=l2_x, y=l2_y, mode="lines",line=attr(color="red", width=0.5),name="Line Y",showlegend=false)
+    trace1 = PlotlyBase.scatter(x=l1_x, y=l1_y, mode="lines", line=attr(color="red", width=0.5), name="Line X", showlegend=false)
+    trace2 = PlotlyBase.scatter(x=l2_x, y=l2_y, mode="lines", line=attr(color="red", width=0.5), name="Line Y", showlegend=false)
 
     return trace1, trace2
 end
 
-# This function is used for giving colorbar values a visual format
-# that shortens long values giving them scientific notation
+"""
+    log_tick_formatter(values::Vector{Float64})
+
+Formats a vector of numbers into strings with a custom scientific notation for use as tick labels.
+For example, 1000 becomes "100x10¹" and 0.01 becomes "1.0x10⁻²".
+
+# Arguments
+- `values`: A vector of `Float64` values to format.
+
+# Returns
+- A vector of formatted strings.
+"""
 function log_tick_formatter(values::Vector{Float64})
     # Initialize exponents dictionary
-    exponents=zeros(Int, length(values))
-    formValues=zeros(Float64, length(values))
+    exponents = zeros(Int, length(values))
+    formValues = zeros(Float64, length(values))
     for i in 1:length(values)
         value = values[i]
         if value >= 1000  # positive formatting for notation
@@ -398,83 +482,859 @@ function log_tick_formatter(values::Vector{Float64})
                 exponents[i] -= 1
             end
         end
-        formValues[i]=value
+        formValues[i] = value
     end
     return map((v, e) -> e == 0 ? "$(round(v, sigdigits=2))" : "$(round(v, sigdigits=2))x10" * Makie.UnicodeFun.to_superscript(e), formValues, exponents)
-
 end
 
-# Median filter: an adaptation of the R medianfilter, which averages the matrix
-# with the close pixels just from the sides to reduce noise.
-# This one in particular is a midpoint fiter from a 3x3 neighbour area
-function medianFilterjl(pixMap)
-    height, width = size(pixMap)
-    padded_pixMap = padarray(pixMap, 1)
-    target = zeros(eltype(pixMap), height, width)
-    
-    for j in 1:width
-        for i in 1:height
-            neighbors = []
-            for dj in j:j+2
-                for di in i:i+2
-                    push!(neighbors, padded_pixMap[di, dj])
-                end
-            end
-            target[i, j] = median(neighbors)
-        end
+"""
+    meanSpectrumPlot(data::MSIData, dataset_name::String="")
+
+Generates a plot of the mean spectrum from MSIData.
+
+# Arguments
+- `data`: The `MSIData` object.
+- `dataset_name`: Optional name of the dataset for the plot title.
+
+# Returns
+- `plotdata`: A vector containing the Plotly trace.
+- `plotlayout`: The Plotly layout for the plot.
+- `xSpectraMz`: The m/z values of the spectrum.
+- `ySpectraMz`: The intensity values of the spectrum.
+"""
+function meanSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
+    # Determine base title based on mask usage
+    base_title = if mask_path !== nothing
+        "Masked Average Spectrum"
+    else
+        "Average Spectrum"
     end
     
-    return target
-end
-
-function padarray(A, padsize)
-    h, w = size(A)
-    padded = zeros(eltype(A), h + 2*padsize, w + 2*padsize)
-    padded[padsize+1:end-padsize, padsize+1:end-padsize] .= A
-    padded[1:padsize, padsize+1:end-padsize] .= A[1:padsize, :]
-    padded[end-padsize+1:end, padsize+1:end-padsize] .= A[end-padsize+1:end, :]
-    padded[padsize+1:end-padsize, 1:padsize] .= A[:, 1:padsize]
-    padded[padsize+1:end-padsize, end-padsize+1:end] .= A[:, end-padsize+1:end]
-    padded[1:padsize, 1:padsize] .= A[1, 1]
-    padded[1:padsize, end-padsize+1:end] .= A[1, end]
-    padded[end-padsize+1:end, 1:padsize] .= A[end, 1]
-    padded[end-padsize+1:end, end-padsize+1:end] .= A[end, end]
-    return padded
-end
-
-# meanSpectrumPlot recieves the local directory of the image as a string,
-# returns the layout and data for the surface plotly plot
-# this function loads the spectra data and makes a mean to display
-# its values in the spectrum plot
-function meanSpectrumPlot(mzmlRoute::String)
-    spectraMz=LoadMzml(mzmlRoute)
-    xSpectraMz=Float64[]
-    ySpectraMz=Float64[]
-
-    layout=PlotlyBase.Layout(
-        title="Mean spectrum plot",
+    title_text = isempty(dataset_name) ? base_title : "$base_title for: $dataset_name"
+    
+    layout = PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text=title_text,
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
+        hovermode="closest",
         xaxis=PlotlyBase.attr(
             title="<i>m/z</i>",
+            showgrid=true
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Average Intensity",
             showgrid=true,
-            tickformat = ".3g"
+            tickformat=".3g"
+        ),
+        margin=attr(l=0, r=0, t=120, b=0, pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0, 
+            xanchor="right", 
+            yanchor="top"
+        )
+    )
+
+    # Use the new, efficient function from the backend
+    xSpectraMz, ySpectraMz = get_average_spectrum(data, mask_path=mask_path)
+
+    if isempty(xSpectraMz) || isempty(ySpectraMz)
+        @warn "Average spectrum is empty."
+        trace = PlotlyBase.stem(x=Float64[], y=Float64[])
+        # Update title to indicate empty spectrum
+        layout.title.text = "Empty " * layout.title.text
+    else
+        df = data.spectrum_stats_df
+        plot_as_lines = false # Default to stem for safety if no mode info
+        if df !== nothing && hasproperty(df, :Mode) && !isempty(df.Mode)
+            profile_count = count(==(MSI_src.PROFILE), df.Mode)
+            plot_as_lines = profile_count > length(df.Mode) / 2
+        end
+
+        if plot_as_lines
+            trace = PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        else
+            trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Average", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        end
+    end
+
+    plotdata = [trace]
+    plotlayout = layout
+    return plotdata, plotlayout, xSpectraMz, ySpectraMz
+end
+
+"""
+    xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, imgHeight::Int, dataset_name::String="")
+
+Generates a plot for the spectrum at a specific coordinate (for imaging data) or index (for non-imaging data).
+
+# Arguments
+- `data`: The `MSIData` object.
+- `xCoord`: The x-coordinate or spectrum index.
+- `yCoord`: The y-coordinate (used for imaging data).
+- `imgWidth`: The width of the MSI image.
+- `imgHeight`: The height of the MSI image.
+- `dataset_name`: Optional name of the dataset for the plot title.
+
+# Returns
+- `plotdata`: A vector containing the Plotly trace.
+- `plotlayout`: The Plotly layout for the plot.
+- `mz`: The m/z values of the spectrum.
+- `intensity`: The intensity values of the spectrum.
+"""
+function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, imgHeight::Int, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
+    local mz::AbstractVector, intensity::AbstractVector
+    local spectrum_id::Int = -1 # Initialize spectrum_id
+    mz, intensity = Float64[], Float64[]
+    base_title = ""
+    spectrum_mode = MSI_src.PROFILE
+
+    if data.source isa ImzMLSource
+        w, h = data.image_dims
+        x = clamp(xCoord, 1, w)
+        y = clamp(yCoord, 1, h)
+        spectrum_id = (y - 1) * w + x # Calculate spectrum_id for imaging data
+
+        # Check if spectrum stats are available and retrieve the mode
+        if data.spectrum_stats_df !== nothing && hasproperty(data.spectrum_stats_df, :Mode)
+            if spectrum_id <= length(data.spectrum_stats_df.Mode)
+                try
+                    spectrum_mode = data.spectrum_stats_df.Mode[spectrum_id]
+                catch e
+                    @warn "Could not retrieve spectrum mode for index $spectrum_id. Defaulting to PROFILE."
+                    spectrum_mode = MSI_src.PROFILE
+                end
+            end
+        end
+
+        if mask_path !== nothing
+            mask_matrix = load_and_prepare_mask(mask_path, (imgWidth, imgHeight))
+            if !mask_matrix[y, x]
+                @warn "Coordinate ($x, $y) is outside the specified mask."
+                mz, intensity = Float64[], Float64[]
+                base_title = "Spectrum Outside Mask at ($x, $y)"
+            else
+                process_spectrum(data, Int(x), Int(y)) do recieved_mz, recieved_intensity
+                    mz = recieved_mz
+                    intensity = recieved_intensity
+                end
+                base_title = "Masked Spectrum at ($x, $y)"
+            end
+        else
+            process_spectrum(data, Int(x), Int(y)) do recieved_mz, recieved_intensity
+                mz = recieved_mz
+                intensity = recieved_intensity
+            end
+            base_title = "Spectrum at ($x, $y)"
+        end
+    else
+        # For non-imaging data, treat xCoord as the spectrum index
+        index = clamp(xCoord, 1, length(data.spectra_metadata))
+        spectrum_id = index # Assign index to spectrum_id for non-imaging data
+
+        if data.spectrum_stats_df !== nothing && hasproperty(data.spectrum_stats_df, :Mode)
+            if index <= length(data.spectrum_stats_df.Mode)
+                spectrum_mode = data.spectrum_stats_df.Mode[index]
+            end
+        end
+
+        process_spectrum(data, index) do recieved_mz, recieved_intensity
+            mz = recieved_mz
+            intensity = recieved_intensity
+        end
+        base_title = "Spectrum #$index"
+    end
+
+    plot_title = isempty(dataset_name) ? base_title : "$base_title for: $dataset_name"
+
+    layout = PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text=plot_title,
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
+        hovermode="closest",
+        xaxis=PlotlyBase.attr(
+            title="<i>m/z</i>",
+            showgrid=true
         ),
         yaxis=PlotlyBase.attr(
             title="Intensity",
             showgrid=true,
-            tickformat = ".3g"
+            tickformat=".3g"
         ),
-        autosize=false,
-        margin=attr(l=0,r=0,t=120,b=0,pad=0)
+        margin=attr(l=0, r=0, t=120, b=0, pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0, 
+            xanchor="right", 
+            yanchor="top"
+        )
     )
-    try
-        xSpectraMz=mean(spectraMz[1,:])
-        ySpectraMz=mean(spectraMz[2,:])
-    catch e
-        xSpectraMz=spectraMz[1,1]
-        ySpectraMz=spectraMz[2,1]
+
+    # Downsample for plotting performance
+    mz_down, int_down = MSI_src.downsample_spectrum(mz, intensity)
+
+    trace = if spectrum_mode == MSI_src.CENTROID
+        PlotlyBase.stem(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    else
+        PlotlyBase.scatter(x=mz_down, y=int_down, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
     end
-    trace=PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines")
-    plotdata=[trace] # We add the data from spectra to the plot
-    plotlayout=layout
+
+    plotdata = [trace]
+    plotlayout = layout
+
+    return plotdata, plotlayout, mz, intensity, spectrum_id
+end
+
+"""
+    nSpectrumPlot(data::MSIData, id::Int, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
+
+Generates a plot for a spectrum specified by its linear `id` for any type of MSIData.
+
+# Arguments
+- `data`: The `MSIData` object.
+- `id`: The linear index (ID) of the spectrum to plot.
+- `dataset_name`: Optional name of the dataset for the plot title.
+- `mask_path`: Optional path to a mask file (currently not used for plotting by ID, but kept for signature consistency).
+
+# Returns
+- `plotdata`: A vector containing the Plotly trace.
+- `plotlayout`: The Plotly layout for the plot.
+- `mz`: The m/z values of the spectrum.
+- `intensity`: The intensity values of the spectrum.
+- `spectrum_id`: The linear index of the spectrum (same as input `id`).
+"""
+function nSpectrumPlot(data::MSIData, id::Int, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
+    local mz::AbstractVector, intensity::AbstractVector
+    local plot_title::String
+    local spectrum_mode = MSI_src.PROFILE # Default to profile
+    local spectrum_id::Int = id # Spectrum ID is the input id
+
+    # Validate ID
+    if id < 1 || id > length(data.spectra_metadata)
+        @warn "Spectrum ID $id is out of bounds."
+        mz, intensity = Float64[], Float64[]
+        base_title = "Spectrum ID $id (Out of Bounds)"
+        spectrum_id = 0 # Indicate invalid spectrum ID
+    else
+        # Get spectrum mode
+        if data.spectrum_stats_df !== nothing && hasproperty(data.spectrum_stats_df, :Mode)
+            if id <= length(data.spectrum_stats_df.Mode)
+                spectrum_mode = data.spectrum_stats_df.Mode[id]
+            end
+        end
+
+        # Retrieve spectrum data
+        process_spectrum(data, id) do recieved_mz, recieved_intensity
+            mz = recieved_mz
+            intensity = recieved_intensity
+        end
+        base_title = "Spectrum #$id"
+    end
+
+    plot_title = isempty(dataset_name) ? base_title : "$base_title for: $dataset_name"
+
+    layout = PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text=plot_title,
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
+        hovermode="closest",
+        xaxis=PlotlyBase.attr(
+            title="<i>m/z</i>",
+            showgrid=true
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Intensity",
+            showgrid=true,
+            tickformat=".3g"
+        ),
+        margin=attr(l=0, r=0, t=120, b=0, pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0, 
+            xanchor="right", 
+            yanchor="top"
+        )
+    )
+
+    # Downsample for plotting performance
+    mz_down, int_down = MSI_src.downsample_spectrum(mz, intensity)
+
+    trace = if spectrum_mode == MSI_src.CENTROID
+        PlotlyBase.stem(x=mz_down, y=int_down, marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    else
+        PlotlyBase.scatter(x=mz_down, y=int_down, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Spectrum", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+    end
+
+    plotdata = [trace]
+    plotlayout = layout
+
+    return plotdata, plotlayout, mz, intensity, spectrum_id
+end
+
+"""
+    sumSpectrumPlot(data::MSIData, dataset_name::String="")
+
+Generates a plot of the total (summed) spectrum from MSIData.
+
+# Arguments
+- `data`: The `MSIData` object.
+- `dataset_name`: Optional name of the dataset for the plot title.
+
+# Returns
+- `plotdata`: A vector containing the Plotly trace.
+- `plotlayout`: The Plotly layout for the plot.
+- `xSpectraMz`: The m/z values of the spectrum.
+- `ySpectraMz`: The intensity values of the spectrum.
+"""
+function sumSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Union{String, Nothing}=nothing)
+    # Determine base title based on mask usage
+    base_title = if mask_path !== nothing
+        "Masked Total Spectrum"
+    else
+        "Total Spectrum"
+    end
+    
+    title_text = isempty(dataset_name) ? base_title : "$base_title for: $dataset_name"
+    
+    layout = PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text=title_text,
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
+        hovermode="closest",
+        xaxis=PlotlyBase.attr(
+            title="<i>m/z</i>",
+            showgrid=true
+        ),
+        yaxis=PlotlyBase.attr(
+            title="Total Intensity",
+            showgrid=true,
+            tickformat=".3g"
+        ),
+        margin=attr(l=0, r=0, t=120, b=0, pad=0),
+        legend=attr(
+            x=1.0, 
+            y=1.0, 
+            xanchor="right", 
+            yanchor="top"
+        )
+    )
+
+    # Use the get_total_spectrum function from the backend
+    xSpectraMz, ySpectraMz, num_spectra = get_total_spectrum(data, mask_path=mask_path)
+
+    if isempty(xSpectraMz) || isempty(ySpectraMz)
+        @warn "Total spectrum is empty."
+        trace = PlotlyBase.stem(x=Float64[], y=Float64[])
+        # Update title to indicate empty spectrum
+        layout.title.text = "Empty " * layout.title.text
+    else
+        df = data.spectrum_stats_df
+        plot_as_lines = false # Default to stem for safety
+        if df !== nothing && hasproperty(df, :Mode) && !isempty(df.Mode)
+            profile_count = count(==(MSI_src.PROFILE), df.Mode)
+            plot_as_lines = profile_count > length(df.Mode) / 2
+        end
+
+        if plot_as_lines
+            trace = PlotlyBase.scatter(x=xSpectraMz, y=ySpectraMz, mode="lines", marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        else
+            trace = PlotlyBase.stem(x=xSpectraMz, y=ySpectraMz, marker=attr(size=1, color="blue", opacity=0.5), name="Total", hoverinfo="x", hovertemplate="<b>m/z</b>: %{x:.4f}<extra></extra>")
+        end
+    end
+
+    plotdata = [trace]
+    plotlayout = layout
     return plotdata, plotlayout, xSpectraMz, ySpectraMz
+end
+
+"""
+    warmup_init()
+
+Performs pre-compilation of key functions at application startup to reduce first-use latency.
+This is run asynchronously and should not block application startup.
+"""
+function warmup_init()
+    @async begin
+        println("Pre-compiling functions at startup...")
+
+        # Pre-compile image processing and plotting functions
+        try
+            TrIQ(zeros(10, 10), 256, 0.98)
+        catch
+        end
+        try
+            quantize_intensity(zeros(10, 10), 256)
+        catch
+        end
+
+        dummy_bmp_path = joinpath("public", "dummy.bmp")
+        dummy_png_path = joinpath("public", "dummy.png")
+        try
+            save_bitmap(dummy_bmp_path, zeros(UInt8, 10, 10), ViridisPalette)
+            loadImgPlot("/dummy.bmp")
+            generate_colorbar_image(zeros(10, 10), 256, dummy_png_path, (0.0, 1.0))
+        catch e
+            @warn "Pre-compilation step failed (this is expected if dummy files can't be created/read)"
+        finally
+            rm(dummy_bmp_path, force=true)
+            rm(dummy_png_path, force=true)
+        end
+
+        println("Pre-compilation finished.")
+    end
+end
+
+"""
+    load_registry(registry_path)
+
+Loads the dataset registry from a JSON file.
+
+# Arguments
+- `registry_path`: Path to the `registry.json` file.
+
+# Returns
+- A dictionary containing the registry data. Returns an empty dictionary if the file doesn't exist or fails to parse.
+"""
+function load_registry(registry_path)
+    return lock(REGISTRY_LOCK) do
+        if isfile(registry_path)
+            try
+                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
+            catch e
+                @error "Failed to parse registry.json: $e"
+                Dict{String,Any}()
+            end
+        else
+            Dict{String,Any}()
+        end
+    end
+end
+
+"""
+    extract_metadata(msi_data::MSIData, source_path::String)
+
+Extracts key metadata from an `MSIData` object for display.
+
+# Arguments
+- `msi_data`: The `MSIData` object.
+- `source_path`: The path to the source data file.
+
+# Returns
+- A dictionary containing summary statistics and metadata.
+"""
+function extract_metadata(msi_data::MSIData, source_path::String)
+    df = msi_data.spectrum_stats_df
+    if df === nothing
+        # This can happen if precompute_analytics hasn't been run
+        # We can still return basic info
+        return Dict(
+            "summary" => [
+                Dict("parameter" => "File Name", "value" => basename(source_path)),
+                Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
+                Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
+            ],
+            "global_min_mz" => nothing,
+            "global_max_mz" => nothing
+        )
+    end
+
+    summary_stats = [
+        Dict("parameter" => "File Name", "value" => basename(source_path)),
+        Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
+        Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
+        Dict("parameter" => "Global Min m/z", "value" => @sprintf("%.4f", Threads.atomic_add!(msi_data.global_min_mz, 0.0))),
+        Dict("parameter" => "Global Max m/z", "value" => @sprintf("%.4f", Threads.atomic_add!(msi_data.global_max_mz, 0.0))),
+        Dict("parameter" => "Mean TIC", "value" => @sprintf("%.2e", mean(df.TIC))),
+        Dict("parameter" => "Mean BPI", "value" => @sprintf("%.2e", mean(df.BPI))),
+        Dict("parameter" => "Mean # Points", "value" => @sprintf("%.1f", mean(df.NumPoints))),
+    ]
+
+    if hasproperty(df, :Mode)
+        centroid_count = count(==(MSI_src.CENTROID), df.Mode)
+        profile_count = count(==(MSI_src.PROFILE), df.Mode)
+        unknown_count = count(==(MSI_src.UNKNOWN), df.Mode)
+
+        push!(summary_stats, Dict("parameter" => "Centroid Spectra", "value" => string(centroid_count)))
+        push!(summary_stats, Dict("parameter" => "Profile Spectra", "value" => string(profile_count)))
+        if unknown_count > 0
+            push!(summary_stats, Dict("parameter" => "Unknown Mode Spectra", "value" => string(unknown_count)))
+        end
+    end
+
+    return Dict(
+        "summary" => summary_stats,
+        "global_min_mz" => msi_data.global_min_mz,
+        "global_max_mz" => msi_data.global_max_mz
+    )
+end
+
+"""
+    update_registry(registry_path, dataset_name, source_path, metadata=nothing, is_imzML=false)
+
+Adds or updates an entry in the dataset registry JSON file.
+
+# Arguments
+- `registry_path`: Path to the `registry.json` file.
+- `dataset_name`: The name of the dataset.
+- `source_path`: The path to the source data file.
+- `metadata`: Optional dictionary of metadata to store.
+- `is_imzML`: Boolean indicating if the source is an imzML file.
+"""
+function update_registry(registry_path, dataset_name, source_path, metadata=nothing, is_imzML=false)
+    lock(REGISTRY_LOCK) do
+        registry = if isfile(registry_path)
+            try
+                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
+            catch e
+                @error "Failed to parse registry.json while updating: $e"
+                Dict{String,Any}() # Start with empty if parsing fails
+            end
+        else
+            Dict{String,Any}()
+        end
+
+        # Get existing entry if it exists, otherwise create new one
+        existing_entry = get(registry, dataset_name, Dict{String,Any}())
+        
+        # Start with existing data and update only the basic fields
+        entry = copy(existing_entry)
+        entry["source_path"] = source_path
+        entry["processed_date"] = string(now())
+        entry["is_imzML"] = is_imzML
+        
+        # Only update metadata if provided
+        if metadata !== nothing
+            entry["metadata"] = metadata
+        end
+        
+        # Note: has_mask and mask_path are preserved from existing_entry if they exist
+        
+        registry[dataset_name] = entry
+
+        try
+            open(registry_path, "w") do f
+                JSON.print(f, registry, 4)
+            end
+        catch e
+            @error "Failed to write to registry.json: $e"
+        end
+    end
+end
+
+"""
+    save_registry(registry_path, registry_data)
+
+Saves the dataset registry to a JSON file, ensuring thread-safe access.
+
+# Arguments
+- `registry_path`: Path to the `registry.json` file.
+- `registry_data`: The dictionary containing the registry data to save.
+"""
+function save_registry(registry_path, registry_data)
+    lock(REGISTRY_LOCK) do
+        try
+            open(registry_path, "w") do f
+                JSON.print(f, registry_data, 4)
+            end
+        catch e
+            @error "Failed to write to registry.json: $e"
+        end
+    end
+end
+
+"""
+    process_file_safely(file_path, masses, params, progress_message_ref, overall_progress_ref)
+
+Safely processes a single MSI data file, generating and saving m/z slices.
+
+This function handles loading data, generating slices, saving results as bitmaps,
+and updating the data registry. It includes error handling and memory cleanup.
+
+# Arguments
+- `file_path`: Path to the `.imzML` file.
+- `masses`: A vector of m/z values to generate slices for.
+- `params`: A structure or dictionary containing processing parameters.
+- `progress_message_ref`: A reference to update with progress messages.
+- `overall_progress_ref`: A reference to update with overall progress.
+
+# Returns
+- A tuple `(success::Bool, message::String)`.
+"""
+function process_file_safely(file_path, masses, params, progress_message_ref, overall_progress_ref; use_mask::Bool=false)
+    local_msi_data = nothing
+    dataset_name = replace(basename(file_path), r"\.imzML$"i => "")
+    output_dir = joinpath("public", dataset_name)
+    println("Processing: $dataset_name -> $output_dir")
+
+    try
+        # --- Load Data ---
+        progress_message_ref = "Loading: $(basename(file_path))"
+        local_msi_data = OpenMSIData(file_path)
+        if !(local_msi_data.source isa ImzMLSource)
+            @warn "Skipping non-imzML file: $(basename(file_path))"
+            return (false, "Skipped: Not an imzML file")
+        end
+
+        # --- Get mask path and load mask_matrix only if use_mask is true ---
+        local mask_matrix_for_triq::Union{BitMatrix, Nothing} = nothing
+        mask_path = nothing
+        if use_mask
+            registry = load_registry(params.registry)
+            entry = get(registry, dataset_name, nothing)
+            if entry !== nothing && get(entry, "has_mask", false)
+                mask_path_candidate = get(entry, "mask_path", "")
+                if isfile(mask_path_candidate)
+                    mask_path = mask_path_candidate
+                    # Load the mask matrix here
+                    mask_matrix_for_triq = load_and_prepare_mask(mask_path, (local_msi_data.image_dims[1], local_msi_data.image_dims[2]))
+                    println("DEBUG: Using mask: $(mask_path) with dimensions $(size(mask_matrix_for_triq))")
+                else
+                    @warn "Mask enabled but file not found: $(mask_path_candidate). Clearing invalid mask entry."
+                    # Clear invalid mask entry
+                    update_registry_mask_fields(params.registry, dataset_name, false, "")
+                    mask_path = nothing
+                end
+            else
+                @warn "Mask enabled but no valid mask entry found for: $(dataset_name)"
+            end
+        end
+
+        # --- Generate Slices ---
+        progress_message_ref = "Generating $(length(masses)) slices for $(dataset_name)..."
+        slice_dict = get_multiple_mz_slices(local_msi_data, masses, params.tolerance, mask_path=mask_path)
+
+        # --- Extract metadata ---
+        metadata = extract_metadata(local_msi_data, file_path)
+
+        # --- Save Slices ---
+        mkpath(output_dir)
+
+        for (mass_idx, mass) in enumerate(masses)
+            progress_message_ref = "File $(params.fileIdx)/$(params.nFiles): Saving slice for m/z=$mass"
+
+            slice = slice_dict[mass]
+            text_nmass = replace(string(mass), "." => "_")
+            bitmap_filename = params.triqE ? "TrIQ_$(text_nmass).bmp" : "MSI_$(text_nmass).bmp"
+            colorbar_filename = params.triqE ? "colorbar_TrIQ_$(text_nmass).png" : "colorbar_MSI_$(text_nmass).png"
+
+            if all(iszero, slice)
+                sliceQuant = zeros(UInt8, size(slice))
+                bounds = (0.0, 1.0)  # Default bounds for empty slice
+                @warn "No intensity data for m/z = $mass in $(dataset_name)"
+            else
+                # Get both quantized data AND bounds in one call
+                if params.triqE
+                    sliceQuant, bounds = TrIQ(slice, params.colorL, params.triqP, mask_matrix=mask_matrix_for_triq)
+                else
+                    sliceQuant, bounds = quantize_intensity(slice, params.colorL, mask_matrix=mask_matrix_for_triq)
+                end
+                
+                if params.medianF
+                    sliceQuant = round.(UInt8, median_filter(sliceQuant))
+                    # Note: bounds remain the same after median filter
+                end
+            end
+
+            save_bitmap(joinpath(output_dir, bitmap_filename), sliceQuant, ViridisPalette)
+            if !all(iszero, slice)
+                # Now pass the precomputed bounds to colorbar generation
+                generate_colorbar_image(slice, params.colorL, joinpath(output_dir, colorbar_filename), 
+                                      bounds; use_triq=params.triqE, triq_prob=params.triqP, mask_path=mask_path)
+            end
+        end
+
+        is_imzML = local_msi_data.source isa ImzMLSource
+        update_registry(params.registry, dataset_name, file_path, metadata, is_imzML)
+        return (true, "")
+
+    catch e
+        @error "File processing failed" file=file_path exception=(e, catch_backtrace())
+        return (false, "File: $(basename(file_path)) - $(sprint(showerror, e))")
+    finally
+        if local_msi_data !== nothing
+            # Cleanup
+        end
+        local_msi_data = nothing
+        GC.gc(true)
+        if Sys.islinux()
+            ccall(:malloc_trim, Int32, (Int32,), 0)
+        end
+    end
+end
+
+function update_registry_mask_fields(registry_path, dataset_name, has_mask, mask_path)
+    lock(REGISTRY_LOCK) do
+        registry = if isfile(registry_path)
+            try
+                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
+            catch e
+                @error "Failed to parse registry.json while updating mask fields: $e"
+                Dict{String,Any}()
+            end
+        else
+            Dict{String,Any}()
+        end
+        
+        if haskey(registry, dataset_name)
+            registry[dataset_name]["has_mask"] = has_mask
+            registry[dataset_name]["mask_path"] = mask_path
+        else
+            # Create new entry if it doesn't exist
+            registry[dataset_name] = Dict{String,Any}(
+                "has_mask" => has_mask,
+                "mask_path" => mask_path,
+                "source_path" => "",
+                "processed_date" => string(now()),
+                "is_imzML" => false
+            )
+        end
+
+        try
+            open(registry_path, "w") do f
+                JSON.print(f, registry, 4)
+            end
+        catch e
+            @error "Failed to write to registry.json: $e"
+        end
+    end
+end
+
+"""
+    loadSurfacePlot(interfaceImg::String, mask_path::String)
+
+Loads an image, smooths it, applies a mask, crops the data to the masked region, and creates a 3D Plotly surface plot.
+
+# Arguments
+- `interfaceImg`: Path to the image file.
+- `mask_path`: Path to a mask file. Areas outside the mask will be removed and the plot axes will be cropped to the masked region.
+
+# Returns
+- `plotdata`: A vector containing the Plotly surface trace.
+- `plotlayout`: The Plotly layout for the 3D plot.
+"""
+function loadSurfacePlot(interfaceImg::String, mask_path::String)
+    # Load the image
+    cleaned_img = replace(interfaceImg, r"\?.*" => "")
+    cleaned_img = lstrip(cleaned_img, '/')
+    var = joinpath("./public", cleaned_img)
+    img = load(var)
+    img_gray = Gray.(img) # Convert to grayscale
+    img_array = Array(img_gray)
+    elevation = Float32.(Array(img_array)) ./ 255.0 # Normalize between 0 and 1
+
+    # Smooth the image
+    sigma = 3.0
+    kernel = Kernel.gaussian(sigma)
+    elevation_smoothed = imfilter(elevation, kernel)
+
+    # --- APPLY MASK and CROP DATA ---
+    mask_matrix = load_and_prepare_mask(mask_path, (size(elevation_smoothed, 2), size(elevation_smoothed, 1)))
+    elevation_smoothed[.!mask_matrix] .= NaN32
+
+    non_nan_indices = findall(!isnan, elevation_smoothed)
+    if isempty(non_nan_indices)
+        # Return an empty plot if mask removes everything
+        return [PlotlyBase.surface()], PlotlyBase.Layout(title="Empty plot: Mask covered all data")
+    end
+
+    row_indices = [idx[1] for idx in non_nan_indices]
+    col_indices = [idx[2] for idx in non_nan_indices]
+    
+    y_range = minimum(row_indices):maximum(row_indices)
+    x_range = minimum(col_indices):maximum(col_indices)
+
+    cropped_elevation = elevation_smoothed[y_range, x_range]
+    # ---
+
+    # --- DOWNSAMPLE CROPPED DATA ---
+    cropped_elevation = downsample_image(cropped_elevation, 256)
+    # ---
+
+    # Create the X, Y meshgrid coordinates for the CROPPED data
+    x_coords = x_range
+    y_coords = y_range
+    X = repeat(reshape(x_coords, 1, length(x_coords)), length(y_coords), 1)
+    Y = repeat(reshape(y_coords, length(y_coords), 1), 1, length(x_coords))
+
+    # Define tick values and text for colorbars, ignoring NaNs
+    non_nan_values = filter(!isnan, cropped_elevation)
+    min_val = isempty(non_nan_values) ? 0.0 : minimum(non_nan_values)
+    max_val = isempty(non_nan_values) ? 1.0 : maximum(non_nan_values)
+    tickV = range(min_val, stop=max_val, length=8)
+    tickT = log_tick_formatter(collect(tickV))
+
+    # Transpose the elevation_smoothed array if Y axis is longer than X axis to fix chopping
+    cropped_elevation = transpose(cropped_elevation)
+    if size(cropped_elevation, 1) < size(cropped_elevation, 2)
+        Y = -Y
+    else
+        X = -X
+    end
+
+    # Calculate the number of ticks and aspect ratio for the 3d plot
+    x_nticks = min(20, length(x_coords))
+    y_nticks = min(20, length(y_coords))
+    z_nticks = 5
+    aspect_ratio = attr(x=1, y=length(y_coords) / length(x_coords), z=0.5)
+    
+    # Define the layout for the 3D plot
+    layout3D = PlotlyBase.Layout(
+        title=PlotlyBase.attr(
+            text="3D surface plot of $cleaned_img (masked, cropped, downsampled)",
+            font=PlotlyBase.attr(
+                family="Roboto, Lato, sans-serif",
+                size=18,
+                color="black"
+            )
+        ),
+        scene=attr(
+            xaxis_nticks=x_nticks,
+            yaxis_nticks=y_nticks,
+            zaxis_nticks=z_nticks,
+            camera=attr(eye=attr(x=0, y=1, z=0.5)),
+            aspectratio=aspect_ratio
+        ),
+        margin=attr(l=0, r=0, t=120, b=0, pad=0)
+    )
+
+    trace3D = PlotlyBase.surface(
+        x=X[1, :],
+        y=Y[:, 1],
+        z=cropped_elevation,
+        contours_z=attr(
+            show=true,
+            usecolormap=true,
+            highlightcolor="limegreen",
+            project_z=true
+        ),
+        colorscale="Viridis",
+        colorbar=attr(
+            tickvals=tickV,
+            ticktext=tickT,
+            nticks=8
+        )
+    )
+    plotdata = [trace3D]
+    plotlayout = layout3D
+    return plotdata, plotlayout
 end
