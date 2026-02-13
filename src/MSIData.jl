@@ -35,7 +35,12 @@ Atomically seeks to a position and reads data into an array. This is the thread-
 way to read from a specific offset in the file.
 """
 function read_at!(tsfh::ThreadSafeFileHandle, a::AbstractArray, pos::Integer)
+    if pos < 0
+        throw(ArgumentError("Invalid seek position: $pos"))
+    end
     lock(tsfh.lock) do
+        # Also check against file size if possible, though filesize() might be expensive to call repeatedly
+        # Let's rely on seek throwing if it goes way out of bounds, but catch the negative case which is definitely an error.
         seek(tsfh.handle, pos)
         read!(tsfh.handle, a)
     end
@@ -509,6 +514,19 @@ function read_spectrum_from_disk(source::ImzMLSource, meta::SpectrumMetadata)
     # The `encoded_length` field in this case holds the number of points.
     mz = Array{source.mz_format}(undef, meta.mz_asset.encoded_length)
     intensity = Array{source.intensity_format}(undef, meta.int_asset.encoded_length)
+
+    # Validate offsets before reading
+    file_size = filesize(source.ibd_handle)
+    
+    mz_end = meta.mz_asset.offset + sizeof(source.mz_format) * meta.mz_asset.encoded_length
+    if meta.mz_asset.offset < 0 || mz_end > file_size
+        throw(FileFormatError("Invalid m/z data offset/length for spectrum $(meta.id): offset=$(meta.mz_asset.offset), end=$mz_end, file_size=$file_size"))
+    end
+
+    int_end = meta.int_asset.offset + sizeof(source.intensity_format) * meta.int_asset.encoded_length
+    if meta.int_asset.offset < 0 || int_end > file_size
+        throw(FileFormatError("Invalid intensity data offset/length for spectrum $(meta.id): offset=$(meta.int_asset.offset), end=$int_end, file_size=$file_size"))
+    end
 
     # Use the new atomic read_at! method for thread-safety
     read_at!(source.ibd_handle, mz, meta.mz_asset.offset)

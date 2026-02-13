@@ -6,17 +6,14 @@ ENV["GENIE_ENV"] = "dev"
 
 manifest_path = joinpath(@__DIR__, "Manifest.toml")
 
-# Only instantiate in development mode
-if get(ENV, "GENIE_ENV", "dev") != "prod" || !isfile(manifest_path)
-    @info "Development environment detected. Instantiating packages..."
-    
-    if !isfile(manifest_path)
-        @info "Manifest.toml not found. Generating it based on Project.toml..."
-    end
-
+# Selective instantiation for faster startup
+if get(ENV, "GENIE_ENV", "dev") != "prod" && !isfile(manifest_path)
+    @info "Development environment detected and Manifest.toml missing. Instantiating packages..."
     Pkg.resolve()
     Pkg.instantiate()
     Pkg.gc()
+elseif get(ENV, "GENIE_ENV", "dev") != "prod"
+    @info "Manifest.toml found. Skipping Pkg.instantiate() for faster boot. Delete Manifest.toml if you need to re-instantiate."
 end
 
 using Genie

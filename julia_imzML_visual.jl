@@ -1,6 +1,5 @@
 # julia_imzML_visual.jl
 
-const REGISTRY_LOCK = ReentrantLock()
 
 """
     increment_image(current_image, image_list)

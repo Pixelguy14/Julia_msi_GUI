@@ -33,7 +33,15 @@ function apply_baseline_correction(spectra::Vector{MutableSpectrum}, params::Dic
 
     Threads.@threads for s in spectra
         if validate_spectrum(s.mz, s.intensity)
+            original_length = length(s.intensity)
             baseline = apply_baseline_correction_core(s.intensity; method=method, iterations=iterations, window=window)
+            
+            # CRITICAL: Ensure baseline has the same length as intensity
+            if length(baseline) != original_length
+                @warn "Baseline correction: length mismatch for spectrum $(s.id). baseline=$(length(baseline)), intensity=$original_length. Skipping this spectrum."
+                continue
+            end
+            
             s.intensity = max.(0.0, s.intensity .- baseline)
         end
     end
@@ -53,7 +61,16 @@ function apply_intensity_transformation(spectra::Vector{MutableSpectrum}, params
 
     Threads.@threads for s in spectra
         if validate_spectrum(s.mz, s.intensity)
-            s.intensity = transform_intensity_core(s.intensity; method=method)
+            original_length = length(s.intensity)
+            transformed = transform_intensity_core(s.intensity; method=method)
+            
+            # CRITICAL: Ensure transformation preserves array length
+            if length(transformed) != original_length
+                @warn "Intensity transformation: length mismatch for spectrum $(s.id). transformed=$(length(transformed)), original=$original_length. Skipping this spectrum."
+                continue
+            end
+            
+            s.intensity = transformed
         end
     end
 end
@@ -76,8 +93,16 @@ function apply_smoothing(spectra::Vector{MutableSpectrum}, params::Dict)
 
     Threads.@threads for s in spectra
         if validate_spectrum(s.mz, s.intensity)
-            smoothed_intensity = max.(0.0, smooth_spectrum_core(s.intensity; method=method, window=window, order=order))
-            s.intensity = smoothed_intensity
+            original_length = length(s.intensity)
+            smoothed_intensity = smooth_spectrum_core(s.intensity; method=method, window=window, order=order)
+            
+            # CRITICAL: Ensure smoothing preserves array length  
+            if length(smoothed_intensity) != original_length
+                @warn "Smoothing: length mismatch for spectrum $(s.id). smoothed=$(length(smoothed_intensity)), original=$original_length, method=$method, window=$window. Skipping this spectrum."
+                continue
+            end
+            
+            s.intensity = max.(0.0, smoothed_intensity)
         end
     end
 end
@@ -104,6 +129,7 @@ function apply_peak_picking(spectra::Vector{MutableSpectrum}, params::Dict)
 
     Threads.@threads for s in spectra
         if validate_spectrum(s.mz, s.intensity)
+            # old_len = length(s.peaks)
             if method == :profile
                 s.peaks = detect_peaks_profile_core(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window, min_peak_prominence=min_peak_prominence, merge_peaks_tolerance=merge_peaks_tolerance)
             elseif method == :wavelet
@@ -113,6 +139,7 @@ function apply_peak_picking(spectra::Vector{MutableSpectrum}, params::Dict)
             else
                 s.peaks = detect_peaks_profile_core(s.mz, s.intensity; snr_threshold=snr_threshold, half_window=half_window)
             end
+            # @info "Spectrum $(s.id): detected $(length(s.peaks)) peaks"
         else
             s.peaks = []
         end
@@ -182,12 +209,21 @@ function apply_calibration(spectra::Vector{MutableSpectrum}, params::Dict, refer
     Threads.@threads for i in 1:length(spectra)
         s = spectra[i]
         if validate_spectrum(s.mz, s.intensity)
+            original_length = length(s.mz)
             matched_peaks = find_calibration_peaks_core(s.mz, s.intensity, reference_masses; ppm_tolerance=ppm_tolerance)
             if length(matched_peaks) >= 2
                 measured = sort(collect(values(matched_peaks)))
                 theoretical = sort(collect(keys(matched_peaks)))
                 itp = linear_interpolation(measured, theoretical, extrapolation_bc=Line())
-                s.mz = itp(s.mz) # Modify mz-axis in-place
+                new_mz = itp(s.mz)
+                
+                # CRITICAL: Ensure m/z axis preserves array length
+                if length(new_mz) != original_length
+                    @warn "Calibration: length mismatch for spectrum $(s.id). new_mz=$(length(new_mz)), original=$original_length. Skipping this spectrum."
+                    continue
+                end
+                
+                s.mz = new_mz # Modify mz-axis in-place
             else
                 @warn "Spectrum $(s.id): insufficient reference peaks ($(length(matched_peaks)) found), skipping calibration."
             end
@@ -233,7 +269,16 @@ function apply_peak_alignment(spectra::Vector{MutableSpectrum}, params::Dict)
         current_peaks_mz = [p.mz for p in s.peaks]
         alignment_func = align_peaks_lowess_core(ref_peaks_mz, current_peaks_mz; method=method, tolerance=tolerance, tolerance_unit=tolerance_unit)
         
-        s.mz = alignment_func.(s.mz) # Update m/z axis
+        original_length = length(s.mz)
+        new_mz = alignment_func.(s.mz)
+        
+        # CRITICAL: Ensure alignment preserves array length
+        if length(new_mz) != original_length
+            @warn "Peak alignment: m/z length mismatch for spectrum $(s.id). new_mz=$(length(new_mz)), original=$original_length. Skipping this spectrum."
+            continue
+        end
+        
+        s.mz = new_mz # Update m/z axis
         
         # Update peak m/z values
         for i in 1:length(s.peaks)
@@ -258,7 +303,16 @@ function apply_normalization(spectra::Vector{MutableSpectrum}, params::Dict)
 
     Threads.@threads for s in spectra
         if validate_spectrum(s.mz, s.intensity)
-            s.intensity = apply_normalization_core(s.intensity; method=method)
+            original_length = length(s.intensity)
+            normalized = apply_normalization_core(s.intensity; method=method)
+            
+            # CRITICAL: Ensure normalization preserves array length
+            if length(normalized) != original_length
+                @warn "Normalization: length mismatch for spectrum $(s.id). normalized=$(length(normalized)), original=$original_length. Skipping this spectrum."
+                continue
+            end
+            
+            s.intensity = normalized
         end
     end
 end

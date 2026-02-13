@@ -82,30 +82,35 @@ A dramatically simplified buffer pool that avoids complex locking.
 mutable struct SimpleBufferPool
     buffers::Dict{Int, Vector{Vector{UInt8}}}
     max_pool_size::Int
+    lock::ReentrantLock  # Add lock for thread safety
 end
 
-SimpleBufferPool() = SimpleBufferPool(Dict{Int, Vector{Vector{UInt8}}}(), 50)
+SimpleBufferPool() = SimpleBufferPool(Dict{Int, Vector{Vector{UInt8}}}(), 50, ReentrantLock())
 
 function get_buffer!(pool::SimpleBufferPool, size::Int)::Vector{UInt8}
-    # Check for existing buffers of exact size first
-    if haskey(pool.buffers, size) && !isempty(pool.buffers[size])
-        return pop!(pool.buffers[size])
+    lock(pool.lock) do
+        # Check for existing buffers of exact size first
+        if haskey(pool.buffers, size) && !isempty(pool.buffers[size])
+            return pop!(pool.buffers[size])
+        end
     end
     
-    # No suitable buffer found, allocate new one
+    # No suitable buffer found, allocate new one (outside lock to reduce contention)
     return Vector{UInt8}(undef, size)
 end
 
 function release_buffer!(pool::SimpleBufferPool, buffer::Vector{UInt8})
     size = length(buffer)
     
-    if !haskey(pool.buffers, size)
-        pool.buffers[size] = Vector{Vector{UInt8}}()
-    end
-    
-    # Limit pool size to prevent memory bloat
-    if length(pool.buffers[size]) < pool.max_pool_size
-        push!(pool.buffers[size], buffer)
+    lock(pool.lock) do
+        if !haskey(pool.buffers, size)
+            pool.buffers[size] = Vector{Vector{UInt8}}()
+        end
+        
+        # Limit pool size to prevent memory bloat
+        if length(pool.buffers[size]) < pool.max_pool_size
+            push!(pool.buffers[size], buffer)
+        end
     end
     # If pool is full, let buffer get GC'd
 end

@@ -1,4 +1,5 @@
 using StatsBase # For mean, std, median, quantile, mad
+using Base.Threads # For atomic counters and locking
 
 # =============================================================================
 # 7) Spatial & Advanced Processing (Stubs & New Functions)
@@ -80,11 +81,12 @@ function analyze_mass_accuracy(
     println("Analyzing mass accuracy for $(length(spectrum_indices)) spectra...")
 
     all_ppm_errors = Float64[]
-    total_matched_peaks = 0
-    total_spectra_processed = 0
+    total_matched_peaks = Atomic{Int}(0)
+    total_spectra_processed = Atomic{Int}(0)
+    results_lock = ReentrantLock()
 
     _iterate_spectra_fast(msi_data, spectrum_indices) do idx, mz, intensity
-        total_spectra_processed += 1
+        atomic_add!(total_spectra_processed, 1)
         if !validate_spectrum(mz, intensity)
             @warn "Spectrum $idx is invalid, skipping mass accuracy analysis for it."
             return
@@ -106,8 +108,10 @@ function analyze_mass_accuracy(
             end
 
             if best_matched_peak_mz !== nothing
-                push!(all_ppm_errors, min_ppm_error)
-                total_matched_peaks += 1
+                lock(results_lock) do
+                    push!(all_ppm_errors, min_ppm_error)
+                end
+                atomic_add!(total_matched_peaks, 1)
             end
         end
     end
@@ -140,8 +144,8 @@ function analyze_mass_accuracy(
         std_ppm_error = std_err,
         min_ppm_error = min_err,
         max_ppm_error = max_err,
-        total_matched_peaks = total_matched_peaks,
-        total_spectra_analyzed = total_spectra_processed,
+        total_matched_peaks = total_matched_peaks[],
+        total_spectra_analyzed = total_spectra_processed[],
         ppm_error_distribution = all_ppm_errors
     )
 end
@@ -318,21 +322,29 @@ function analyze_instrument_characteristics(msi_data::MSIData; sample_indices::A
         return results
     end
     
+    results_lock = ReentrantLock()
+    
     _iterate_spectra_fast(msi_data, sample_indices) do idx, mz, intensity
         # Record spectrum mode
-        push!(spectrum_modes, msi_data.spectra_metadata[idx].mode)
+        lock(results_lock) do
+            push!(spectrum_modes, msi_data.spectra_metadata[idx].mode)
+        end
         
         # Calculate m/z step statistics (for profile data)
         if length(mz) > 1 && msi_data.spectra_metadata[idx].mode == PROFILE
             steps = diff(mz)
             if !isempty(steps)
-                push!(mz_step_sizes, mean(steps))
+                lock(results_lock) do
+                    push!(mz_step_sizes, mean(steps))
+                end
             end
         end
         
         # Record intensity range
         if !isempty(intensity)
-            push!(intensity_ranges, (minimum(intensity), maximum(intensity)))
+            lock(results_lock) do
+                push!(intensity_ranges, (minimum(intensity), maximum(intensity)))
+            end
         end
     end
     
@@ -442,11 +454,15 @@ function analyze_signal_quality(msi_data::MSIData; sample_indices::AbstractVecto
         return results
     end
     
+    results_lock = ReentrantLock()
+
     _iterate_spectra_fast(msi_data, sample_indices) do idx, mz, intensity
         if !isempty(intensity)
             # Noise estimation using MAD
             noise = mad(intensity, normalize=true)
-            push!(noise_levels, noise)
+            lock(results_lock) do
+                push!(noise_levels, noise)
+            end
             
             # FIX: More robust SNR calculation
             valid_intensity = intensity[intensity .> 0]  # Remove zeros
@@ -458,12 +474,16 @@ function analyze_signal_quality(msi_data::MSIData; sample_indices::AbstractVecto
                 if noise_robust > 0 && isfinite(signal_estimate)
                     snr_val = signal_estimate / noise_robust
                     # Cap unrealistic SNR values
-                    push!(snr_distribution, min(snr_val, 1e6))
+                    lock(results_lock) do
+                        push!(snr_distribution, min(snr_val, 1e6))
+                    end
                 end
             end
             
             # Total ion count
-            push!(tic_values, sum(intensity))
+            lock(results_lock) do
+                push!(tic_values, sum(intensity))
+            end
         end
     end
     
@@ -651,20 +671,23 @@ function analyze_peak_characteristics(msi_data::MSIData, instrument_analysis::Di
         peak_counts = Int[]
         fwhm_values = Float64[]
         
-        spectra_analyzed = 0
-        peaks_analyzed = 0
+        spectra_analyzed = Atomic{Int}(0)
+        peaks_analyzed = Atomic{Int}(0)
+        results_lock = ReentrantLock()
         
         _iterate_spectra_fast(msi_data, spectrum_indices) do idx, mz, intensity
             if length(mz) < 10  # Skip spectra with too few points
                 return
             end
             
-            spectra_analyzed += 1
+            atomic_add!(spectra_analyzed, 1)
             meta = msi_data.spectra_metadata[idx]
             
             # Detect peaks with lower SNR threshold to find more peaks
             peaks = detect_peaks_profile_core(mz, intensity; snr_threshold=2.0)
-            push!(peak_counts, length(peaks))
+            lock(results_lock) do
+                push!(peak_counts, length(peaks))
+            end
             
             if !isempty(peaks)
                 # Analyze the strongest 3 peaks per spectrum
@@ -679,15 +702,17 @@ function analyze_peak_characteristics(msi_data::MSIData, instrument_analysis::Di
                         if !isnan(fwhm_delta_m) && fwhm_delta_m > 0.001 && fwhm_delta_m < 0.5  # Reasonable range in Da
                             fwhm_ppm = 1e6 * fwhm_delta_m / peak.mz
                             if 5.0 < fwhm_ppm < 500.0  # Reasonable ppm range
-                                push!(peak_widths_ppm, fwhm_ppm)
-                                push!(fwhm_values, fwhm_delta_m)
+                                lock(results_lock) do
+                                    push!(peak_widths_ppm, fwhm_ppm)
+                                    push!(fwhm_values, fwhm_delta_m)
+                                    
+                                    r2 = _fit_gaussian_and_r2(mz, intensity, peak_idx, 5)
+                                    push!(r_squared_values, r2)
+                                end
+                                atomic_add!(peaks_analyzed, 1)
                                 
-                                r2 = _fit_gaussian_and_r2(mz, intensity, peak_idx, 5)
-                                push!(r_squared_values, r2)
-                                peaks_analyzed += 1
-                                
-                                if peaks_analyzed <= 3
-                                    println("DEBUG: Peak at m/z $(peak.mz), FWHM = $(fwhm_ppm) ppm, R² = $r2")
+                                if peaks_analyzed[] <= 3
+                                    println("DEBUG: Peak at m/z $(peak.mz), FWHM = $(fwhm_ppm) ppm, R² = $(r_squared_values[end])")
                                 end
                             end
                         end
@@ -698,7 +723,7 @@ function analyze_peak_characteristics(msi_data::MSIData, instrument_analysis::Di
             end
         end
         
-        println("DEBUG: Analyzed $peaks_analyzed peaks from $spectra_analyzed spectra")
+        println("DEBUG: Analyzed $(peaks_analyzed[]) peaks from $(spectra_analyzed[]) spectra")
         
         if !isempty(peak_widths_ppm)
             results[:mean_fwhm_ppm] = mean(peak_widths_ppm)
@@ -727,9 +752,13 @@ function analyze_peak_characteristics(msi_data::MSIData, instrument_analysis::Di
         
         peak_counts = Int[]
         
+        results_lock = ReentrantLock()
+
         _iterate_spectra_fast(msi_data, spectrum_indices) do idx, mz, intensity
             if !isempty(mz)
-                push!(peak_counts, length(mz))
+                lock(results_lock) do
+                    push!(peak_counts, length(mz))
+                end
             end
         end
         

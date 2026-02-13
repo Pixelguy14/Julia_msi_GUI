@@ -9,7 +9,7 @@ using Statistics, NaturalSort, LinearAlgebra, StipplePlotly
 using Base.Filesystem: mv
 
 using MSI_src
-using .MSI_src: MSIData, process_image_pipeline
+using .MSI_src: MSIData, process_image_pipeline, REGISTRY_LOCK
 
 # Plot Handling
 include("./julia_imzML_visual.jl")
@@ -799,8 +799,10 @@ end
                 end
                 
                 # Save the updated registry
-                open(reg_path, "w") do f
-                    JSON.print(f, registry, 4)
+                lock(REGISTRY_LOCK) do
+                    open(reg_path, "w") do f
+                        JSON.print(f, registry, 4)
+                    end
                 end
                 
                 @info "Registry updated with mask: $(final_mask_name)"
@@ -874,8 +876,10 @@ end
 
                 if !isempty(new_folders) || !isempty(removed_folders)
                     println("Registry changed, saving...")
-                    open(reg_path, "w") do f
-                        JSON.print(f, registry, 4)
+                    lock(REGISTRY_LOCK) do
+                        open(reg_path, "w") do f
+                            JSON.print(f, registry, 4)
+                        end
                     end
                 end
                 

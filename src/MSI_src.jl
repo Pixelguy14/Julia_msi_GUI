@@ -19,7 +19,11 @@ export OpenMSIData,
        get_global_mz_range,
        MSIData,
        _iterate_spectra_fast,
-       validate_spectrum
+       validate_spectrum,
+       REGISTRY_LOCK
+
+# Define shared registry lock
+const REGISTRY_LOCK = ReentrantLock()
 
 # Export the public preprocessing & precalculations API
 export run_preprocessing_analysis,

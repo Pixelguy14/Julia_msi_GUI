@@ -8,6 +8,7 @@ using Libz
 using PlotlyBase
 using CairoMakie
 using Colors
+using Dates
 using MSI_src # Import the new MSIData library
 using Statistics
 using NaturalSort
@@ -113,7 +114,9 @@ function get_processed_mean_spectrum(spectra::Vector{MutableSpectrum}; num_bins=
 
     # 3. Bin intensities
     for s in spectra
-        for i in eachindex(s.mz)
+        # Use minimum length to avoid bounds errors if arrays are mismatched
+        n_points = min(length(s.mz), length(s.intensity))
+        for i in 1:n_points
             bin_index = trunc(Int, (s.mz[i] - min_mz) * inv_bin_step + 1.0)
             final_index = clamp(bin_index, 1, num_bins)
             intensity_sum[final_index] += s.intensity[i]
@@ -147,7 +150,9 @@ function get_processed_sum_spectrum(spectra::Vector{MutableSpectrum}; num_bins=2
     inv_bin_step = 1.0 / bin_step
 
     for s in spectra
-        for i in eachindex(s.mz)
+        # Use minimum length to avoid bounds errors if arrays are mismatched
+        n_points = min(length(s.mz), length(s.intensity))
+        for i in 1:n_points
             bin_index = trunc(Int, (s.mz[i] - min_mz) * inv_bin_step + 1.0)
             final_index = clamp(bin_index, 1, num_bins)
             intensity_sum[final_index] += s.intensity[i]
@@ -157,11 +162,44 @@ function get_processed_sum_spectrum(spectra::Vector{MutableSpectrum}; num_bins=2
     return collect(mz_bins), intensity_sum
 end
 
+INITIAL_MODEL_STATE = Dict{Symbol,Any}()
+
+# Function to capture initial state (also outside @app block)
+function capture_initial_state!(model)
+    empty!(INITIAL_MODEL_STATE)
+    for name in fieldnames(typeof(model))
+        if !startswith(String(name), "_")
+            INITIAL_MODEL_STATE[name] = deepcopy(getfield(model, name))
+        end
+    end
+    println("Captured $(length(INITIAL_MODEL_STATE)) reactive variables")
+end
+
 @genietools
 
 # == Reactive code ==
+#=
+macro ui_log(message, level="INFO", log_entries)
+    quote
+        local timestamp = Dates.format(now(), "HH:MM:SS")
+        local new_entry = Dict("time" => timestamp, "message" => string($(esc(message))), "level" => $(esc(level)))
+        println("log entries value: $log_entries")
+        pushfirst!(log_entries, new_entry)
+        if length(log_entries) > 100
+            popfirst!(log_entries)
+        end
+        push!(__model__)
+    end
+end
+=#
+
 # Reactive code to make the UI interactive
 @app begin
+    # == Notification & Logs ==
+    # @in log_entries = Dict{String,Any}[]
+    # @in show_log_sidebar = false
+    @in showBugModal = false
+    
     # == Loading Screen Variables ==
     @in is_initializing = true
     @in initialization_message = "Initializing..."
@@ -348,6 +386,7 @@ end
     @in export_params_btn = false # Export parameters to file
     @in import_params_btn = false # Import parameters from file
     @in save_feature_matrix_btn = false # Save feature matrix results
+    @in reset_session_btn = false # Deep session reset
 
     # Preprocessing results
     @in selected_spectrum_id_for_plot = 1
@@ -616,12 +655,64 @@ end
     # Reactive handlers watch a variable and execute a block of code when its value changes
     # The onbutton handler will set the variable to false after the block is executed
 
-    # This handler correctly uses pick_file and loads the selected file
-    # as the active dataset for the UI.
+    @onbutton reset_session_btn begin
+        is_processing = true
+        push!(__model__)
+        
+        try
+            # 1. Clear large data objects explicitly
+            msi_data = nothing
+            feature_matrix_result = nothing
+            bin_info_result = nothing
+            
+            # 2. Reset ALL reactive variables using captured initial state
+            if !isempty(INITIAL_MODEL_STATE)
+                for (name, value) in INITIAL_MODEL_STATE
+                    setfield!(__model__, name, deepcopy(value))
+                end
+                msg = "Session reset: restored $(length(INITIAL_MODEL_STATE)) variables to initial state."
+            else
+                msg = "Warning: No initial state captured. Using partial reset."
+            end
+            
+            # 3. Reset file lists (these will be repopulated by normal operation)
+            msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
+            col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")), lt=natural)
+            triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
+            col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")), lt=natural)
+            
+            # 4. Clear any cached images/plots
+            imgInt = "/.bmp"
+            imgIntT = "/.bmp"
+            colorbar = "/.png"
+            colorbarT = "/.png"
+            
+            # 5. Reset plot data to default traces
+            traceImg = PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())
+            plotdataImg = [traceImg]
+            plotdataImgT = [traceImg]
+            plotdata = [PlotlyBase.scatter(x=Vector{Float64}(), y=Vector{Float64}(), mode="lines")]
+            
+            # 6. Aggressive garbage collection
+            GC.gc(true)
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
+            end
+            println("Session reset successfully.")
+        catch e
+            println("Error during session reset: $e")
+            msg = "Reset error: $e"
+        finally
+            is_processing = false
+        end
+    end
+
     @onbutton btnSearch begin
         is_processing = true
+        push!(__model__)
         picked_route = pick_file(; filterlist="imzML,imzml,mzML,mzml")
-        if isempty(picked_route)
+        
+        if isnothing(picked_route) || isempty(picked_route)
             is_processing = false
             return
         end
@@ -938,6 +1029,7 @@ end
 
     @onbutton export_params_btn begin
         is_processing = true
+        push!(__model__)
         params_to_export = Dict(
             "pipeline_step_order" => pipeline_step_order,
             "enable_standards" => enable_standards, # Export global flag
@@ -1011,6 +1103,7 @@ end
 
     @onbutton import_params_btn begin
         is_processing = true
+        push!(__model__)
         picked_file = pick_file(filterlist="json")
         if isempty(picked_file)
             is_processing = false
@@ -1021,39 +1114,57 @@ end
             json_string = read(picked_file, String)
             params = JSON.parse(json_string)
 
-            # This is a list of all known reactive variables that can be imported.
-            # This prevents arbitrary variable assignment.
-            known_params = [
-                "stabilization_method", "smoothing_method", "smoothing_window", "smoothing_order",
-                "baseline_method", "baseline_iterations", "baseline_window", "normalization_method",
-                "alignment_method", "alignment_span", "alignment_tolerance", "alignment_tolerance_unit",
-                "alignment_max_shift_ppm", "alignment_min_matched_peaks", "peak_picking_method",
-                "peak_picking_snr_threshold", "peak_picking_half_window", "peak_picking_min_peak_prominence",
-                "peak_picking_merge_peaks_tolerance", "peak_picking_min_peak_width_ppm",
-                "peak_picking_max_peak_width_ppm", "peak_picking_min_peak_shape_r2", "binning_method",
-                "binning_tolerance", "binning_tolerance_unit", "binning_frequency_threshold",
-                "binning_min_peak_per_bin", "binning_max_bin_width_ppm", "binning_intensity_weighted_centers",
-                "binning_num_uniform_bins", "calibration_fit_order", "calibration_ppm_tolerance",
-                "peak_selection_min_snr", "peak_selection_min_fwhm_ppm", "peak_selection_max_fwhm_ppm",
-                "peak_selection_min_shape_r2", "peak_selection_frequency_threshold", "peak_selection_correlation_threshold"
-            ]
-
-            for (key, value) in params
-                if key == "reference_peaks_list"
-                    reference_peaks_list = value
-                elseif key == "pipeline_step_order"
-                    pipeline_step_order = value
-                elseif key == "enable_standards"
-                    enable_standards = value
-                elseif key in known_params
-                    # Use getfield and setproperty! to update reactive variables by name
-                    if hasfield(typeof(@__MODULE__), Symbol(key))
-                        getfield(@__MODULE__, Symbol(key))[] = value
-                    end
-                else
-                    @warn "Unknown parameter '$key' found in JSON file. Skipping."
-                end
+            # Import special variables first
+            if haskey(params, "reference_peaks_list")
+                reference_peaks_list = params["reference_peaks_list"]
             end
+            if haskey(params, "pipeline_step_order")
+                pipeline_step_order = params["pipeline_step_order"]
+            end
+            if haskey(params, "enable_standards")
+                enable_standards = params["enable_standards"]
+            end
+
+            # Import regular parameters with explicit assignments
+            haskey(params, "stabilization_method") && (stabilization_method = params["stabilization_method"])
+            haskey(params, "smoothing_method") && (smoothing_method = params["smoothing_method"])
+            haskey(params, "smoothing_window") && (smoothing_window = params["smoothing_window"])
+            haskey(params, "smoothing_order") && (smoothing_order = params["smoothing_order"])
+            haskey(params, "baseline_method") && (baseline_method = params["baseline_method"])
+            haskey(params, "baseline_iterations") && (baseline_iterations = params["baseline_iterations"])
+            haskey(params, "baseline_window") && (baseline_window = params["baseline_window"])
+            haskey(params, "normalization_method") && (normalization_method = params["normalization_method"])
+            haskey(params, "alignment_method") && (alignment_method = params["alignment_method"])
+            haskey(params, "alignment_span") && (alignment_span = params["alignment_span"])
+            haskey(params, "alignment_tolerance") && (alignment_tolerance = params["alignment_tolerance"])
+            haskey(params, "alignment_tolerance_unit") && (alignment_tolerance_unit = params["alignment_tolerance_unit"])
+            haskey(params, "alignment_max_shift_ppm") && (alignment_max_shift_ppm = params["alignment_max_shift_ppm"])
+            haskey(params, "alignment_min_matched_peaks") && (alignment_min_matched_peaks = params["alignment_min_matched_peaks"])
+            haskey(params, "peak_picking_method") && (peak_picking_method = params["peak_picking_method"])
+            haskey(params, "peak_picking_snr_threshold") && (peak_picking_snr_threshold = params["peak_picking_snr_threshold"])
+            haskey(params, "peak_picking_half_window") && (peak_picking_half_window = params["peak_picking_half_window"])
+            haskey(params, "peak_picking_min_peak_prominence") && (peak_picking_min_peak_prominence = params["peak_picking_min_peak_prominence"])
+            haskey(params, "peak_picking_merge_peaks_tolerance") && (peak_picking_merge_peaks_tolerance = params["peak_picking_merge_peaks_tolerance"])
+            haskey(params, "peak_picking_min_peak_width_ppm") && (peak_picking_min_peak_width_ppm = params["peak_picking_min_peak_width_ppm"])
+            haskey(params, "peak_picking_max_peak_width_ppm") && (peak_picking_max_peak_width_ppm = params["peak_picking_max_peak_width_ppm"])
+            haskey(params, "peak_picking_min_peak_shape_r2") && (peak_picking_min_peak_shape_r2 = params["peak_picking_min_peak_shape_r2"])
+            haskey(params, "binning_method") && (binning_method = params["binning_method"])
+            haskey(params, "binning_tolerance") && (binning_tolerance = params["binning_tolerance"])
+            haskey(params, "binning_tolerance_unit") && (binning_tolerance_unit = params["binning_tolerance_unit"])
+            haskey(params, "binning_frequency_threshold") && (binning_frequency_threshold = params["binning_frequency_threshold"])
+            haskey(params, "binning_min_peak_per_bin") && (binning_min_peak_per_bin = params["binning_min_peak_per_bin"])
+            haskey(params, "binning_max_bin_width_ppm") && (binning_max_bin_width_ppm = params["binning_max_bin_width_ppm"])
+            haskey(params, "binning_intensity_weighted_centers") && (binning_intensity_weighted_centers = params["binning_intensity_weighted_centers"])
+            haskey(params, "binning_num_uniform_bins") && (binning_num_uniform_bins = params["binning_num_uniform_bins"])
+            haskey(params, "calibration_fit_order") && (calibration_fit_order = params["calibration_fit_order"])
+            haskey(params, "calibration_ppm_tolerance") && (calibration_ppm_tolerance = params["calibration_ppm_tolerance"])
+            haskey(params, "peak_selection_min_snr") && (peak_selection_min_snr = params["peak_selection_min_snr"])
+            haskey(params, "peak_selection_min_fwhm_ppm") && (peak_selection_min_fwhm_ppm = params["peak_selection_min_fwhm_ppm"])
+            haskey(params, "peak_selection_max_fwhm_ppm") && (peak_selection_max_fwhm_ppm = params["peak_selection_max_fwhm_ppm"])
+            haskey(params, "peak_selection_min_shape_r2") && (peak_selection_min_shape_r2 = params["peak_selection_min_shape_r2"])
+            haskey(params, "peak_selection_frequency_threshold") && (peak_selection_frequency_threshold = params["peak_selection_frequency_threshold"])
+            haskey(params, "peak_selection_correlation_threshold") && (peak_selection_correlation_threshold = params["peak_selection_correlation_threshold"])
+
             msg = "Parameters imported successfully from $(basename(picked_file))."
         catch e
             msg = "Failed to import parameters: $e"
@@ -1110,13 +1221,14 @@ end
 
     @onbutton run_full_pipeline begin
         is_processing = true
+        push!(__model__)
+        overall_progress = 0.0
+        local pipeline_msi_data = nothing
+        local current_spectra = Vector{MutableSpectrum}()
         current_pipeline_step = "Initializing..."
-        println("DEBUG: run_full_pipeline started.")
-        # println("DEBUG: Current pipeline_step_order configuration: $pipeline_step_order")
         
         try
             # --- 1. Initial Checks and Data Loading ---
-            println("DEBUG: Performing initial checks and data loading...")
             if isempty(selected_folder_main)
                 msg = "No dataset loaded. Please load a file using 'Select an imzMl / mzML file'."
                 warning_msg = true
@@ -1136,26 +1248,31 @@ end
             target_path = entry["source_path"]
 
             # Ensure msi_data is for the currently selected file and load if needed
-            if msi_data === nothing || full_route != target_path
-                println("DEBUG: Active file path changed or data not in memory. Reloading MSI data: $(basename(target_path))")
-                if msi_data !== nothing; close(msi_data); end
-                msg = "Reloading $(basename(target_path)) for analysis..."
-                full_route = target_path
-                msi_data = OpenMSIData(target_path)
-                
-                # Determine plot mode from loaded data
-                df = msi_data.spectrum_stats_df
+            # NOTE: For the pipeline, we will open a DEDICATED instance to avoid race conditions
+            # with the global msi_data used for plotting/interactive exploration.
+            println("DEBUG: Opening isolated MSIData instance for pipeline stability...")
+            pipeline_msi_data = OpenMSIData(target_path)
+
+            # Determine plot mode from metadata for correct visualization late
+            metadata = pipeline_msi_data.instrument_metadata
+            acq_mode = metadata !== nothing ? metadata.acquisition_mode : :unknown
+            
+            if acq_mode == :centroid
+                last_plot_mode = "stem"
+            elseif acq_mode == :profile
+                last_plot_mode = "lines"
+            else
+                # Fallback to stats if mode is unknown
+                df = pipeline_msi_data.spectrum_stats_df
                 if df !== nothing && "Mode" in names(df)
                     profile_count = count(==(MSI_src.PROFILE), df.Mode)
                     total_count = length(df.Mode)
                     last_plot_mode = profile_count > total_count / 2 ? "lines" : "stem"
-                    println("DEBUG: Auto-detected plot mode for pipeline: $(last_plot_mode)")
                 else
                     last_plot_mode = "lines" # Default
                 end
-            else
-                println("DEBUG: Using already loaded MSI data for $(basename(target_path)).")
             end
+            println("DEBUG: Auto-detected plot mode from metadata: $(last_plot_mode) (acq_mode: $(acq_mode)) [Initial set]")
 
             # Mask path retrieval from registry
             local mask_path_for_pipeline::Union{String, Nothing} = nothing
@@ -1171,6 +1288,7 @@ end
                         warning_msg = true
                         @warn msg
                         println("DEBUG: $msg")
+                        close(pipeline_msi_data) # Important cleanup
                         return
                     end
                 else
@@ -1178,6 +1296,7 @@ end
                     warning_msg = true
                     @warn msg
                     println("DEBUG: $msg")
+                    close(pipeline_msi_data) # Important cleanup
                     return
                 end
             else
@@ -1185,22 +1304,24 @@ end
             end
 
             # Apply mask if enabled to get indices to process
-            spectrum_indices_to_process = collect(1:length(msi_data.spectra_metadata))
+            # Use pipeline_msi_data for consistency
+            spectrum_indices_to_process = collect(1:length(pipeline_msi_data.spectra_metadata))
             if mask_path_for_pipeline !== nothing
                 current_pipeline_step = "Applying mask..."
                 println("DEBUG: Applying mask matrix to filter spectra...")
-                mask_matrix = load_and_prepare_mask(mask_path_for_pipeline, msi_data.image_dims)
-                masked_indices_set = get_masked_spectrum_indices(msi_data, mask_matrix)
+                mask_matrix = load_and_prepare_mask(mask_path_for_pipeline, pipeline_msi_data.image_dims)
+                masked_indices_set = get_masked_spectrum_indices(pipeline_msi_data, mask_matrix)
                 spectrum_indices_to_process = collect(masked_indices_set)
                 if isempty(spectrum_indices_to_process)
                     msg = "No spectra remaining after applying mask. Aborting pipeline."
                     warning_msg = true
                     println("DEBUG: $msg")
+                    close(pipeline_msi_data) # Important cleanup
                     return
                 end
                 println("DEBUG: $(length(spectrum_indices_to_process)) spectra remaining after mask application.")
             else
-                println("DEBUG: No mask applied. Processing all $(length(msi_data.spectra_metadata)) spectra.")
+                println("DEBUG: No mask applied. Processing all $(length(pipeline_msi_data.spectra_metadata)) spectra.")
             end
 
             # Apply subset processing if enabled
@@ -1211,17 +1332,91 @@ end
                 println("DEBUG: Subset processing enabled. Processing first $(length(spectrum_indices_to_process)) of $n_total spectra.")
             end
 
-            # Initialize spectra data structure
-            current_pipeline_step = "Loading spectra..."
-            println("DEBUG: Loading $(length(spectrum_indices_to_process)) spectra into MutableSpectrum objects...")
-            current_spectra = Vector{MutableSpectrum}(undef, length(spectrum_indices_to_process))
+            # --- BOUNDS VALIDATION AND DIAGNOSTIC LOGGING ---
+            # Validate all indices are within bounds before attempting to load
+            max_spectra_idx = length(pipeline_msi_data.spectra_metadata)
+            println("DEBUG: Total spectra in dataset: $max_spectra_idx")
+            println("DEBUG: Number of indices to process: $(length(spectrum_indices_to_process))")
             
-            Threads.@threads for i in 1:length(spectrum_indices_to_process)
-                original_idx = spectrum_indices_to_process[i]
-                mz, intensity = GetSpectrum(msi_data, original_idx) # Fetch mz and intensity for the current spectrum
-                current_spectra[i] = MutableSpectrum(original_idx, copy(Float64.(mz)), copy(Float64.(intensity)), NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), NTuple{6, Float64}}[])
+            if !isempty(spectrum_indices_to_process)
+                min_idx = minimum(spectrum_indices_to_process)
+                max_idx = maximum(spectrum_indices_to_process)
+                println("DEBUG: Spectrum indices range: $min_idx to $max_idx")
+                
+                # Check for invalid indices
+                invalid_indices = filter(idx -> idx < 1 || idx > max_spectra_idx, spectrum_indices_to_process)
+                if !isempty(invalid_indices)
+                    n_invalid = length(invalid_indices)
+                    sample_invalid = first(sort(invalid_indices), min(10, n_invalid))
+                    msg = "Invalid spectrum indices detected: $n_invalid indices out of range [1, $max_spectra_idx]. First few invalid indices: $sample_invalid"
+                    warning_msg = true
+                    @error msg
+                    println("DEBUG: $msg")
+                    close(pipeline_msi_data) # Important cleanup
+                    return
+                end
+                println("DEBUG: All spectrum indices are valid (within [1, $max_spectra_idx]).")
+            else
+                println("DEBUG: Warning - spectrum_indices_to_process is empty!")
+            end
+            
+            # CRITICAL: Verify indices are unique to prevent race conditions during loading
+            if length(Set(spectrum_indices_to_process)) != length(spectrum_indices_to_process)
+                @warn "Non-unique indices detected in spectrum_indices_to_process. This may cause issues during parallel loading."
+            end
+
+            # Use pipeline_msi_data for reading
+            # Split loading into chunks to update progress bar
+            n_spectra = length(spectrum_indices_to_process)
+            println("DEBUG: Loading $n_spectra spectra into MutableSpectrum objects...")
+            current_spectra = Vector{MutableSpectrum}(undef, n_spectra)
+            
+            chunk_size = max(1, n_spectra ÷ 10) # Update progress every 10%
+            for chunk_start in 1:chunk_size:n_spectra
+                chunk_end = min(chunk_start + chunk_size - 1, n_spectra)
+                
+                Threads.@threads for i in chunk_start:chunk_end
+                    local original_idx = spectrum_indices_to_process[i]
+                    local mz, intensity # Enforce thread-local scope
+                    
+                    try
+                        mz, intensity = GetSpectrum(pipeline_msi_data, original_idx)
+                        
+                        # Diagnostic check for length mismatch and defensive truncation
+                        l_mz = length(mz)
+                        l_int = length(intensity)
+                        if l_mz != l_int
+                            new_len = min(l_mz, l_int)
+                            @warn "CRITICAL: Mismatch during loading at index $original_idx. mz=$l_mz, int=$l_int. TRUNCATING."
+                            mz = mz[1:new_len]
+                            intensity = intensity[1:new_len]
+                        end
+
+                        current_spectra[i] = MutableSpectrum(original_idx, copy(Float64.(mz)), copy(Float64.(intensity)), NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), NTuple{6, Float64}}[])
+                    catch loop_error
+                        rethrow(loop_error)
+                    end
+                end
+                
+                overall_progress = (chunk_end / n_spectra) * 0.2 # Loading is first 20%
+                push!(__model__)
             end
             println("DEBUG: All spectra loaded into temporary structure for processing.")
+            
+            # We can now close the local MSI data instance as we have loaded everything into memory
+            # However, if we want to support lazy loading scenarios later, we might keep it open.
+            # For now, let's close it here to free up file handles early, 
+            # UNLESS `execute_full_preprocessing` needs it (it doesn't seem to based on signature).
+            close(pipeline_msi_data) 
+            pipeline_msi_data = nothing # Prevent accidental use
+            
+            # Aggressive memory cleanup to return memory to OS
+            println("DEBUG: Performing aggressive memory cleanup...")
+            GC.gc(true)  # Full garbage collection with all generations
+            if Sys.islinux()
+                ccall(:malloc_trim, Int32, (Int32,), 0)
+            end
+            println("DEBUG: Closed local pipeline MSIData instance and freed memory.")
 
 
             # --- 2. Parameter Assembly with Validation ---
@@ -1450,8 +1645,16 @@ end
                 mask_path_for_pipeline
             ) do step
                 current_pipeline_step = "Processing: $step"
-                println("DEBUG: Processing step: $step")
+                
+                # Update progress based on step index
+                step_idx = findfirst(==(step), pipeline_stp)
+                if step_idx !== nothing
+                    # Preprocessing is 20% to 90% (total 70%)
+                    overall_progress = 0.2 + (step_idx / length(pipeline_stp)) * 0.7
+                end
+                push!(__model__)
             end
+
             println("DEBUG: Pipeline execution finished.")
 
             # 4. Update Results Display
@@ -1638,7 +1841,8 @@ end
                 mkpath(output_dir)
                 save_feature_matrix(feature_matrix_result, bin_info_result, output_dir)
                 msg = "Pipeline completed successfully. Feature matrix saved."
-                println("DEBUG: Feature matrix saved to $output_dir")
+                overall_progress = 1.0
+                push!(__model__)
             else
                 msg = "Pipeline completed successfully. No feature matrix generated (binning step not enabled)."
                 println("DEBUG: $msg")
@@ -1650,18 +1854,71 @@ end
             @error "Pipeline failed" exception=(e, catch_backtrace())
             println("DEBUG: Pipeline caught an exception: $e")
         finally
+            # Aggressive memory cleanup
+            println("DEBUG: Starting aggressive memory cleanup...")
+            
+            # Explicitly clear large data structures
+            try
+                if current_spectra !== nothing && !isempty(current_spectra)
+                    # Deep clear individual objects to break references effectively
+                    # Use isassigned to prevent UndefRefError if loading failed halfway
+                    for i in eachindex(current_spectra)
+                        if isassigned(current_spectra, i)
+                            s = current_spectra[i]
+                            s.mz = Float64[]
+                            s.intensity = Float64[]
+                            empty!(s.peaks)
+                        end
+                    end
+                    empty!(current_spectra)
+                end
+                current_spectra = nothing
+                
+                if feature_matrix_result !== nothing
+                    feature_matrix_result = nothing
+                end
+                
+                # Close any open pipeline data handles
+                if pipeline_msi_data !== nothing
+                    try
+                        close(pipeline_msi_data)
+                    catch
+                        # Already closed, ignore
+                    end
+                    pipeline_msi_data = nothing
+                end
+                
+                println("DEBUG: Data structures cleared. Triggering garbage collection...")
+            catch cleanup_error
+                @warn "Error during data cleanup: $cleanup_error"
+            end
+            
             is_processing = false
+            overall_progress = 0.0
             current_pipeline_step = ""
             println("DEBUG: run_full_pipeline finished (finally block).")
-            GC.gc() # Trigger garbage collection
+            
+            # Force garbage collection multiple times for thorough cleanup
+            GC.gc()
+            GC.gc()  # Second pass to catch any circular references
+            
+            # On Linux/Unix, force Julia to return memory to OS
             if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
+                try
+                    ccall(:malloc_trim, Int32, (Int32,), 0)
+                    println("DEBUG: malloc_trim called successfully (Linux).")
+                catch e
+                    @warn "malloc_trim failed: $e"
+                end
             end
+            
+            println("DEBUG: Memory cleanup complete.")
         end
     end
 
     @onbutton recalculate_suggestions_btn begin
         is_processing = true
+        push!(__model__)
         if msi_data === nothing
             msg = "Please load a file first."
             warning_msg = true
@@ -1903,6 +2160,7 @@ end
     # This new handler correctly adds the file from full_route to the batch list.
     @onbutton btnAddBatch begin
         is_processing = true
+        push!(__model__)
         if isempty(full_route) || full_route == "unknown (manually added)"
             msg = "No active file selected to add to batch."
             warning_msg = true
@@ -1923,6 +2181,7 @@ end
 
     @onbutton clear_batch_btn begin
         is_processing = true
+        push!(__model__)
         selected_files = String[]
         batch_file_count = 0
         msg = "Batch cleared"
@@ -1974,6 +2233,7 @@ end
 
     @onchange btnSearchMzml, btnSearchSync begin
         is_processing = true
+        push!(__model__)
         if btnSearchMzml
             picked_route = pick_file(; filterlist="mzML,mzml")
             if !isempty(picked_route)
@@ -1997,6 +2257,7 @@ end
 
     @onbutton convert_process begin
         is_processing = true
+        push!(__model__)
         if isempty(mzml_full_route) || isempty(sync_full_route)
             msg_conversion = "Please select both an .mzML file and a .txt sync file."
             warning_msg = true
@@ -2029,6 +2290,7 @@ end
             @error "Conversion failed" exception=(e, catch_backtrace())
         finally
             is_processing = false
+            overall_progress = 0.0
             # Re-enable button if files are still selected
             btnConvertDisable = isempty(mzml_full_route) || isempty(sync_full_route)
         end
@@ -2061,6 +2323,7 @@ end
                 return
             end
             is_processing = true
+            push!(__model__)
 
             masses = Float64[]
             try
@@ -2087,7 +2350,8 @@ end
 
             for (file_idx, file_path) in enumerate(current_selected_files)
                 progress_message = "Processing file $(file_idx)/$(num_files): $(basename(file_path))"
-                overall_progress = current_step / total_steps
+                overall_progress = (file_idx - 1) / num_files
+                push!(__model__)
                 
                 all_params = (
                     tolerance = current_tol,
@@ -2218,6 +2482,10 @@ end
     end
 
     @onbutton createMeanPlot @time begin
+        # Pre-initialize for safe cleanup in finally block
+        local xSpectraMz = Vector{Float64}()
+        local ySpectraMz = Vector{Float64}()
+        
         if isempty(selected_folder_main)
             msg = "No dataset selected. Please process a file and select a folder first."
             warning_msg = true
@@ -2225,6 +2493,7 @@ end
         end
 
         is_processing = true
+        push!(__model__)
 
         try
             sTime = time()
@@ -2275,12 +2544,25 @@ end
             msg = "Plot loaded in $(eTime) seconds"
             log_memory_usage("Mean Plot Generated", msi_data)
         catch e
-                    msg = "Could not generate mean spectrum plot: $e"
-                    warning_msg = true
-                    @error "Mean spectrum plotting failed" exception=(e, catch_backtrace())
-                finally
-                    is_processing = false
-                    GC.gc() # Trigger garbage collection
+            msg = "Could not generate mean spectrum plot: $e"
+            warning_msg = true
+            @error "Mean spectrum plotting failed" exception=(e, catch_backtrace())
+        finally
+            is_processing = false
+            try
+                if plotdata_before !== nothing
+                    plotdata_before = nothing
+                end
+                if !isempty(xSpectraMz)
+                    empty!(xSpectraMz)
+                end
+                if !isempty(ySpectraMz)
+                    empty!(ySpectraMz)
+                end
+            catch
+            end
+            
+            GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
             end
@@ -2288,6 +2570,10 @@ end
     end
 
     @onbutton createSumPlot @time begin
+        # Pre-initialize for safe cleanup in finally block
+        local xSpectraMz = Vector{Float64}()
+        local ySpectraMz = Vector{Float64}()
+
         if isempty(selected_folder_main)
             msg = "No dataset selected. Please process a file and select a folder first."
             warning_msg = true
@@ -2295,6 +2581,7 @@ end
         end
 
         is_processing = true
+        push!(__model__)
         msg = "Loading total spectrum plot for $(selected_folder_main)..."
         
         try
@@ -2350,6 +2637,18 @@ end
             @error "Total spectrum plotting failed" exception=(e, catch_backtrace())
         finally
             is_processing = false
+            try
+                if plotdata_before !== nothing
+                    plotdata_before = nothing
+                end
+                if !isempty(xSpectraMz)
+                    empty!(xSpectraMz)
+                end
+                if !isempty(ySpectraMz)
+                    empty!(ySpectraMz)
+                end
+            catch
+            end
             GC.gc() # Trigger garbage collection
             if Sys.islinux()
                 ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
@@ -2365,6 +2664,7 @@ end
         end
 
         is_processing = true
+        push!(__model__)
         msg = "Loading plot for $(selected_folder_main)..."
 
         try
@@ -2479,6 +2779,7 @@ end
         end
 
         is_processing = true
+        push!(__model__)
         msg = "Loading plot for $(selected_folder_main)..."
 
         try
@@ -3022,6 +3323,7 @@ end
             return
         end
         is_processing = true
+        push!(__model__)
 
         try
             # --- Get Mask Path ---
@@ -3079,6 +3381,7 @@ end
         end
 
         is_processing = true
+        push!(__model__)
 
         try
             # --- Get Mask Path ---
@@ -3137,6 +3440,7 @@ end
         end
 
         is_processing = true
+        push!(__model__)
         
         try
             sTime=time()
@@ -3175,6 +3479,7 @@ end
         end
 
         is_processing = true
+        push!(__model__)
         
         try
             sTime=time()
@@ -3401,6 +3706,10 @@ end
     @mounted watchplots()
 
     @onchange isready begin
+        # Capture state on first run only
+        if isempty(INITIAL_MODEL_STATE)
+            capture_initial_state!(__model__)
+        end
         # is_processing = true
         if isready && !registry_init_done
             sTime=time()
@@ -3471,6 +3780,5 @@ end
     end
 end
 # == Pages ==
-# Register a new route and the page that will be loaded on access
 @page("/", "app.jl.html")
 end
