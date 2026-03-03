@@ -706,7 +706,16 @@ end
             is_processing = false
         end
     end
+    #=
+    @onbutton btnSearch
 
+    This reactive handler job is to open a file dialog and prompt the user to select a file
+    its the entry point to any process done later in the interface, it creates a new dataset entry in the json
+    and updates the list of available datasets in the interface. preprocesses the file and saves
+    metadata to the json file. if the file is already in the json file, it will skip the preprocessing
+    and load the metadata from the json file. creates the suggestions to the preprocessing pipeline, and makes
+    sure the file can be processed by later steps like mainProcess 
+    =#
     @onbutton btnSearch begin
         is_processing = true
         push!(__model__)
@@ -1219,6 +1228,9 @@ end
         is_processing = false
     end
 
+    #=
+    This reactive handler job is to run the full preprocessing pipeline on the selected dataset.
+    =#
     @onbutton run_full_pipeline begin
         is_processing = true
         push!(__model__)
@@ -1915,7 +1927,11 @@ end
             println("DEBUG: Memory cleanup complete.")
         end
     end
+    #=
+    @onbutton recalculate_suggestions_btn
 
+    This reactive handler job is to recalculate the suggestions for the preprocessing pipeline.
+    =#
     @onbutton recalculate_suggestions_btn begin
         is_processing = true
         push!(__model__)
@@ -2089,6 +2105,11 @@ end
         end
     end
 
+    #=
+    @onbutton addReferencePeak
+
+    This reactive handler job is to add a new reference peak to the list of reference peaks.
+    =#
     @onbutton addReferencePeak begin
         is_processing = true
         new_list = deepcopy(reference_peaks_list)
@@ -2097,6 +2118,11 @@ end
         is_processing = false
     end
 
+    #=
+    @onbutton remove_peak_trigger
+
+    This reactive handler job is to remove a reference peak from the list of reference peaks.
+    =#
     @onbutton remove_peak_trigger begin
         is_processing = true
         if action_index > -1
@@ -2157,7 +2183,11 @@ end
         is_processing = false
     end
 
-    # This new handler correctly adds the file from full_route to the batch list.
+    #= 
+    @onbutton btnAddBatch
+
+    This reactive handler job is to add a new file to the batch list.
+    =#
     @onbutton btnAddBatch begin
         is_processing = true
         push!(__model__)
@@ -2179,6 +2209,11 @@ end
         is_processing = false
     end
 
+    #=
+    @onbutton clear_batch_btn
+
+    This reactive handler job is to clear the batch list in the UI
+    =#
     @onbutton clear_batch_btn begin
         is_processing = true
         push!(__model__)
@@ -2200,7 +2235,11 @@ end
             msg = "File automatically added to batch"
         end
     end
+    #=
+    @onbutton showMetadataBtn
 
+    This reactive handler job is to show the metadata of the selected dataset.
+    =#
     @onbutton showMetadataBtn begin
         if !isempty(available_folders)
             if !isempty(selected_folder_main)
@@ -2214,7 +2253,11 @@ end
             warning_msg = true
         end
     end
+    #= 
+    @onchange selected_folder_metadata
 
+    This reactive handler job is to update the metadata table when the selected folder changes.
+    =#
     @onchange selected_folder_metadata begin
         if !isempty(selected_folder_metadata)
             registry = load_registry(registry_path)

@@ -8,7 +8,7 @@ using Base.Threads
 A thread-safe pool of `Vector{UInt8}` buffers, categorized by their size.
 This helps reduce memory allocations and garbage collection overhead by reusing buffers.
 
-# Fields
+# Arguments:
 - `lock`: A `ReentrantLock` to ensure thread-safe access to the pool.
 - `buffers`: A dictionary mapping buffer size (in bytes) to a list of available buffers of that size.
 """
@@ -27,11 +27,11 @@ end
 Retrieves a `Vector{UInt8}` buffer of at least `size` bytes from the pool.
 If no suitable buffer is available, a new one is allocated.
 
-# Arguments
+# Arguments:
 - `pool`: The `BufferPool` to retrieve the buffer from.
 - `size`: The minimum desired size of the buffer in bytes.
 
-# Returns
+# Returns:
 - A `Vector{UInt8}` buffer.
 """
 function get_buffer!(pool::BufferPool, size::Int)::Vector{UInt8}
@@ -58,7 +58,7 @@ end
 
 Returns a `Vector{UInt8}` buffer to the pool for future reuse.
 
-# Arguments
+# Arguments:
 - `pool`: The `BufferPool` to return the buffer to.
 - `buffer`: The `Vector{UInt8}` buffer to release.
 """
@@ -78,6 +78,11 @@ end
     SimpleBufferPool
 
 A dramatically simplified buffer pool that avoids complex locking.
+
+# Arguments:
+- `buffers::Dict{Int, Vector{Vector{UInt8}}}`: A dictionary mapping buffer size (in bytes) to a list of available buffers of that size.
+- `max_pool_size::Int`: The maximum number of buffers to keep in the pool.
+- `lock::ReentrantLock`: A lock to ensure thread-safe access to the pool.
 """
 mutable struct SimpleBufferPool
     buffers::Dict{Int, Vector{Vector{UInt8}}}
@@ -85,8 +90,26 @@ mutable struct SimpleBufferPool
     lock::ReentrantLock  # Add lock for thread safety
 end
 
+"""
+    SimpleBufferPool()
+
+Creates a new `SimpleBufferPool` with a default maximum pool size of 50.
+"""
 SimpleBufferPool() = SimpleBufferPool(Dict{Int, Vector{Vector{UInt8}}}(), 50, ReentrantLock())
 
+"""
+    get_buffer!(pool::SimpleBufferPool, size::Int) -> Vector{UInt8}
+
+Retrieves a `Vector{UInt8}` buffer of at least `size` bytes from the pool.
+If no suitable buffer is available, a new one is allocated.
+
+# Arguments:
+- `pool`: The `SimpleBufferPool` to retrieve the buffer from.
+- `size`: The minimum desired size of the buffer in bytes.
+
+# Returns:
+- A `Vector{UInt8}` buffer.
+"""
 function get_buffer!(pool::SimpleBufferPool, size::Int)::Vector{UInt8}
     lock(pool.lock) do
         # Check for existing buffers of exact size first
@@ -99,6 +122,15 @@ function get_buffer!(pool::SimpleBufferPool, size::Int)::Vector{UInt8}
     return Vector{UInt8}(undef, size)
 end
 
+"""
+    release_buffer!(pool::SimpleBufferPool, buffer::Vector{UInt8})
+
+Returns a `Vector{UInt8}` buffer to the pool for future reuse.
+
+# Arguments:
+- `pool`: The `SimpleBufferPool` to return the buffer to.
+- `buffer`: The `Vector{UInt8}` buffer to release.
+"""
 function release_buffer!(pool::SimpleBufferPool, buffer::Vector{UInt8})
     size = length(buffer)
     
@@ -132,15 +164,26 @@ struct InvalidSpectrumError <: MSIError
 end
 
 # --- Shared Constants ---
-const DEFAULT_CACHE_SIZE = 100
-const DEFAULT_NUM_BINS = 2000
+const DEFAULT_CACHE_SIZE = 100 # Default cache size for spectra
+const DEFAULT_NUM_BINS = 2000 # Default number of bins for spectra
 const DEFAULT_BLOOM_FILTER_SIZE = 10000  # Default size for empty spectra
-const DEFAULT_FALSE_POSITIVE_RATE = 0.01
+const DEFAULT_FALSE_POSITIVE_RATE = 0.01 # Default false positive rate for bloom filters
 
 """
     validate_spectrum_data(mz, intensity, id)
 
 Checks a spectrum for common data integrity issues.
+
+# Arguments:
+- `mz`: The m/z values of the spectrum.
+- `intensity`: The intensity values of the spectrum.
+- `id`: The ID of the spectrum.
+
+# Returns:
+- `true` if the spectrum is valid.
+
+# Throws:
+- `InvalidSpectrumError` if the spectrum is invalid.
 """
 function validate_spectrum_data(mz::AbstractVector, intensity::AbstractVector, id)
     if length(mz) != length(intensity)
@@ -163,6 +206,12 @@ end
 
 Memory-optimized version that processes data in chunks to reduce temporary allocations
 and avoid holding large intermediate arrays.
+
+# Arguments:
+- `mz`: The m/z values of the spectrum.
+
+# Returns:
+- A `BloomFilter{Int}` for the spectrum.
 """
 function create_bloom_filter_for_spectrum(mz::AbstractVector{<:Real})::BloomFilter{Int}
     if isempty(mz)
@@ -193,6 +242,9 @@ end
     empty_bloom_filter() -> BloomFilter{Float64}
 
 Creates an empty Bloom filter for spectra with no data.
+
+# Returns:
+- An empty `BloomFilter{Float64}`.
 """
 function empty_bloom_filter()::BloomFilter{Int}
     return BloomFilter{Int}(size=DEFAULT_BLOOM_FILTER_SIZE, hash_count=3)
@@ -202,6 +254,12 @@ end
     AtomicFlag
 
 A thread-safe boolean flag using atomic operations.
+
+# Fields:
+- `value::Base.Threads.Atomic{Int}`: The atomic value of the flag.
+
+# Arguments:
+- `value::Base.Threads.Atomic{Int}`: The atomic value of the flag.
 """
 struct AtomicFlag
     value::Base.Threads.Atomic{Int}

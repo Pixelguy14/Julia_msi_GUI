@@ -14,6 +14,11 @@ const FILE_HANDLE_LOCK = ReentrantLock()
     ThreadSafeFileHandle
 
 Wraps a file handle with thread-safe operations.
+# Fields
+
+- `path::String`: The path to the file.
+- `handle::IO`: The file handle.
+- `lock::ReentrantLock`: The lock for thread-safe operations.
 """
 mutable struct ThreadSafeFileHandle
     path::String
@@ -21,6 +26,20 @@ mutable struct ThreadSafeFileHandle
     lock::ReentrantLock
 end
 
+"""
+    ThreadSafeFileHandle(path::String, mode::String="r")
+
+Wraps a file handle with thread-safe operations.
+
+# Arguments
+
+- `path::String`: The path to the file.
+- `mode::String`: The mode to open the file in.
+
+# Returns
+
+- A `ThreadSafeFileHandle`.
+"""
 function ThreadSafeFileHandle(path::String, mode::String="r")
     handle = lock(FILE_HANDLE_LOCK) do
         open(path, mode)
@@ -285,12 +304,37 @@ mutable struct MSIData
     end
 end
 
-# Thread-safe state management
+"""
+    set_global_mz_range!(data::MSIData, min_mz::Float64, max_mz::Float64)
+
+Sets the global m/z range for the MSIData object.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+- `min_mz::Float64`: The minimum m/z value.
+- `max_mz::Float64`: The maximum m/z value.
+
+# Returns
+- `nothing`
+"""
 function set_global_mz_range!(data::MSIData, min_mz::Float64, max_mz::Float64)
     Threads.atomic_xchg!(data.global_min_mz, min_mz)
     Threads.atomic_xchg!(data.global_max_mz, max_mz)
 end
 
+"""
+    get_global_mz_range(data::MSIData)
+
+Gets the global m/z range for the MSIData object.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+
+# Returns
+- `(min_mz, max_mz)`: The global m/z range.
+"""
 function get_global_mz_range(data::MSIData)
     # Atomic read using atomic_add! with zero
     min_mz = Threads.atomic_add!(data.global_min_mz, 0.0)
@@ -298,6 +342,20 @@ function get_global_mz_range(data::MSIData)
     return (min_mz, max_mz)
 end
 
+"""
+    set_analytics_data!(data::MSIData, stats_df::DataFrame, bloom_filters::Vector)
+
+Sets the analytics data for the MSIData object.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+- `stats_df::DataFrame`: The statistics DataFrame.
+- `bloom_filters::Vector`: The bloom filters.
+
+# Returns
+- `nothing`
+"""
 function set_analytics_data!(data::MSIData, stats_df::DataFrame, bloom_filters::Vector)
     lock(data.cache_lock) do
         data.spectrum_stats_df = stats_df
@@ -305,12 +363,36 @@ function set_analytics_data!(data::MSIData, stats_df::DataFrame, bloom_filters::
     end
 end
 
+"""
+    get_bloom_filters(data::MSIData)
+
+Gets the bloom filters for the MSIData object.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+
+# Returns
+- `bloom_filters::Vector`: The bloom filters.
+"""
 function get_bloom_filters(data::MSIData)
     lock(data.cache_lock) do
         return data.bloom_filters
     end
 end
 
+"""
+    get_spectrum_stats(data::MSIData)
+
+Gets the spectrum statistics for the MSIData object.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+
+# Returns
+- `stats_df::DataFrame`: The statistics DataFrame.
+"""
 function get_spectrum_stats(data::MSIData)
     lock(data.cache_lock) do
         return data.spectrum_stats_df
@@ -322,6 +404,13 @@ end
 
 Explicitly closes the file handles associated with the `MSIData` object and clears the spectrum cache.
 It is good practice to call this method when you are finished with an `MSIData` object to release resources immediately.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+
+# Returns
+- `nothing`
 """
 function Base.close(data::MSIData)
     if data.source isa ImzMLSource && isopen(data.source.ibd_handle)
@@ -343,6 +432,14 @@ end
 Pre-loads a specified list of spectra into the cache. This is useful for warming up
 the cache with frequently accessed spectra to improve performance for subsequent
 interactive analysis.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+- `indices::AbstractVector{Int}`: The indices of the spectra to warm the cache with.
+
+# Returns
+- `nothing`
 """
 function warm_cache(data::MSIData, indices::AbstractVector{Int})
     println("Warming cache with $(length(indices)) spectra...")
@@ -359,8 +456,12 @@ end
 Calculates and returns a summary of the memory currently used by the MSIData object,
 including the spectrum cache and metadata.
 
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+
 # Returns
-- A `NamedTuple` with memory usage in bytes for different components.
+- `(total_mb, cache_mb, metadata_mb, coordinate_map_mb)`: A named tuple with memory usage in MB for different components.
 """
 function get_memory_usage(data::MSIData)
     cache_bytes = 0
@@ -488,6 +589,21 @@ function read_binary_vector(data::MSIData, io::IO, asset::SpectrumAsset)
     return out_array
 end
 
+"""
+    read_binary_vector(data::MSIData, ts_handle::ThreadSafeFileHandle, asset::SpectrumAsset)
+
+Reads a single spectrum's m/z and intensity arrays directly from the `.ibd`
+binary file for an `.imzML` dataset. It handles reading the raw binary data
+and converting it from little-endian to the host's native byte order.
+
+# Arguments
+- `data`: The `MSIData` object.
+- `ts_handle`: The `ThreadSafeFileHandle` containing the file handle and data formats.
+- `asset`: The `SpectrumAsset` containing metadata for the array.
+
+# Returns
+- A `Vector` of the appropriate type containing the decoded data.
+"""
 function read_binary_vector(data::MSIData, ts_handle::ThreadSafeFileHandle, asset::SpectrumAsset)
     lock(ts_handle.lock) do
         return read_binary_vector(data, ts_handle.handle, asset)
@@ -679,6 +795,22 @@ single spectrum. Your logic should be inside the function passed to this helper.
 
 For bulk processing of all spectra, consider using the `_iterate_spectra_fast`
 function, which is optimized for sequential access and avoids cache overhead.
+
+# Arguments
+
+- `f::Function`: The function to apply to the spectrum.
+- `data::MSIData`: The MSIData object.
+- `index::Int`: The index of the spectrum.
+
+# Returns
+- `result::Any`: The result of applying the function to the spectrum.
+
+# Example
+
+```julia
+process_spectrum(data, 1) do mz, intensity
+    # Process the spectrum here
+end
 ```
 """
 function process_spectrum(f::Function, data::MSIData, index::Int)
@@ -696,6 +828,24 @@ end
 
 A coordinate-based version of the "function barrier" helper. See `process_spectrum`
 for details on the performance pattern.
+
+# Arguments
+
+- `f::Function`: The function to apply to the spectrum.
+- `data::MSIData`: The MSIData object.
+- `x::Int`: The x-coordinate of the spectrum.
+- `y::Int`: The y-coordinate of the spectrum.
+
+# Returns
+- `result::Any`: The result of applying the function to the spectrum.
+
+# Example
+
+```julia
+process_spectrum(data, 1, 1) do mz, intensity
+    # Process the spectrum here
+end
+```
 """
 function process_spectrum(f::Function, data::MSIData, x::Int, y::Int)
     mz, intensity = GetSpectrum(data, x, y)
@@ -721,6 +871,13 @@ The computed statistics include:
 Subsequent calls to functions like `get_total_spectrum` will be much faster
 as they can use this cached data. This function modifies the `MSIData` object in-place
 and is idempotent.
+
+# Arguments
+
+- `msi_data::MSIData`: The MSIData object.
+
+# Returns
+- `nothing`
 """
 function precompute_analytics(msi_data::MSIData)
     # Double-checked locking pattern
@@ -861,6 +1018,21 @@ It uses a fast, two-pass approach:
 
 This function is highly optimized for `.imzML` by leveraging direct binary
 reading and optimized binning logic. It is called by `get_total_spectrum`.
+
+# Arguments
+
+- `msi_data::MSIData`: The MSIData object.
+- `num_bins::Int`: The number of bins to use for the total spectrum.
+- `masked_indices::Union{Set{Int}, Nothing}`: The indices of the spectra to mask.
+
+# Returns
+- `(mz_range, total_spectrum)`: A tuple containing the m/z range and the total spectrum.
+
+# Example
+
+```julia
+get_total_spectrum_imzml(msi_data)
+```
 """
 function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000, masked_indices::Union{Set{Int}, Nothing}=nothing)
     println("Calculating total spectrum for imzML (2-pass method)...")
@@ -963,6 +1135,21 @@ It uses a two-pass approach analogous to the `imzML` implementation:
 2. The second pass sums intensities into a pre-defined number of bins.
 
 This function is called by `get_total_spectrum`.
+
+# Arguments
+
+- `msi_data::MSIData`: The MSIData object.
+- `num_bins::Int`: The number of bins to use for the total spectrum.
+- `masked_indices::Union{Set{Int}, Nothing}`: The indices of the spectra to mask.
+
+# Returns
+- `(mz_range, total_spectrum)`: A tuple containing the m/z range and the total spectrum.
+
+# Example
+
+```julia
+get_total_spectrum_mzml(msi_data)
+```
 """
 function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000, masked_indices::Union{Set{Int}, Nothing}=nothing)
     println("Calculating total spectrum for mzML (2-pass method)...")
@@ -1061,6 +1248,21 @@ This function dispatches to a specialized implementation based on the file type
 (.imzML or .mzML) for optimal performance.
 
 Returns a tuple containing two vectors: the binned m/z axis and the summed intensities.
+
+# Arguments
+
+- `msi_data::MSIData`: The MSIData object.
+- `num_bins::Int`: The number of bins to use for the total spectrum.
+- `mask_path::Union{String, Nothing}`: The path to the mask file.
+
+# Returns
+- `(mz_range, total_spectrum)`: A tuple containing the m/z range and the total spectrum.
+
+# Example
+
+```julia
+get_total_spectrum(msi_data)
+```
 """
 function get_total_spectrum(msi_data::MSIData; num_bins::Int=2000, mask_path::Union{String, Nothing}=nothing)::Tuple{Vector{Float64}, Vector{Float64}, Int}
     local masked_indices::Union{Set{Int}, Nothing} = nothing
@@ -1084,6 +1286,21 @@ Calculates the average of all spectra in the dataset by binning.
 This is effectively the total spectrum divided by the number of spectra.
 
 Returns a tuple containing two vectors: the binned m/z axis and the averaged intensities.
+
+# Arguments
+
+- `msi_data::MSIData`: The MSIData object.
+- `num_bins::Int`: The number of bins to use for the total spectrum.
+- `mask_path::Union{String, Nothing}`: The path to the mask file.
+
+# Returns
+- `(mz_range, average_spectrum)`: A tuple containing the m/z range and the average spectrum.
+
+# Example
+
+```julia
+get_average_spectrum(msi_data)
+```
 """
 function get_average_spectrum(msi_data::MSIData; num_bins::Int=2000, mask_path::Union{String, Nothing}=nothing)::Tuple{Vector{Float64}, Vector{Float64}}
     mz_bins, intensity_sum, num_spectra_processed = get_total_spectrum(msi_data, num_bins=num_bins, mask_path=mask_path)
@@ -1105,6 +1322,19 @@ end
 
 A stateful iterator for sequentially accessing spectra from an `MSIData` object.
 This is created by the `IterateSpectra` function.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+
+# Returns
+- `MSIDataIterator`: An iterator that yields each spectrum.
+
+# Example
+
+```julia
+IterateSpectra(data)
+```
 """
 struct MSIDataIterator
     data::MSIData
@@ -1118,6 +1348,19 @@ This iterator is useful for processing all spectra in a loop and benefits from
 the caching implemented in `GetSpectrum`.
 
 This function is the core of the "Event-driven" access pattern.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+
+# Returns
+- `MSIDataIterator`: An iterator that yields each spectrum.
+
+# Example
+
+```julia
+IterateSpectra(data)
+```
 """
 function IterateSpectra(data::MSIData)
     return MSIDataIterator(data)
@@ -1251,6 +1494,17 @@ is significantly faster for bulk processing than reading spectra one by one.
 - `f`: A function to execute for each spectrum, with the signature `f(index, mz_view, int_view)`.
 - `data`: The `MSIData` object.
 - `source`: The `ImzMLSource`.
+
+# Returns
+- `nothing`
+
+# Example
+
+```julia
+_iterate_uncompressed_fast(data, 1) do mz, intensity
+    # Process the spectrum here
+end
+```
 """
 function _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     # Optimized path for uncompressed data using buffer reuse
@@ -1305,6 +1559,17 @@ and will be slower and allocate more memory than `_iterate_uncompressed_fast`.
 - `f`: A function to execute for each spectrum, with the signature `f(index, mz_array, int_array)`.
 - `data`: The `MSIData` object.
 - `source`: The `ImzMLSource`.
+
+# Returns
+- `nothing`
+
+# Example
+
+```julia
+_iterate_compressed_fast(data, 1) do mz, intensity
+    # Process the spectrum here
+end
+```
 """
 function _iterate_compressed_fast(f::Function, data::MSIData, source::ImzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     # Path for datasets containing at least one compressed spectrum.
@@ -1342,6 +1607,23 @@ This function acts as a dispatcher:
 - If any spectrum is compressed, it uses a slower path that decompresses each spectrum individually.
 - If all spectra are uncompressed, it uses a highly optimized path that reuses pre-allocated 
   buffers to minimize memory allocations and overhead.
+
+# Arguments
+
+- `f::Function`: A function to execute for each spectrum, with the signature `f(index, mz_array, int_array)`.
+- `data::MSIData`: The `MSIData` object.
+- `source::ImzMLSource`: The `ImzMLSource`.
+
+# Returns
+- `nothing`
+
+# Example
+
+```julia
+_iterate_spectra_fast_impl(data, 1) do mz, intensity
+    # Process the spectrum here
+end
+```
 """
 function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::ImzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     if isempty(data.spectra_metadata)
@@ -1366,6 +1648,23 @@ Internal implementation of the fast iterator for `.mzML` files. It iterates
 through each spectrum, decodes the Base64 data on the fly, and calls the
 provided function. It bypasses the `GetSpectrum` cache to avoid storing
 all decoded spectra in memory.
+
+# Arguments
+
+- `f::Function`: A function to execute for each spectrum, with the signature `f(index, mz_array, int_array)`.
+- `data::MSIData`: The `MSIData` object.
+- `source::MzMLSource`: The `MzMLSource`.
+
+# Returns
+- `nothing`
+
+# Example
+
+```julia
+_iterate_spectra_fast_impl(data, 1) do mz, intensity
+    # Process the spectrum here
+end
+```
 """
 function _iterate_spectra_fast_impl(f::Function, data::MSIData, source::MzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     # This implementation is for mzML. To improve disk I/O, we can reorder the read
@@ -1430,6 +1729,17 @@ number of available threads (`Threads.nthreads()`).
 - `data`: The `MSIData` object.
 - `indices_to_iterate`: An optional `AbstractVector{Int}` specifying a subset of
   spectrum indices to iterate over. If `nothing`, it iterates over all spectra.
+
+# Returns
+- `nothing`
+
+# Example
+
+```julia
+_iterate_spectra_fast(data, 1) do mz, intensity
+    # Process the spectrum here
+end
+```
 """
 function _iterate_spectra_fast(f::Function, data::MSIData, indices_to_iterate::Union{AbstractVector{Int}, Nothing}=nothing)
     # Default to all indices if not specified
@@ -1518,6 +1828,22 @@ end
 
 Parallel version that processes all spectra in the dataset.
 Convenience wrapper for the indexed version.
+
+# Arguments
+
+- `f::Function`: A function to execute for each spectrum, with the signature `f(index, mz_array, int_array)`.
+- `data::MSIData`: The `MSIData` object.
+
+# Returns
+- `nothing`
+
+# Example
+
+```julia
+_iterate_spectra_fast_parallel(data, 1) do mz, intensity
+    # Process the spectrum here
+end
+```
 """
 function _iterate_spectra_fast_parallel(f::Function, data::MSIData)
     all_indices = collect(1:length(data.spectra_metadata))
@@ -1529,6 +1855,22 @@ end
 
 Thread-safe version that processes all spectra in the dataset.
 Convenience wrapper for the indexed version.
+
+# Arguments
+
+- `f::Function`: A function to execute for each spectrum, with the signature `f(index, mz_array, int_array)`.
+- `data::MSIData`: The `MSIData` object.
+
+# Returns
+- `nothing`
+
+# Example
+
+```julia
+_iterate_spectra_fast_threadsafe(data, 1) do mz, intensity
+    # Process the spectrum here
+end
+```
 """
 function _iterate_spectra_fast_threadsafe(f::Function, data::MSIData)
     all_indices = collect(1:length(data.spectra_metadata))

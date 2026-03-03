@@ -906,7 +906,7 @@ end
 """
     load_registry(registry_path)
 
-Loads the dataset registry from a JSON file.
+Loads the dataset registry from a JSON file, with retries for robustness on Windows.
 
 # Arguments
 - `registry_path`: Path to the `registry.json` file.
@@ -916,16 +916,23 @@ Loads the dataset registry from a JSON file.
 """
 function load_registry(registry_path)
     return lock(REGISTRY_LOCK) do
-        if isfile(registry_path)
-            try
-                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
-            catch e
-                @error "Failed to parse registry.json: $e"
-                Dict{String,Any}()
+        clean_path = abspath(registry_path)
+        if isfile(clean_path)
+            for attempt in 1:5
+                try
+                    return JSON.parsefile(clean_path, dicttype=Dict{String,Any})
+                catch e
+                    if attempt == 5
+                        @error "Final attempt failed to parse registry.json: $(sprint(showerror, e))"
+                        return Dict{String,Any}()
+                    else
+                        @warn "Attempt $attempt to read registry.json failed, retrying in 0.2s... Error: $(sprint(showerror, e))"
+                        sleep(0.2)
+                    end
+                end
             end
-        else
-            Dict{String,Any}()
         end
+        return Dict{String,Any}()
     end
 end
 
@@ -988,6 +995,47 @@ function extract_metadata(msi_data::MSIData, source_path::String)
 end
 
 """
+    save_registry(registry_path, registry_data)
+
+Saves the dataset registry to a JSON file, ensuring thread-safe access and robustness on Windows.
+
+# Arguments
+- `registry_path`: Path to the `registry.json` file.
+- `registry_data`: The dictionary containing the registry data to save.
+"""
+function save_registry(registry_path, registry_data)
+    lock(REGISTRY_LOCK) do
+        # Ensure the path is clean and valid for the OS
+        clean_path = abspath(registry_path)
+        dir = dirname(clean_path)
+        if !isdir(dir)
+            mkpath(dir)
+        end
+
+        # On Windows, opening files for writing can occasionally fail if another process 
+        # (like an anti-virus or file indexer) holds a transient lock.
+        # Retry with a small delay to improve robustness.
+        for attempt in 1:5
+            try
+                open(clean_path, "w") do f
+                    JSON.print(f, registry_data, 4)
+                end
+                return true # Success
+            catch e
+                if attempt == 5
+                    @error "Final attempt failed to write to registry.json: $(sprint(showerror, e))"
+                    return false
+                else
+                    @warn "Attempt $attempt to write to registry.json failed (Error: $(sprint(showerror, e))), retrying in 0.2s..."
+                    sleep(0.2)
+                end
+            end
+        end
+        return false
+    end
+end
+
+"""
     update_registry(registry_path, dataset_name, source_path, metadata=nothing, is_imzML=false)
 
 Adds or updates an entry in the dataset registry JSON file.
@@ -1001,16 +1049,7 @@ Adds or updates an entry in the dataset registry JSON file.
 """
 function update_registry(registry_path, dataset_name, source_path, metadata=nothing, is_imzML=false)
     lock(REGISTRY_LOCK) do
-        registry = if isfile(registry_path)
-            try
-                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
-            catch e
-                @error "Failed to parse registry.json while updating: $e"
-                Dict{String,Any}() # Start with empty if parsing fails
-            end
-        else
-            Dict{String,Any}()
-        end
+        registry = load_registry(registry_path)
 
         # Get existing entry if it exists, otherwise create new one
         existing_entry = get(registry, dataset_name, Dict{String,Any}())
@@ -1030,34 +1069,8 @@ function update_registry(registry_path, dataset_name, source_path, metadata=noth
         
         registry[dataset_name] = entry
 
-        try
-            open(registry_path, "w") do f
-                JSON.print(f, registry, 4)
-            end
-        catch e
-            @error "Failed to write to registry.json: $e"
-        end
-    end
-end
-
-"""
-    save_registry(registry_path, registry_data)
-
-Saves the dataset registry to a JSON file, ensuring thread-safe access.
-
-# Arguments
-- `registry_path`: Path to the `registry.json` file.
-- `registry_data`: The dictionary containing the registry data to save.
-"""
-function save_registry(registry_path, registry_data)
-    lock(REGISTRY_LOCK) do
-        try
-            open(registry_path, "w") do f
-                JSON.print(f, registry_data, 4)
-            end
-        catch e
-            @error "Failed to write to registry.json: $e"
-        end
+        # Use the robust save function
+        save_registry(registry_path, registry)
     end
 end
 
@@ -1208,13 +1221,8 @@ function update_registry_mask_fields(registry_path, dataset_name, has_mask, mask
             )
         end
 
-        try
-            open(registry_path, "w") do f
-                JSON.print(f, registry, 4)
-            end
-        catch e
-            @error "Failed to write to registry.json: $e"
-        end
+        # Use the robust save function
+        save_registry(registry_path, registry)
     end
 end
 

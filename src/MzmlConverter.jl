@@ -842,6 +842,16 @@ Main workflow function to convert a .mzML file to an .imzML file.
 * `target_file`: Path for the output .imzML file (the .ibd will be named accordingly).
 * `img_width`: width dimention for the creation of the x axis
 * `img_height`: height dimention for the creation of the y axis
+
+# Returns
+- `true` if the conversion was successful.
+- `false` if the conversion failed.
+
+# Example
+
+```julia
+ImportMzmlFile("test.mzML", "test.txt", "test.imzML")
+```
 """
 function ImportMzmlFile(source_file::String, sync_file::String, target_file::String; img_width::Int=0, img_height::Int=0)
     if !isfile(source_file)

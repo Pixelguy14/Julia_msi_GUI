@@ -14,6 +14,7 @@ if get(ENV, "GENIE_ENV", "dev") != "prod" && !isfile(manifest_path)
     Pkg.gc()
 elseif get(ENV, "GENIE_ENV", "dev") != "prod"
     @info "Manifest.toml found. Skipping Pkg.instantiate() for faster boot. Delete Manifest.toml if you need to re-instantiate."
+    ENV["GENIE_ENV"] = "prod"
 end
 
 using Genie

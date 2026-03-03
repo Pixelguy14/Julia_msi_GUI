@@ -28,8 +28,18 @@ end
 
 Reads a stream line-by-line until a line matches the provided regex.
 
+# Arguments
+- `stream::IO`: The stream to parse the metadata from.
+- `regex::Regex`: The regex to match.
+
 # Returns
 - A `RegexMatch` object if a match is found, otherwise throws an error.
+
+# Example
+
+```julia
+find_tag(open("test.mzML"), r"<spectrum")
+```
 """
 function find_tag(stream, regex::Regex)
     while !eof(stream)
@@ -47,8 +57,18 @@ end
 
 Retrieves an attribute's value from an XML tag string.
 
+# Arguments
+- `source::String`: The string to parse the attribute from.
+- `tag::String`: The tag to match.
+
 # Returns
 - A `RegexMatch` object containing the attribute and its value.
+
+# Example
+
+```julia
+get_attribute("<spectrum index=\"1\">", "index")
+```
 """
 function get_attribute(source::AbstractString, tag::String = "([^=]+)")
     # Construct the regex pattern string
@@ -65,10 +85,16 @@ struct. It reads accessions to determine the data format (e.g., `Float32`),
 compression status (`zlib`), and axis type (m/z vs. intensity).
 
 # Arguments
-- `stream`: An IO stream positioned at the start of the `cvParam` block.
+- `stream::IO`: An IO stream positioned at the start of the `cvParam` block.
 
 # Returns
 - A `SpecDim` struct populated with the parsed configuration.
+
+# Example
+
+```julia
+configure_spec_dim(open("test.mzML"))
+```
 """
 function configure_spec_dim(stream)
     axis = SpecDim(Float64, false, 1, 0, UNKNOWN)  # Add UNKNOWN as default mode

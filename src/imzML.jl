@@ -17,6 +17,21 @@ Core Functions:
 #
 # ============================================================================
 
+"""
+    parse_imzml_header(stream::IO)
+
+Parses the header of an imzML file.
+
+# Arguments
+
+- `stream::IO`: The stream to parse.
+
+# Returns
+
+- `instrument_meta::InstrumentMetadata`: The instrument metadata.
+- `param_groups::Dict{String, SpecDim}`: The parameter groups.
+- `img_dims::Vector{Int32}`: The image dimensions.
+"""
 function parse_imzml_header(stream::IO)
     # Initialize all return values and temporary variables
     instrument_meta = InstrumentMetadata()
@@ -149,6 +164,14 @@ end
     axes_config_img(stream)
 
 Determines the storage order of the m/z and intensity arrays.
+
+# Arguments
+
+- `stream::IO`: The stream to parse.
+
+# Returns
+
+- `param_groups::Dict{String, SpecDim}`: The parameter groups.
 """
 function axes_config_img(stream::IO)
     param_groups = Dict{String, SpecDim}()
@@ -176,6 +199,14 @@ end
     get_spectrum_tag_offset(stream)
 
 Calculates the character offset within a `<spectrum>` tag, ignoring attribute values.
+
+# Arguments
+
+- `stream::IO`: The stream to parse.
+
+# Returns
+
+- `offset::Int`: The character offset.
 """
 function get_spectrum_tag_offset(stream::IO)
     offset = position(stream)
@@ -197,6 +228,20 @@ end
     get_spectrum_attributes(stream, hIbd)
 
 Reads metadata to determine the byte offsets and data types for reading spectra.
+
+# Arguments
+
+- `stream::IO`: The stream to parse.
+- `hIbd::IO`: The IBD file handle.
+
+# Returns
+
+- `mz_first::Int`: The index of the first array
+- `array_lengths::Vector{Int}`: The lengths of the arrays.
+- `offset_mz::Int`: The byte offset of the mz array.
+- `offset_intensity::Int`: The byte offset of the intensity array.
+- `data_type_mz::DataType`: The data type of the mz array.
+- `data_type_intensity::DataType`: The data type of the intensity array.
 """
 function get_spectrum_attributes(stream::IO, hIbd::IO)
     # Look for position x
@@ -230,7 +275,19 @@ function get_spectrum_attributes(stream::IO, hIbd::IO)
 end
 
 
-# Helper function to read an entire spectrum block from the stream
+"""
+    read_spectrum_block(stream::IO)
+
+Helper function to read an entire spectrum block from the stream.
+
+# Arguments
+
+- `stream::IO`: The stream to parse.
+
+# Returns
+
+- `lines::Vector{String}`: The lines of the spectrum block.
+"""
 function read_spectrum_block(stream::IO)
     lines = String[]
     in_spectrum = false
@@ -265,7 +322,20 @@ function read_spectrum_block(stream::IO)
     end
 end
 
-# Helper function to parse coordinates from a spectrum block
+"""
+    parse_coordinates(spectrum_block::String)
+
+Helper function to parse coordinates from a spectrum block.
+
+# Arguments
+
+- `spectrum_block::String`: The spectrum block to parse.
+
+# Returns
+
+- `x::Int32`: The x-coordinate.
+- `y::Int32`: The y-coordinate.
+"""
 function parse_coordinates(spectrum_block::String)
     x = Int32(0)
     y = Int32(0)
@@ -279,7 +349,20 @@ function parse_coordinates(spectrum_block::String)
     return x, y
 end
 
-# Helper function to parse spectrum mode from a spectrum block
+"""
+    parse_spectrum_mode(spectrum_block::String, global_mode::SpectrumMode)
+
+Helper function to parse spectrum mode from a spectrum block.
+
+# Arguments
+
+- `spectrum_block::String`: The spectrum block to parse.
+- `global_mode::SpectrumMode`: The global mode.
+
+# Returns
+
+- `mode::SpectrumMode`: The spectrum mode.
+"""
 function parse_spectrum_mode(spectrum_block::String, global_mode::SpectrumMode)
     if occursin("MS:1000127", spectrum_block)
         return CENTROID
@@ -290,7 +373,26 @@ function parse_spectrum_mode(spectrum_block::String, global_mode::SpectrumMode)
     end
 end
 
-# Helper function to parse binary data arrays
+"""
+    parse_binary_data_arrays(spectrum_block::String, spectrum_start_line::String, 
+                                  default_mz_format::DataType, default_intensity_format::DataType, 
+                                  mz_is_compressed::Bool, int_is_compressed::Bool)
+
+Helper function to parse binary data arrays from a spectrum block.
+
+# Arguments
+
+- `spectrum_block::String`: The spectrum block to parse.
+- `spectrum_start_line::String`: The start line of the spectrum.
+- `default_mz_format::DataType`: The default data type for mz arrays.
+- `default_intensity_format::DataType`: The default data type for intensity arrays.
+- `mz_is_compressed::Bool`: Whether mz arrays are compressed.
+- `int_is_compressed::Bool`: Whether intensity arrays are compressed.
+
+# Returns
+
+- `array_data::Vector{Tuple{Bool, Int32, Int64, Int64}}`: The array data.
+"""
 function parse_binary_data_arrays(spectrum_block::String, spectrum_start_line::String, 
                                   default_mz_format::DataType, default_intensity_format::DataType, 
                                   mz_is_compressed::Bool, int_is_compressed::Bool)
@@ -342,8 +444,32 @@ function parse_binary_data_arrays(spectrum_block::String, spectrum_start_line::S
     return current_array_data
 end
 
+"""
+    parse_imzml_spectrum_block(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_groups::Dict{String, SpecDim},
+                                width::Int32, height::Int32, num_spectra::Int32,
+                                default_mz_format::DataType, default_intensity_format::DataType, 
+                                mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
 
-# Unified function to parse spectrum metadata
+    Unified function to parse spectrum metadata
+
+# Arguments
+
+- `stream::IO`: The stream to parse.
+- `hIbd::Union{IO, ThreadSafeFileHandle}`: The IBD file handle.
+- `param_groups::Dict{String, SpecDim}`: The parameter groups.
+- `width::Int32`: The width of the image.
+- `height::Int32`: The height of the image.
+- `num_spectra::Int32`: The number of spectra.
+- `default_mz_format::DataType`: The default data type for mz arrays.
+- `default_intensity_format::DataType`: The default data type for intensity arrays.
+- `mz_is_compressed::Bool`: Whether mz arrays are compressed.
+- `int_is_compressed::Bool`: Whether intensity arrays are compressed.
+- `global_mode::SpectrumMode`: The global mode.
+
+# Returns
+
+- `spectra_metadata::Vector{SpectrumMetadata}`: The spectrum metadata.
+"""
 function parse_imzml_spectrum_block(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_groups::Dict{String, SpecDim},
                                     width::Int32, height::Int32, num_spectra::Int32,
                                     default_mz_format::DataType, default_intensity_format::DataType, 
@@ -412,6 +538,23 @@ function parse_imzml_spectrum_block(stream::IO, hIbd::Union{IO, ThreadSafeFileHa
     return spectra_metadata
 end
 
+"""
+    load_imzml_lazy(file_path::String; cache_size::Int=100)
+
+The main entry point for loading an imzML file.
+It works by locating the .ibd file and parsing the .imzML file
+Lazily loads the data and then creating a MSIData object with the 
+parsed information acquired by the helper functions.
+
+# Arguments
+
+- `file_path::String`: The path to the imzML file.
+- `cache_size::Int`: The size of the cache.
+
+# Returns
+
+- `msi_data::MSIData`: The MSI data.
+"""
 function load_imzml_lazy(file_path::String; cache_size::Int=100)
     println("DEBUG: Checking for .imzML file at $file_path")
     if !isfile(file_path)
@@ -534,6 +677,32 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100)
     end
 end
 
+"""
+    parse_compressed(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_groups::Dict{String, SpecDim},
+                     width::Int32, height::Int32, num_spectra::Int32,
+                     default_mz_format::DataType, default_intensity_format::DataType, 
+                     mz_is_compressed::Bool, int_is_compressed::Bool, global_mode::SpectrumMode)
+
+Helper function to parse spectrum metadata from an imzML file.
+
+# Arguments
+
+- `stream::IO`: The stream to parse.
+- `hIbd::Union{IO, ThreadSafeFileHandle}`: The IBD file handle.
+- `param_groups::Dict{String, SpecDim}`: The parameter groups.
+- `width::Int32`: The width of the image.
+- `height::Int32`: The height of the image.
+- `num_spectra::Int32`: The number of spectra.
+- `default_mz_format::DataType`: The default data type for mz arrays.
+- `default_intensity_format::DataType`: The default data type for intensity arrays.
+- `mz_is_compressed::Bool`: Whether mz arrays are compressed.
+- `int_is_compressed::Bool`: Whether intensity arrays are compressed.
+- `global_mode::SpectrumMode`: The global mode.
+
+# Returns
+
+- `spectra_metadata::Vector{SpectrumMetadata}`: The spectrum metadata.
+"""
 function parse_compressed(stream::IO, hIbd::Union{IO, ThreadSafeFileHandle}, param_groups::Dict{String, SpecDim},
                          width::Int32, height::Int32, num_spectra::Int32,
                          default_mz_format::DataType, default_intensity_format::DataType, 
@@ -690,6 +859,13 @@ end
 Finds the intensity of the most intense peak within a mass tolerance window.
 This optimized version uses binary search for efficiency.
 
+# Arguments
+
+- `mz_array::AbstractVector{<:Real}`: The m/z array.
+- `intensity_array::AbstractVector{<:Real}`: The intensity array.
+- `target_mass::Real`: The target mass.
+- `tolerance::Real`: The tolerance.
+
 # Returns
 - The intensity (`Float64`) of the peak if found, otherwise `0.0`.
 """
@@ -726,6 +902,13 @@ end
 
 Extracts an image slice for a given m/z value without plotting.
 This is a performant function that iterates through spectra once.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+- `mass::Real`: The target mass.
+- `tolerance::Real`: The tolerance.
+- `mask_path::Union{String, Nothing}`: The path to the mask.
 
 # Returns
 - A `Matrix{Float64}` representing the intensity slice.
@@ -810,6 +993,13 @@ end
 
 Extracts multiple image slices for a given list of m/z values in a single pass.
 This is a highly performant function that iterates through the full dataset only once.
+
+# Arguments
+
+- `data::MSIData`: The MSIData object.
+- `masses::AbstractVector{<:Real}`: The target masses.
+- `tolerance::Real`: The tolerance.
+- `mask_path::Union{String, Nothing}`: The path to the mask.
 
 # Returns
 - A `Dict{Real, Matrix{Float64}}` mapping each mass to its intensity slice matrix.
@@ -916,6 +1106,19 @@ end
 Generates and saves a plot of a single image slice for a given m/z value.
 This function closely imitates the logic of the original `GetSlice` but uses
 the modern `MSIData` access patterns and robust peak finding.
+
+# Arguments
+
+- `msi_data::MSIData`: The MSIData object.
+- `mass::Real`: The target mass.
+- `tolerance::Real`: The tolerance.
+- `output_dir::String`: The output directory.
+- `stage_name::String`: The name of the stage.
+- `bins::Int`: The number of bins.
+- `mask_path::Union{String, Nothing}`: The path to the mask.
+
+# Returns
+- `fig::Figure`: A figure with the data plotted with colors applied.
 """
 function plot_slice(msi_data::MSIData, mass::Real, tolerance::Real, output_dir::String; 
                     stage_name="slice_mz_$(mass)", bins=256, mask_path::Union{String, Nothing}=nothing)
@@ -1115,6 +1318,16 @@ end
     norm_slices_hist(slices, bins; prob=0.98)
 
 Normalizes a set of image slices based on a shared histogram range.
+
+# Arguments
+
+- `slices`: The image slices.
+- `bins`: The number of bins.
+- `prob`: The target cumulative probability.
+
+# Returns
+- `norm_img`: The normalized image slices.
+- `mass_bounds`: The bounds for each mass.
 """
 function norm_slices_hist(slices, bins; prob=0.98)
     n_files, n_masses = size(slices)
@@ -1145,7 +1358,17 @@ end
 
 Linearly scales the intensity values in a slice to a specified number of levels.
 The output is an array of `UInt8` values.
-This is a modernized version of `IntQuantCl`.
+This is a modernized version of the original `IntQuantCl`. by Nacho
+
+# Arguments
+
+- `slice`: The image slice.
+- `levels`: The number of levels.
+- `mask_matrix`: The mask matrix.
+
+# Returns
+- `quantized`: The quantized image slice.
+- `bounds`: The bounds for each mass.
 """
 function quantize_intensity(slice::AbstractMatrix{<:Real}, levels::Integer=256; mask_matrix::Union{BitMatrix, Nothing}=nothing)
     local max_val
@@ -1198,6 +1421,16 @@ end
 
 Reduces the number of points in a spectrum for faster plotting, while preserving peaks.
 It divides the m/z range into `n_points` bins and keeps only the most intense point from each bin.
+
+# Arguments
+
+- `mz`: The m/z values.
+- `intensity`: The intensity values.
+- `n_points`: The number of points.
+
+# Returns
+- `mz`: The downsampled m/z values.
+- `intensity`: The downsampled intensity values.
 """
 function downsample_spectrum(mz::AbstractVector, intensity::AbstractVector, n_points::Integer=2000)
     if isempty(mz) || length(mz) <= n_points
@@ -1375,6 +1608,15 @@ end
 
 Saves an 8-bit indexed image as a BMP file.
 This is a modernized version of `SaveBitmapCl`.
+
+# Arguments
+
+- `name`: The name of the file.
+- `pixMap`: The pixel map.
+- `colorTable`: The color table.
+
+# Returns
+- `nothing`
 """
 function save_bitmap(name::String, pixMap::Matrix{UInt8}, colorTable::Vector{UInt32})
     # Get image dimensions
@@ -1443,6 +1685,14 @@ end
     generate_palette(colorscheme, n_colors=256)
 
 Generates a BMP-compatible UInt32 color palette from a ColorScheme.
+
+# Arguments
+
+- `colorscheme`: The colorscheme.
+- `n_colors`: The number of colors.
+
+# Returns
+- `palette`: The color palette.
 """
 function generate_palette(colorscheme, n_colors=256)
     palette = Vector{UInt32}(undef, n_colors)
@@ -1461,6 +1711,27 @@ end
 # Viridis color palette (256 colors) - defined as constant
 const ViridisPalette = generate_palette(ColorSchemes.viridis)
 
+"""
+    generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String, 
+                               bounds::Tuple{Float64, Float64}; 
+                               use_triq::Bool=false, triq_prob::Float64=0.98, 
+                               mask_path::Union{String, Nothing}=nothing)
+
+Generates a colorbar image for a given slice of data.
+
+# Arguments
+
+- `slice_data`: The slice data.
+- `color_levels`: The number of color levels.
+- `output_path`: The output path.
+- `bounds`: The bounds for the colorbar.
+- `use_triq`: Whether to use triq.
+- `triq_prob`: The probability of using triq.
+- `mask_path`: The path to the mask.
+
+# Returns
+- `fig::Figure`: A figure with the colorbar.
+"""
 function generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String, 
                                bounds::Tuple{Float64, Float64}; 
                                use_triq::Bool=false, triq_prob::Float64=0.98, 

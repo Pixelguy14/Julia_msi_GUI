@@ -19,6 +19,24 @@ const DATA_FORMAT_ACCESSIONS = Dict{String, DataType}(
     "MS:1000523" => Float64
 )
 
+"""
+    parse_instrument_metadata_mzml(stream::IO)
+
+Parses instrument metadata from an mzML file.
+
+# Arguments
+
+- `stream::IO`: The stream to parse the metadata from.
+
+# Returns
+- `InstrumentMetadata`: The instrument metadata.
+
+# Example
+
+```julia
+parse_instrument_metadata_mzml(open("test.mzML"))
+```
+"""
 function parse_instrument_metadata_mzml(stream::IO)
     println("DEBUG: Starting mzML instrument metadata parsing...")
     # Initialize with default values from the InstrumentMetadata constructor
@@ -328,6 +346,19 @@ end
 
 Finds the index offset in an mzML file by reading from the end.
 Optimized version with better buffer management.
+
+# Arguments
+
+- `stream::IO`: The stream to parse the metadata from.
+
+# Returns
+- `Int64`: The index offset.
+
+# Example
+
+```julia
+find_index_offset(open("test.mzML"))
+```
 """
 function find_index_offset(stream::IO)::Int64
     file_size = filesize(stream)

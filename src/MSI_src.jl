@@ -84,6 +84,15 @@ using Setfield # For immutable struct updates
 Opens a .mzML or .imzML file and prepares it for data access.
 
 This is the main entry point for the new data access API.
+
+# Arguments
+
+- `filepath::String`: Path to the .mzML or .imzML file to open.
+- `cache_size::Int`: Number of spectra to cache in memory.
+- `spectrum_type_map::Union{Dict{Int, Symbol}, Nothing}`: Optional mapping of spectrum indices to types.
+
+# Returns
+- An `MSIData` object.
 """
 function OpenMSIData(filepath::String; cache_size=300, spectrum_type_map::Union{Dict{Int, Symbol}, Nothing}=nothing)
     local msi_data

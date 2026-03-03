@@ -24,6 +24,15 @@ end
     StreamingBloomFilter
 
 A memory-efficient Bloom filter that doesn't store all values at once.
+
+# Fields
+- `bits::BitVector`: The underlying bit array
+- `size::Int`: Number of bits in the filter
+- `hash_count::Int`: Number of hash functions to use
+- `seed::UInt64`: Random seed for hash functions
+- `count::Int`: Number of elements added (for monitoring)
+- `current_chunk::Vector{Int}`: Current chunk of data being processed
+- `chunk_size::Int`: Size of each chunk
 """
 mutable struct StreamingBloomFilter
     bits::BitVector
@@ -51,6 +60,9 @@ Creates a Bloom filter optimized for the expected number of elements and desired
 
 - `seed::Union{UInt32,UInt64}`: Keyword description
     (**Default**: `0x12345678`)
+
+# Returns
+- A `BloomFilter{T}`.
 """
 function BloomFilter{T}(expected_elements::Int, false_positive_rate::Float64=0.01; seed::Union{UInt32,UInt64}=0x12345678) where T
     # Convert seed to UInt64 for consistency
@@ -73,6 +85,9 @@ Calculates the optimal number of bits for a Bloom filter
 
 - `n::Int`: Expected number of elements
 - `p::Float64`: Desired false positive rate
+
+# Returns
+- An `Int` to determine the optimal number of bits for a Bloom filter.
 """
 function optimal_bit_size(n::Int, p::Float64)::Int
     if p <= 0.0 || p >= 1.0
@@ -91,7 +106,10 @@ Calculates the optimal number of hash functions for a Bloom filter.
 # Arguments
 
 - `n::Int`: Expected number of elements
-- `p::Float64`: Desired false positive rate
+- `m::Int`: Number of bits in the filter
+
+# Returns
+- An `Int` to determine the optimal number of hash functions for a Bloom filter.
 """
 function optimal_hash_count(n::Int, m::Int)::Int
     if n <= 0 || m <= 0
@@ -106,6 +124,16 @@ end
     hash_functions(item::T, count::Int, size::Int, seed::UInt64) -> Vector{Int}
 
 Generates multiple hash values for an item using double hashing technique.
+
+# Arguments
+
+- `item::T`: Argument description
+- `count::Int`: Argument description
+- `size::Int`: Argument description
+- `seed::UInt64`: Argument description
+
+# Returns
+- A `Vector{Int}` of hash values.
 """
 function hash_functions(item::T, count::Int, size::Int, seed::UInt64) where T
     # Use Julia's built-in hash with different seeds
@@ -129,7 +157,7 @@ end
 
 Adds an element to the Bloom filter.
 
-# Arguments
+# Arguments:
 
 - `bf::BloomFilter{T}`: Argument description
 - `item::T`: Argument description
@@ -150,6 +178,11 @@ end
 
 Checks whether an element is possibly in the Bloom filter.
 Returns `true` if the element might be in the set, `false` if it's definitely not.
+
+# Arguments:
+
+- `item::T`: Argument description
+- `bf::BloomFilter{T}`: Argument description
 """
 function Base.in(item::T, bf::BloomFilter{T})::Bool where T
     hashes = hash_functions(item, bf.hash_count, bf.size, bf.seed)
@@ -166,6 +199,11 @@ end
     contains(bf::BloomFilter{T}, item::T) -> Bool
 
 Alias for `in()` for compatibility with your existing code.
+
+# Arguments:
+
+- `bf::BloomFilter{T}`: Argument description
+- `item::T`: Argument description
 """
 contains(bf::BloomFilter{T}, item::T) where T = item in bf
 
@@ -173,6 +211,11 @@ contains(bf::BloomFilter{T}, item::T) where T = item in bf
     add!(bf::BloomFilter{T}, item::T)
 
 Alias for `push!()` for compatibility with your existing code.
+
+# Arguments:
+
+- `bf::BloomFilter{T}`: Argument description
+- `item::T`: Argument description
 """
 add!(bf::BloomFilter{T}, item::T) where T = push!(bf, item)
 
@@ -180,6 +223,10 @@ add!(bf::BloomFilter{T}, item::T) where T = push!(bf, item)
     false_positive_rate(bf::BloomFilter) -> Float64
 
 Estimates the current false positive rate of the Bloom filter.
+
+# Arguments:
+
+- `bf::BloomFilter`: Argument description
 """
 function false_positive_rate(bf::BloomFilter)::Float64
     if bf.count == 0
