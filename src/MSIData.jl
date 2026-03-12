@@ -277,9 +277,9 @@ mutable struct MSIData
     # Buffer Pool for binary data operations
     buffer_pool::SimpleBufferPool
 
-    # Pre-computed analytics/metadata - use Threads.Atomic for compatibility
-    global_min_mz::Threads.Atomic{Float64}
-    global_max_mz::Threads.Atomic{Float64}
+    # Pre-computed analytics/metadata - use Base.Threads.Atomic for compatibility
+    global_min_mz::Base.Threads.Atomic{Float64}
+    global_max_mz::Base.Threads.Atomic{Float64}
     spectrum_stats_df::Union{DataFrame, Nothing}
     bloom_filters::Union{Vector{<:BloomFilter}, Nothing}
     analytics_ready::AtomicFlag
@@ -289,7 +289,7 @@ mutable struct MSIData
         obj = new(source, metadata, instrument_meta, dims, coordinate_map, 
                   Dict(), [], cache_size, ReentrantLock(),
                   SimpleBufferPool(),
-                  Threads.Atomic{Float64}(Inf), Threads.Atomic{Float64}(-Inf), 
+                  Base.Threads.Atomic{Float64}(Inf), Base.Threads.Atomic{Float64}(-Inf), 
                   nothing, nothing, AtomicFlag(), nothing)
         
         # Ensure file handles are closed when the object is garbage collected
@@ -319,8 +319,8 @@ Sets the global m/z range for the MSIData object.
 - `nothing`
 """
 function set_global_mz_range!(data::MSIData, min_mz::Float64, max_mz::Float64)
-    Threads.atomic_xchg!(data.global_min_mz, min_mz)
-    Threads.atomic_xchg!(data.global_max_mz, max_mz)
+    Base.Threads.atomic_xchg!(data.global_min_mz, min_mz)
+    Base.Threads.atomic_xchg!(data.global_max_mz, max_mz)
 end
 
 """
@@ -337,8 +337,8 @@ Gets the global m/z range for the MSIData object.
 """
 function get_global_mz_range(data::MSIData)
     # Atomic read using atomic_add! with zero
-    min_mz = Threads.atomic_add!(data.global_min_mz, 0.0)
-    max_mz = Threads.atomic_add!(data.global_max_mz, 0.0)
+    min_mz = Base.Threads.atomic_add!(data.global_min_mz, 0.0)
+    max_mz = Base.Threads.atomic_add!(data.global_max_mz, 0.0)
     return (min_mz, max_mz)
 end
 
@@ -896,8 +896,8 @@ function precompute_analytics(msi_data::MSIData)
         num_spectra = length(msi_data.spectra_metadata)
         
         # Initialize thread-local variables for global stats
-        thread_local_min_mz = [Inf for _ in 1:Threads.nthreads()]
-        thread_local_max_mz = [-Inf for _ in 1:Threads.nthreads()]
+        thread_local_min_mz = [Inf for _ in 1:Base.Threads.nthreads()]
+        thread_local_max_mz = [-Inf for _ in 1:Base.Threads.nthreads()]
 
         # Initialize vectors for per-spectrum stats
         tics = Vector{Float64}(undef, num_spectra)
@@ -937,7 +937,7 @@ function precompute_analytics(msi_data::MSIData)
 
                 # Update thread-local global m/z range
                 local_min, local_max = extrema(mz)
-                thread_id = Threads.threadid()
+                thread_id = Base.Threads.threadid()
                 thread_local_min_mz[thread_id] = min(thread_local_min_mz[thread_id], local_min)
                 thread_local_max_mz[thread_id] = max(thread_local_max_mz[thread_id], local_max)
                 min_mzs[idx] = local_min
@@ -963,16 +963,16 @@ function precompute_analytics(msi_data::MSIData)
 
         # Only update if we found valid ranges
         if isfinite(g_min_mz) && isfinite(g_max_mz) && g_min_mz < g_max_mz
-            Threads.atomic_xchg!(msi_data.global_min_mz, g_min_mz)
-            Threads.atomic_xchg!(msi_data.global_max_mz, g_max_mz)
+            Base.Threads.atomic_xchg!(msi_data.global_min_mz, g_min_mz)
+            Base.Threads.atomic_xchg!(msi_data.global_max_mz, g_max_mz)
         else
             # Fallback: calculate from first spectrum
             try
                 if num_spectra > 0
                     mz, _ = GetSpectrum(msi_data, 1)
                     if !isempty(mz)
-                        Threads.atomic_xchg!(msi_data.global_min_mz, minimum(mz))
-                        Threads.atomic_xchg!(msi_data.global_max_mz, maximum(mz))
+                        Base.Threads.atomic_xchg!(msi_data.global_min_mz, minimum(mz))
+                        Base.Threads.atomic_xchg!(msi_data.global_max_mz, maximum(mz))
                     end
                 end
             catch e
@@ -1040,10 +1040,10 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000, masked_
 
     local global_min_mz, global_max_mz
 
-    if Threads.atomic_add!(msi_data.global_min_mz, 0.0) !== Inf
+    if Base.Threads.atomic_add!(msi_data.global_min_mz, 0.0) !== Inf
         println("  Using pre-computed m/z range.")
-        global_min_mz = Threads.atomic_add!(msi_data.global_min_mz, 0.0)
-        global_max_mz = Threads.atomic_add!(msi_data.global_max_mz, 0.0)
+        global_min_mz = Base.Threads.atomic_add!(msi_data.global_min_mz, 0.0)
+        global_max_mz = Base.Threads.atomic_add!(msi_data.global_max_mz, 0.0)
     else
         # 1. First Pass: Find the global m/z range by reading the fast .ibd file
         pass1_start_time = time_ns()
@@ -1077,14 +1077,14 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000, masked_
     min_mz = global_min_mz
 
     # Initialize thread-local intensity sums
-    thread_local_intensity_sums = [zeros(Float64, num_bins) for _ in 1:Threads.nthreads()]
-    thread_local_spectra_processed = [0 for _ in 1:Threads.nthreads()]
+    thread_local_intensity_sums = [zeros(Float64, num_bins) for _ in 1:Base.Threads.nthreads()]
+    thread_local_spectra_processed = [0 for _ in 1:Base.Threads.nthreads()]
 
     # 3. Second Pass: Optimized binning
     pass2_start_time = time_ns()
     println("  Pass 2: Summing intensities into $num_bins bins...")
     _iterate_spectra_fast(msi_data, masked_indices === nothing ? nothing : collect(masked_indices)) do idx, mz, intensity
-        thread_id = Threads.threadid()
+        thread_id = Base.Threads.threadid()
         thread_local_spectra_processed[thread_id] += 1
         if isempty(mz)
             return
@@ -1109,7 +1109,7 @@ function get_total_spectrum_imzml(msi_data::MSIData; num_bins::Int=2000, masked_
     # Combine thread-local results
     intensity_sum = zeros(Float64, num_bins)
     num_spectra_processed = 0
-    for i in 1:Threads.nthreads()
+    for i in 1:Base.Threads.nthreads()
         intensity_sum .+= thread_local_intensity_sums[i]
         num_spectra_processed += thread_local_spectra_processed[i]
     end
@@ -1157,10 +1157,10 @@ function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000, masked_i
 
     local global_min_mz, global_max_mz
 
-    if Threads.atomic_add!(msi_data.global_min_mz, 0.0) !== Inf
+    if Base.Threads.atomic_add!(msi_data.global_min_mz, 0.0) !== Inf
         println("  Using pre-computed m/z range.")
-        global_min_mz = Threads.atomic_add!(msi_data.global_min_mz, 0.0)
-        global_max_mz = Threads.atomic_add!(msi_data.global_max_mz, 0.0)
+        global_min_mz = Base.Threads.atomic_add!(msi_data.global_min_mz, 0.0)
+        global_max_mz = Base.Threads.atomic_add!(msi_data.global_max_mz, 0.0)
     else
         # --- Pass 1: Find m/z range and cache it ---
         pass1_start_time = time_ns()
@@ -1200,11 +1200,11 @@ function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000, masked_i
     min_mz = global_min_mz
 
     # Initialize thread-local intensity sums
-    thread_local_intensity_sums = [zeros(Float64, num_bins) for _ in 1:Threads.nthreads()]
-    thread_local_spectra_processed = [0 for _ in 1:Threads.nthreads()]
+    thread_local_intensity_sums = [zeros(Float64, num_bins) for _ in 1:Base.Threads.nthreads()]
+    thread_local_spectra_processed = [0 for _ in 1:Base.Threads.nthreads()]
 
     _iterate_spectra_fast(msi_data, masked_indices === nothing ? nothing : collect(masked_indices)) do idx, mz, intensity
-        thread_id = Threads.threadid()
+        thread_id = Base.Threads.threadid()
         thread_local_spectra_processed[thread_id] += 1
         if isempty(mz)
             return
@@ -1224,7 +1224,7 @@ function get_total_spectrum_mzml(msi_data::MSIData; num_bins::Int=2000, masked_i
     # Combine thread-local results
     intensity_sum = zeros(Float64, num_bins)
     num_spectra_processed = 0
-    for i in 1:Threads.nthreads()
+    for i in 1:Base.Threads.nthreads()
         intensity_sum .+= thread_local_intensity_sums[i]
         num_spectra_processed += thread_local_spectra_processed[i]
     end
@@ -1722,7 +1722,7 @@ end
 
 A smart dispatcher for internal, high-performance iteration over spectra.
 It automatically chooses between serial and parallel execution based on the
-number of available threads (`Threads.nthreads()`).
+number of available threads (`Base.Threads.nthreads()`).
 
 # Arguments
 - `f`: A function to call for each spectrum, with the signature `f(index, mz, intensity)`.
@@ -1745,7 +1745,7 @@ function _iterate_spectra_fast(f::Function, data::MSIData, indices_to_iterate::U
     # Default to all indices if not specified
     all_indices = (indices_to_iterate === nothing) ? (1:length(data.spectra_metadata)) : indices_to_iterate
     
-    if Threads.nthreads() > 1 && length(all_indices) > 100 # Heuristic: only parallelize for enough work
+    if Base.Threads.nthreads() > 1 && length(all_indices) > 100 # Heuristic: only parallelize for enough work
         _iterate_spectra_fast_parallel(f, data, all_indices)
     else
         _iterate_spectra_fast_serial(f, data, all_indices)
@@ -1794,11 +1794,11 @@ Each thread gets its own file handle, eliminating contention.
 """
 function _iterate_spectra_fast_parallel(f::Function, data::MSIData, indices::AbstractVector)
     # Split indices into chunks for each thread
-    n_chunks = Threads.nthreads()
+    n_chunks = Base.Threads.nthreads()
     chunk_size = ceil(Int, length(indices) / n_chunks)
     chunks = collect(Iterators.partition(indices, chunk_size))
     
-    Threads.@threads for chunk in chunks
+    Base.Threads.@threads for chunk in chunks
         # Each thread gets its own file handle based on source type
         if data.source isa ImzMLSource
             local_handle = open(data.source.ibd_handle.path, "r")
