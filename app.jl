@@ -1434,7 +1434,11 @@ end
             # --- 2. Parameter Assembly with Validation ---
             current_pipeline_step = "Configuring parameters..."
             println("DEBUG: Configuring parameters and validating enabled steps...")
-            ref_peaks = Dict{Float64, String}(p["mz"] => p["label"] for p in reference_peaks_list)
+            ref_peaks = Dict{Float64, String}(
+                parse(Float64, string(p["mz"])) => string(get(p, "label", ""))
+                for p in reference_peaks_list 
+                if tryparse(Float64, string(p["mz"])) !== nothing
+            )
 
             final_params = Dict{Symbol, Dict{Symbol, Any}}()
             validation_errors = String[]
@@ -1944,7 +1948,11 @@ end
         try
             msg = "Recalculating suggestions..."
             
-            ref_peaks = Dict(p["mz"] => p["label"] for p in reference_peaks_list)
+            ref_peaks = Dict{Float64, String}(
+                parse(Float64, string(p["mz"])) => string(get(p, "label", ""))
+                for p in reference_peaks_list 
+                if tryparse(Float64, string(p["mz"])) !== nothing
+            )
             recommended_params = main_precalculation(msi_data, reference_peaks=ref_peaks)
             
 

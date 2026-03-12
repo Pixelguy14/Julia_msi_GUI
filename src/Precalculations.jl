@@ -81,12 +81,12 @@ function analyze_mass_accuracy(
     println("Analyzing mass accuracy for $(length(spectrum_indices)) spectra...")
 
     all_ppm_errors = Float64[]
-    total_matched_peaks = Atomic{Int}(0)
-    total_spectra_processed = Atomic{Int}(0)
+    total_matched_peaks = Base.Threads.Atomic{Int}(0)
+    total_spectra_processed = Base.Threads.Atomic{Int}(0)
     results_lock = ReentrantLock()
 
     _iterate_spectra_fast(msi_data, spectrum_indices) do idx, mz, intensity
-        atomic_add!(total_spectra_processed, 1)
+        Base.Threads.atomic_add!(total_spectra_processed, 1)
         if !validate_spectrum(mz, intensity)
             @warn "Spectrum $idx is invalid, skipping mass accuracy analysis for it."
             return
@@ -111,7 +111,7 @@ function analyze_mass_accuracy(
                 lock(results_lock) do
                     push!(all_ppm_errors, min_ppm_error)
                 end
-                atomic_add!(total_matched_peaks, 1)
+                Base.Threads.atomic_add!(total_matched_peaks, 1)
             end
         end
     end
@@ -671,8 +671,8 @@ function analyze_peak_characteristics(msi_data::MSIData, instrument_analysis::Di
         peak_counts = Int[]
         fwhm_values = Float64[]
         
-        spectra_analyzed = Atomic{Int}(0)
-        peaks_analyzed = Atomic{Int}(0)
+        spectra_analyzed = Base.Threads.Atomic{Int}(0)
+        peaks_analyzed = Base.Threads.Atomic{Int}(0)
         results_lock = ReentrantLock()
         
         _iterate_spectra_fast(msi_data, spectrum_indices) do idx, mz, intensity
@@ -680,7 +680,7 @@ function analyze_peak_characteristics(msi_data::MSIData, instrument_analysis::Di
                 return
             end
             
-            atomic_add!(spectra_analyzed, 1)
+            Base.Threads.atomic_add!(spectra_analyzed, 1)
             meta = msi_data.spectra_metadata[idx]
             
             # Detect peaks with lower SNR threshold to find more peaks
@@ -709,7 +709,7 @@ function analyze_peak_characteristics(msi_data::MSIData, instrument_analysis::Di
                                     r2 = _fit_gaussian_and_r2(mz, intensity, peak_idx, 5)
                                     push!(r_squared_values, r2)
                                 end
-                                atomic_add!(peaks_analyzed, 1)
+                                Base.Threads.atomic_add!(peaks_analyzed, 1)
                                 
                                 if peaks_analyzed[] <= 3
                                     println("DEBUG: Peak at m/z $(peak.mz), FWHM = $(fwhm_ppm) ppm, R² = $(r_squared_values[end])")
