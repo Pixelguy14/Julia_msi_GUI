@@ -904,6 +904,18 @@ function warmup_init()
 end
 
 """
+    clean_registry_path(registry_path::String)
+
+Sanitizes the file path to prevent OS/file system issues, particularly on Windows,
+by standardizing separators and removing stripping whitespace.
+"""
+function clean_registry_path(registry_path::String)
+    # Standardize to forward slashes internally for uniformity, then normpath formats for OS
+    clean_path = normpath(strip(replace(registry_path, "\\" => "/")))
+    return abspath(clean_path)
+end
+
+"""
     load_registry(registry_path)
 
 Loads the dataset registry from a JSON file, with retries for robustness on Windows.
@@ -914,9 +926,9 @@ Loads the dataset registry from a JSON file, with retries for robustness on Wind
 # Returns
 - A dictionary containing the registry data. Returns an empty dictionary if the file doesn't exist or fails to parse.
 """
-function load_registry(registry_path)
+function load_registry(registry_path::String)
     return lock(REGISTRY_LOCK) do
-        clean_path = abspath(registry_path)
+        clean_path = clean_registry_path(registry_path)
         if isfile(clean_path)
             for attempt in 1:5
                 try
@@ -937,93 +949,82 @@ function load_registry(registry_path)
 end
 
 """
-    extract_metadata(msi_data::MSIData, source_path::String)
+    extract_metadata(loaded_data::MSIData, full_route::String)
 
-Extracts key metadata from an `MSIData` object for display.
-
-# Arguments
-- `msi_data`: The `MSIData` object.
-- `source_path`: The path to the source data file.
-
-# Returns
-- A dictionary containing summary statistics and metadata.
+Extracts key metadata from an MSIData object and file path for UI display.
+Returns a dictionary with a "summary" key containing parameter-value pairs.
 """
-function extract_metadata(msi_data::MSIData, source_path::String)
-    df = msi_data.spectrum_stats_df
-    if df === nothing
-        # This can happen if precompute_analytics hasn't been run
-        # We can still return basic info
-        return Dict(
-            "summary" => [
-                Dict("parameter" => "File Name", "value" => basename(source_path)),
-                Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
-                Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
-            ],
-            "global_min_mz" => nothing,
-            "global_max_mz" => nothing
-        )
+function extract_metadata(loaded_data::MSIData, full_route::String)
+    stats = []
+    
+    # Basic File Info
+    push!(stats, Dict("parameter" => "Filename", "value" => basename(full_route)))
+    push!(stats, Dict("parameter" => "Source Path", "value" => full_route))
+    
+    # Image Dimensions
+    w, h = loaded_data.image_dims
+    if w > 0 && h > 0
+        push!(stats, Dict("parameter" => "Image Dimensions", "value" => "$w x $h"))
+    else
+        push!(stats, Dict("parameter" => "Image Dimensions", "value" => "N/A (Non-imaging)"))
     end
-
-    summary_stats = [
-        Dict("parameter" => "File Name", "value" => basename(source_path)),
-        Dict("parameter" => "Number of Spectra", "value" => length(msi_data.spectra_metadata)),
-        Dict("parameter" => "Image Dimensions", "value" => "$(msi_data.image_dims[1]) x $(msi_data.image_dims[2])"),
-        Dict("parameter" => "Global Min m/z", "value" => @sprintf("%.4f", Threads.atomic_add!(msi_data.global_min_mz, 0.0))),
-        Dict("parameter" => "Global Max m/z", "value" => @sprintf("%.4f", Threads.atomic_add!(msi_data.global_max_mz, 0.0))),
-        Dict("parameter" => "Mean TIC", "value" => @sprintf("%.2e", mean(df.TIC))),
-        Dict("parameter" => "Mean BPI", "value" => @sprintf("%.2e", mean(df.BPI))),
-        Dict("parameter" => "Mean # Points", "value" => @sprintf("%.1f", mean(df.NumPoints))),
-    ]
-
-    if hasproperty(df, :Mode)
-        centroid_count = count(==(MSI_src.CENTROID), df.Mode)
-        profile_count = count(==(MSI_src.PROFILE), df.Mode)
-        unknown_count = count(==(MSI_src.UNKNOWN), df.Mode)
-
-        push!(summary_stats, Dict("parameter" => "Centroid Spectra", "value" => string(centroid_count)))
-        push!(summary_stats, Dict("parameter" => "Profile Spectra", "value" => string(profile_count)))
-        if unknown_count > 0
-            push!(summary_stats, Dict("parameter" => "Unknown Mode Spectra", "value" => string(unknown_count)))
+    
+    # Spectrum Counts
+    num_spectra = length(loaded_data.spectra_metadata)
+    push!(stats, Dict("parameter" => "Total Spectra", "value" => string(num_spectra)))
+    
+    # m/z Range
+    min_mz, max_mz = get_global_mz_range(loaded_data)
+    if isfinite(min_mz) && isfinite(max_mz)
+        push!(stats, Dict("parameter" => "Global m/z Range", "value" => "$(round(min_mz, digits=4)) - $(round(max_mz, digits=4))"))
+    else
+        push!(stats, Dict("parameter" => "Global m/z Range", "value" => "Unknown"))
+    end
+    
+    # Instrument Metadata
+    if loaded_data.instrument_metadata !== nothing
+        inst = loaded_data.instrument_metadata
+        push!(stats, Dict("parameter" => "Instrument Model", "value" => inst.instrument_model))
+        push!(stats, Dict("parameter" => "Polarity", "value" => titlecase(string(inst.polarity))))
+        push!(stats, Dict("parameter" => "Acquisition Mode", "value" => titlecase(string(inst.acquisition_mode))))
+        
+        if inst.resolution !== nothing
+            push!(stats, Dict("parameter" => "Instrument Resolution", "value" => string(inst.resolution)))
         end
     end
-
-    return Dict(
-        "summary" => summary_stats,
-        "global_min_mz" => msi_data.global_min_mz,
-        "global_max_mz" => msi_data.global_max_mz
-    )
+    
+    return Dict("summary" => stats)
 end
 
 """
-    save_registry(registry_path, registry_data)
+    save_registry(registry_path::String, registry_data::Dict)
 
-Saves the dataset registry to a JSON file, ensuring thread-safe access and robustness on Windows.
-
-# Arguments
-- `registry_path`: Path to the `registry.json` file.
-- `registry_data`: The dictionary containing the registry data to save.
+Saves the dataset registry to a JSON file atomically to prevent data loss 
+and sharing violations on Windows. Writes to a `.tmp` file first.
 """
-function save_registry(registry_path, registry_data)
+function save_registry(registry_path::String, registry_data)
     lock(REGISTRY_LOCK) do
-        # Ensure the path is clean and valid for the OS
-        clean_path = abspath(registry_path)
+        clean_path = clean_registry_path(registry_path)
         dir = dirname(clean_path)
         if !isdir(dir)
             mkpath(dir)
         end
 
-        # On Windows, opening files for writing can occasionally fail if another process 
-        # (like an anti-virus or file indexer) holds a transient lock.
-        # Retry with a small delay to improve robustness.
-        for attempt in 1:5
+        temp_path = clean_path * ".tmp"
+
+        for attempt in 1:6
             try
-                open(clean_path, "w") do f
+                open(temp_path, "w") do f
                     JSON.print(f, registry_data, 4)
                 end
-                return true # Success
+                
+                # Replace final file with temp atomically. Force=true maps to ReplaceFile/MoveFileEx
+                mv(temp_path, clean_path, force=true)
+                return true
             catch e
-                if attempt == 5
+                if attempt == 6
                     @error "Final attempt failed to write to registry.json: $(sprint(showerror, e))"
+                    isfile(temp_path) && rm(temp_path, force=true)
                     return false
                 else
                     @warn "Attempt $attempt to write to registry.json failed (Error: $(sprint(showerror, e))), retrying in 0.2s..."
@@ -1047,29 +1048,21 @@ Adds or updates an entry in the dataset registry JSON file.
 - `metadata`: Optional dictionary of metadata to store.
 - `is_imzML`: Boolean indicating if the source is an imzML file.
 """
-function update_registry(registry_path, dataset_name, source_path, metadata=nothing, is_imzML=false)
+function update_registry(registry_path::String, dataset_name::String, source_path::String, metadata=nothing, is_imzML=false)
     lock(REGISTRY_LOCK) do
         registry = load_registry(registry_path)
 
-        # Get existing entry if it exists, otherwise create new one
         existing_entry = get(registry, dataset_name, Dict{String,Any}())
-        
-        # Start with existing data and update only the basic fields
         entry = copy(existing_entry)
         entry["source_path"] = source_path
         entry["processed_date"] = string(now())
         entry["is_imzML"] = is_imzML
         
-        # Only update metadata if provided
         if metadata !== nothing
             entry["metadata"] = metadata
         end
         
-        # Note: has_mask and mask_path are preserved from existing_entry if they exist
-        
         registry[dataset_name] = entry
-
-        # Use the robust save function
         save_registry(registry_path, registry)
     end
 end
@@ -1194,24 +1187,14 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
     end
 end
 
-function update_registry_mask_fields(registry_path, dataset_name, has_mask, mask_path)
+function update_registry_mask_fields(registry_path::String, dataset_name::String, has_mask::Bool, mask_path::String)
     lock(REGISTRY_LOCK) do
-        registry = if isfile(registry_path)
-            try
-                JSON.parsefile(registry_path, dicttype=Dict{String,Any})
-            catch e
-                @error "Failed to parse registry.json while updating mask fields: $e"
-                Dict{String,Any}()
-            end
-        else
-            Dict{String,Any}()
-        end
+        registry = load_registry(registry_path)
         
         if haskey(registry, dataset_name)
             registry[dataset_name]["has_mask"] = has_mask
             registry[dataset_name]["mask_path"] = mask_path
         else
-            # Create new entry if it doesn't exist
             registry[dataset_name] = Dict{String,Any}(
                 "has_mask" => has_mask,
                 "mask_path" => mask_path,
@@ -1221,7 +1204,6 @@ function update_registry_mask_fields(registry_path, dataset_name, has_mask, mask
             )
         end
 
-        # Use the robust save function
         save_registry(registry_path, registry)
     end
 end

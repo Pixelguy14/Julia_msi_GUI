@@ -12,7 +12,9 @@ using MSI_src
 using .MSI_src: MSIData, process_image_pipeline, REGISTRY_LOCK
 
 # Plot Handling
-include("./julia_imzML_visual.jl")
+if !@isdefined(increment_image)
+    include("./julia_imzML_visual.jl")
+end
 
 # Image Processing Pipeline
 using ImageBinarization
