@@ -1131,23 +1131,24 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
         # --- Extract metadata ---
         metadata = extract_metadata(local_msi_data, file_path)
 
-        # --- Save Slices ---
+        # --- Save Slices (Parallelized) ---
         mkpath(output_dir)
-
-        for (mass_idx, mass) in enumerate(masses)
-            progress_message_ref = "File $(params.fileIdx)/$(params.nFiles): Saving slice for m/z=$mass"
-
+        
+        progress_lock = ReentrantLock()
+        
+        # Parallelize over the requested masses to fully utilize multi-core CPUs
+        Threads.@threads for mass in masses
             slice = slice_dict[mass]
             text_nmass = replace(string(mass), "." => "_")
             bitmap_filename = params.triqE ? "TrIQ_$(text_nmass).bmp" : "MSI_$(text_nmass).bmp"
             colorbar_filename = params.triqE ? "colorbar_TrIQ_$(text_nmass).png" : "colorbar_MSI_$(text_nmass).png"
 
+            local sliceQuant, bounds
             if all(iszero, slice)
                 sliceQuant = zeros(UInt8, size(slice))
                 bounds = (0.0, 1.0)  # Default bounds for empty slice
-                @warn "No intensity data for m/z = $mass in $(dataset_name)"
             else
-                # Get both quantized data AND bounds in one call
+                # TrIQ and quantization are computationally intensive and now run in parallel
                 if params.triqE
                     sliceQuant, bounds = TrIQ(slice, params.colorL, params.triqP, mask_matrix=mask_matrix_for_triq)
                 else
@@ -1156,17 +1157,23 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
                 
                 if params.medianF
                     sliceQuant = round.(UInt8, median_filter(sliceQuant))
-                    # Note: bounds remain the same after median filter
                 end
             end
 
+            # Disk I/O (Saving BMP)
             save_bitmap(joinpath(output_dir, bitmap_filename), sliceQuant, ViridisPalette)
+            
             if !all(iszero, slice)
-                # Now pass the precomputed bounds to colorbar generation
+                # CairoMakie colorbar generation is now also parallelized
                 generate_colorbar_image(slice, params.colorL, joinpath(output_dir, colorbar_filename), 
                                       bounds; use_triq=params.triqE, triq_prob=params.triqP, mask_path=mask_path)
             end
+            
+            lock(progress_lock) do
+                progress_message_ref = "File $(params.fileIdx)/$(params.nFiles): Saved slice for m/z=$mass"
+            end
         end
+
 
         is_imzML = local_msi_data.source isa ImzMLSource
         update_registry(params.registry, dataset_name, file_path, metadata, is_imzML)

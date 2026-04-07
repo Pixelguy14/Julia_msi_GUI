@@ -2422,7 +2422,21 @@ end
                 else
                     push!(newly_created_folders, replace(basename(file_path), r"\.imzML$"i => ""))
                 end
+                
+                # --- Periodic Memory Reclamation ---
+                # Force GC and return memory to the OS after processing each large file
+                GC.gc(true)
+                if Sys.islinux()
+                    ccall(:malloc_trim, Cint, (Cint,), 0)
+                end
+                
                 current_step += 1
+            end
+            
+            # Final memory cleanup for the batch
+            GC.gc(true)
+            if Sys.islinux()
+                ccall(:malloc_trim, Cint, (Cint,), 0)
             end
 
             # --- 3. Final Report ---

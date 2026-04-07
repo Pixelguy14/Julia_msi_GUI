@@ -22,7 +22,7 @@ https://codeberg.org/LabABI/JuliaMSI
    Example of a correct route:<br>
    ~/Downloads/JuliaMSI-main/juliamsi
 2. Without entering the Julia environment, launch the project in your terminal with the following command (which works for all operating systems):
-   ```
+   ```bash
    julia --threads auto --project=. start_MSI_GUI.jl
    ```
 3. After the script has finished loading, you can open a [page](http://127.0.0.1:1481/) in your browser with the web app running.
@@ -33,6 +33,38 @@ It is normal to see errors before initialization; you can refresh the page once 
 Minimum system requirements: 4 core processor, 8 GB RAM<br>
 
 JuliaMSI is a Graphical User Interface for a library of MSI tools in Julia: https://github.com/CINVESTAV-LABI/julia_mzML_imzML
+
+## Build the System Image (One-time)
+Alternatively, you can generate the .so file by running the next build script in your directory:
+
+```bash
+julia --project=. build_sysimage.jl
+```
+This may take 5–10 minutes as it merges all dependencies and JuliaMSI functions into a single binary. The resulting .so/.dll file will be around **300MB–600MB** because it contains the pre-compiled machine code for your entire environment.
+A sysimage built on Linux (.so) will not work on Windows.
+You must run the build_sysimage.jl script once on each target operating system.
+
+Once MSI_sysimage.so is created in your directory, adapt your command like this:
+```bash
+julia --project=. -e 'using Pkg; Pkg.precompile()'
+# This will find MSI_sysimage.so, .dll, or .dylib automatically:
+julia --threads auto --project=. --sysimage MSI_sysimage* start_MSI_GUI.jl
+```
+The command above loads a pre-compiled version of your environment (note, you have to use either the sysimage command or the normal start command), speeding up the booting delay. Your GUI or scripts using JuliaMSI should start almost instantly and process files significantly faster than before.
+Always run the build script **in the same project root** where you intend to run the app.
+
+In scripts like test/run_tests.jl, you no longer need to manually include("../src/MSI_src.jl"). You can simply treat it like a globally installed package to load the precompiled binary:
+
+```julia
+using MSI_src
+# ... rest of your script
+```
+### Run with the --sysimage flag
+Launch your tests using the same flag to bypass all compilation overhead:
+
+```bash
+julia --threads auto --project=. --sysimage MSI_sysimage.so test/run_tests.jl
+```
 
 ## License
 
