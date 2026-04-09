@@ -31,76 +31,7 @@ function posix_madvise(buffer::AbstractArray, advice::Integer)
 end
 
 # --- Buffer Pooling ---
-"""
-    BufferPool
 
-A thread-safe pool of `Vector{UInt8}` buffers, categorized by their size.
-This helps reduce memory allocations and garbage collection overhead by reusing buffers.
-
-# Arguments:
-- `lock`: A `ReentrantLock` to ensure thread-safe access to the pool.
-- `buffers`: A dictionary mapping buffer size (in bytes) to a list of available buffers of that size.
-"""
-mutable struct BufferPool
-    lock::ReentrantLock
-    buffers::Dict{Int, Vector{Vector{UInt8}}}
-
-    function BufferPool()
-        new(ReentrantLock(), Dict{Int, Vector{Vector{UInt8}}}())
-    end
-end
-
-"""
-    get_buffer!(pool::BufferPool, size::Int) -> Vector{UInt8}
-
-Retrieves a `Vector{UInt8}` buffer of at least `size` bytes from the pool.
-If no suitable buffer is available, a new one is allocated.
-
-# Arguments:
-- `pool`: The `BufferPool` to retrieve the buffer from.
-- `size`: The minimum desired size of the buffer in bytes.
-
-# Returns:
-- A `Vector{UInt8}` buffer.
-"""
-function get_buffer!(pool::BufferPool, size::Int)::Vector{UInt8}
-    lock(pool.lock) do
-        # Find an existing buffer that is large enough
-        for (buffer_size, buffer_list) in pool.buffers
-            if buffer_size >= size && !isempty(buffer_list)
-                buffer = pop!(buffer_list)
-                # Resize if necessary (and if it's significantly larger than needed)
-                if length(buffer) > size * 2 # Heuristic: if buffer is more than twice the requested size
-                    return Vector{UInt8}(undef, size) # Allocate new smaller buffer
-                else
-                    return buffer
-                end
-            end
-        end
-        # No suitable buffer found, allocate a new one
-        return Vector{UInt8}(undef, size)
-    end
-end
-
-"""
-    release_buffer!(pool::BufferPool, buffer::Vector{UInt8})
-
-Returns a `Vector{UInt8}` buffer to the pool for future reuse.
-
-# Arguments:
-- `pool`: The `BufferPool` to return the buffer to.
-- `buffer`: The `Vector{UInt8}` buffer to release.
-"""
-function release_buffer!(pool::BufferPool, buffer::Vector{UInt8})
-    lock(pool.lock) do
-        buffer_size = length(buffer)
-        if !haskey(pool.buffers, buffer_size)
-            pool.buffers[buffer_size] = Vector{Vector{UInt8}}()
-        end
-        push!(pool.buffers[buffer_size], buffer)
-    end
-    return nothing
-end
 
 
 """
@@ -140,11 +71,16 @@ If no suitable buffer is available, a new one is allocated.
 - A `Vector{UInt8}` buffer.
 """
 function get_buffer!(pool::SimpleBufferPool, size::Int)::Vector{UInt8}
-    lock(pool.lock) do
+    buf = lock(pool.lock) do
         # Check for existing buffers of exact size first
         if haskey(pool.buffers, size) && !isempty(pool.buffers[size])
             return pop!(pool.buffers[size])
         end
+        return nothing
+    end
+    
+    if buf !== nothing
+        return buf
     end
     
     # No suitable buffer found, allocate new one (outside lock to reduce contention)

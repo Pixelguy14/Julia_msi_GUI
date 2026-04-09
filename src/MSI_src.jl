@@ -21,7 +21,17 @@ export OpenMSIData,
        _iterate_spectra_fast,
        validate_spectrum,
        get_mz_slice,
-       REGISTRY_LOCK
+       REGISTRY_LOCK,
+       SpectrumMetadata,
+       SpectrumAsset,
+       SpectrumMode,
+       CENTROID,
+       PROFILE,
+       MzMLSource,
+       ImzMLSource,
+       SimpleBufferPool,
+       get_buffer!,
+       release_buffer!
 
 # Define shared registry lock
 const REGISTRY_LOCK = ReentrantLock()
@@ -82,7 +92,6 @@ include("mzML.jl")
 include("imzML.jl")
 include("MzmlConverter.jl")
 include("Preprocessing.jl")
-include("FusedPipeline.jl")
 include("ImageProcessing.jl")
 include("Precalculations.jl")
 include("PreprocessingPipeline.jl")
@@ -111,13 +120,17 @@ This is the main entry point for the new data access API.
 - An `MSIData` object.
 """
 function OpenMSIData(filepath::String; cache_size=300, spectrum_type_map::Union{Dict{Int, Symbol}, Nothing}=nothing)
+    # Apply standard path normalization for cross-platform compatibility
+    # Ensure Windows backslashes are converted to OS-native separators
+    norm_filepath = normpath(replace(filepath, "\\" => "/"))
+    
     local msi_data
-    if endswith(lowercase(filepath), ".mzml")
-        msi_data = load_mzml_lazy(filepath, cache_size=cache_size)
-    elseif endswith(lowercase(filepath), ".imzml")
-        msi_data = load_imzml_lazy(filepath, cache_size=cache_size)
+    if endswith(lowercase(norm_filepath), ".mzml")
+        msi_data = load_mzml_lazy(norm_filepath, cache_size=cache_size)
+    elseif endswith(lowercase(norm_filepath), ".imzml")
+        msi_data = load_imzml_lazy(norm_filepath, cache_size=cache_size)
     else
-        error("Unsupported file type: $filepath. Please provide a .mzML or .imzML file.")
+        error("Unsupported file type: $norm_filepath. Please provide a .mzML or .imzML file.")
     end
 
     # Apply spectrum type map if provided

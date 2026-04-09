@@ -20,30 +20,7 @@ mutable struct BloomFilter{T}
     count::Int
 end
 
-"""
-    StreamingBloomFilter
 
-A memory-efficient Bloom filter that doesn't store all values at once.
-
-# Fields
-- `bits::BitVector`: The underlying bit array
-- `size::Int`: Number of bits in the filter
-- `hash_count::Int`: Number of hash functions to use
-- `seed::UInt64`: Random seed for hash functions
-- `count::Int`: Number of elements added (for monitoring)
-- `current_chunk::Vector{Int}`: Current chunk of data being processed
-- `chunk_size::Int`: Size of each chunk
-"""
-mutable struct StreamingBloomFilter
-    bits::BitVector
-    size::Int
-    hash_count::Int
-    seed::UInt64
-    count::Int
-    # Streaming state
-    current_chunk::Vector{Int}
-    chunk_size::Int
-end
 
 """
     BloomFilter{T}(expected_elements::Int, false_positive_rate::Float64=0.01; kwargs...) -> Return type

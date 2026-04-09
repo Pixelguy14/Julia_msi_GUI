@@ -546,13 +546,19 @@
           </q-list>
 
           <!-- Pipeline Controls -->
-          <div class="row justify-end items-center q-mt-md">
-            <q-btn class="q-ma-sm" icon="get_app" v-on:click="export_params_btn=true" label="Export Params" outline
-              :disable="is_processing" />
-            <q-btn class="q-ma-sm" icon="upload_file" v-on:click="import_params_btn=true" label="Import Params" outline
-              :disable="is_processing" />
-            <q-btn :loading="is_processing" class="q-ma-sm btn-style" icon="play_arrow"
-              v-on:click="run_full_pipeline=true" padding="lg" label="Run Pipeline" :disable="is_processing" />
+          <div class="row q-mt-md justify-between items-center text-caption text-grey">
+            <div>
+               <q-icon name="info" class="q-mr-xs" /> Feature matrices are exported in highly optimized MatrixMarket Coordinate format (<b>.mtx</b>).
+               <br/><i>Python:</i> <code>scipy.io.mmread('filtered_data.mtx')</code> | <i>R:</i> <code>Matrix::readMM('filtered_data.mtx')</code>
+            </div>
+            <div>
+              <q-btn class="q-ma-sm" icon="get_app" v-on:click="export_params_btn=true" label="Export Params" outline
+                :disable="is_processing" />
+              <q-btn class="q-ma-sm" icon="upload_file" v-on:click="import_params_btn=true" label="Import Params" outline
+                :disable="is_processing" />
+              <q-btn :loading="is_processing" class="q-ma-sm btn-style" icon="play_arrow"
+                v-on:click="run_full_pipeline=true" padding="lg" label="Run Pipeline" :disable="is_processing" />
+            </div>
           </div>
         </q-tab-panel>
         <q-tab-panel name="generator">

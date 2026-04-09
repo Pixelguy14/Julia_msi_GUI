@@ -133,6 +133,22 @@ try
                 imzml_data = MSI_src.load_imzml_lazy(imzml_path; use_mmap=true)
                 MSI_src.get_multiple_mz_slices(imzml_data, [10.0, 20.0], 0.1)
                 
+                # Exercise Sprint 2 Streaming Pipeline
+                config = MSI_src.PipelineConfig(
+                    steps=[
+                        MSI_src.StreamingStep(:baseline_correction, Dict(:method => :snip, :iterations => 5)),
+                        MSI_src.StreamingStep(:normalization, Dict(:method => :tic)),
+                        MSI_src.StreamingStep(:peak_picking, Dict(:method => :profile, :snr_threshold => 3.0))
+                    ],
+                    adaptive_binning=true,
+                    bin_tolerance_ppm=50.0
+                )
+                try
+                    MSI_src.process_dataset!(imzml_data, config)
+                catch
+                    # Ignore matrix mismatch errors from tiny random data 
+                end
+                
                 # Exercise mzML pathway
                 mzml_data = MSI_src.load_mzml_lazy(mzml_path)
                 MSI_src.GetSpectrum(mzml_data, 1)

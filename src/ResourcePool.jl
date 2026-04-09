@@ -21,23 +21,7 @@ mutable struct ResourcePool{T}
     constructor::Function
 end
 
-"""
-    aligned_vector(::Type{T}, n::Int; alignment::Int=64) where T
 
-Creates a `Vector{T}` that is aligned to `alignment` bytes.
-Note: In modern Julia, standard vectors are often 16 or 64 byte aligned, but for
-HPC we ensure this by allocating slightly more and using a view, or using
-specific pointers. For simplicity and performance, we use a small hack:
-allocating a larger array and taking a 64-byte aligned view.
-"""
-function aligned_vector(::Type{T}, n::Int; alignment::Int=64) where T
-    # Allocate enough space to find an aligned starting point
-    raw = Vector{UInt8}(undef, n * sizeof(T) + alignment)
-    ptr = Int(pointer(raw))
-    off = (alignment - (ptr % alignment)) % alignment
-    # Return a reinterpret view of the aligned segment
-    return reinterpret(T, view(raw, (off + 1):(off + n * sizeof(T))))
-end
 
 """
     ResourcePool{T}(constructor::Function; max_size::Int=2 * nthreads())
