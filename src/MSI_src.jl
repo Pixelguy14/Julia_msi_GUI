@@ -20,6 +20,7 @@ export OpenMSIData,
        MSIData,
        _iterate_spectra_fast,
        validate_spectrum,
+       get_mz_slice,
        REGISTRY_LOCK
 
 # Define shared registry lock
@@ -60,18 +61,33 @@ export apply_baseline_correction,
        apply_intensity_transformation,
        save_feature_matrix
 
+# Sprint 2: Streaming Pipeline API
+export process_dataset!,
+       PipelineConfig,
+       StreamingStep,
+       normalize_inplace!,
+       transform_inplace!,
+       smooth_inplace!,
+       baseline_subtract_inplace!,
+       detect_peaks_streaming,
+       calibrate_inplace!
+
 # Include all source files directly into the main module
 include("BloomFilters.jl")
 include("Common.jl")
+include("ResourcePool.jl")
 include("MSIData.jl")
 include("ParserHelpers.jl")
 include("mzML.jl")
 include("imzML.jl")
 include("MzmlConverter.jl")
 include("Preprocessing.jl")
+include("FusedPipeline.jl")
 include("ImageProcessing.jl")
 include("Precalculations.jl")
 include("PreprocessingPipeline.jl")
+include("StreamingKernels.jl")
+include("StreamingPipeline.jl")
 
 using Setfield # For immutable struct updates
 

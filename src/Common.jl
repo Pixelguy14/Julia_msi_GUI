@@ -1,5 +1,34 @@
-# src/Common.jl - Updated with BloomFilter
 using Base.Threads
+using Mmap
+
+# POSIX madvise constants
+const MADV_NORMAL = 0
+const MADV_RANDOM = 1
+const MADV_SEQUENTIAL = 2
+const MADV_WILLNEED = 3
+const MADV_DONTNEED = 4
+
+"""
+    posix_madvise(buffer::AbstractArray, advice::Integer)
+
+A safe wrapper for the OS `madvise` system call. Signals the kernel about the 
+access pattern for a memory-mapped region. Currently supports Linux/Unix systems.
+"""
+function posix_madvise(buffer::AbstractArray, advice::Integer)
+    @static if Sys.isunix()
+        try
+            ptr = pointer(buffer)
+            len = sizeof(buffer)
+            # ccall(:madvise, return_type, (arg_types...), args...)
+            ret = ccall(:madvise, Int32, (Ptr{Cvoid}, Csize_t, Int32), ptr, len, Int32(advice))
+            return ret == 0
+        catch
+            return false
+        end
+    else
+        return false # Not supported on this OS
+    end
+end
 
 # --- Buffer Pooling ---
 """

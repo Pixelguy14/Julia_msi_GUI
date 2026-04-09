@@ -19,11 +19,11 @@ using MSI_src
 
 # const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Thricoderma_etc/Imaging_interaccion_trichoderma_vs_streptomyces.imzML"
 # const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/set de datos MS/Atropina_tuneo_fraq_20ev.mzML"
-const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML"
-# const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML"
+# const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML"
+const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML"
 
-const MASK_ROUTE = "/home/pixel/Documents/Cinvestav_2025/JuliaMSI/public/css/masks/Stomach_DHB_uncompressed.png"
-# const MASK_ROUTE = "" 
+# const MASK_ROUTE = "/home/pixel/Documents/Cinvestav_2025/JuliaMSI/public/css/masks/Stomach_DHB_uncompressed.png"
+const MASK_ROUTE = "" 
 
 const OUTPUT_DIR = "./test/results/preprocessing_results"
 

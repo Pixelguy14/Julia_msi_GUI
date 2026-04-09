@@ -231,7 +231,7 @@ function get_spectrum_asset_metadata(stream::IO)
     #println("DEBUG: Exiting get_spectrum_asset_metadata.")
 
     # Create SpectrumAsset directly from the variables
-    return SpectrumAsset(data_format, compression_flag, binary_offset, encoded_length, axis)
+    return SpectrumAsset(data_format, compression_flag, binary_offset, encoded_length, axis, 0.0, 0.0)
 end
 
 # This function is updated to return the generic SpectrumMetadata struct
@@ -394,38 +394,52 @@ then parses the metadata for each spectrum without loading the binary data.
 """
 function load_mzml_lazy(file_path::String; cache_size::Int=100)
     println("DEBUG: Opening file stream for $file_path")
-    ts_stream = ThreadSafeFileHandle(file_path, "r")
+    
+    # --- Handle Pool Optimization ---
+    # Open multiple handles to the .mzML file to avoid lock contention
+    num_handles = Threads.nthreads()
+    mzml_handles = [open(file_path, "r") for _ in 1:num_handles]
+    
+    # Use the first handle for initial parsing
+    primary_handle = mzml_handles[1]
 
     try
         # --- NEW: Parse instrument metadata from header ---
         println("DEBUG: Parsing instrument metadata from header...")
-        instrument_meta = parse_instrument_metadata_mzml(ts_stream.handle)
+        instrument_meta = parse_instrument_metadata_mzml(primary_handle)
 
-        println("--- Extracted Instrument Metadata ---")
-        println("Resolution: ", instrument_meta.resolution)
-        println("Acquisition Mode (pre-check): ", instrument_meta.acquisition_mode)
-        println("Calibration Status: ", instrument_meta.calibration_status)
-        println("Instrument Model: ", instrument_meta.instrument_model)
-        println("Mass Accuracy (ppm): ", instrument_meta.mass_accuracy_ppm)
-        println("Laser Settings: ", instrument_meta.laser_settings)
-        println("Polarity: ", instrument_meta.polarity)
-        println("------------------------------------")
-
-        seekstart(ts_stream.handle) # Reset stream after header parsing
+        seekstart(primary_handle) # Reset stream after header parsing
 
         println("DEBUG: Finding index offset...")
-        index_offset = find_index_offset(ts_stream.handle)
+        index_offset = find_index_offset(primary_handle)
+        
+        # --- NEW: Mmap Optimization with RAM Safety ---
+        mmap_data = nothing
+        try
+            file_size = filesize(file_path)
+            free_ram = Sys.free_memory()
+            if file_size > free_ram * 0.8
+                @warn "Dataset size ($(round(file_size/1e9, digits=2)) GB) exceeds 80% of free RAM. Mmap will still work via 'Streaming' mode."
+            end
+
+            println("DEBUG: Memory mapping .mzML file...")
+            seekstart(primary_handle) # Anchor Mmap to the beginning of the file to prevent overflow
+            mmap_data = Mmap.mmap(primary_handle, Vector{UInt8}, (file_size,))
+            println("DEBUG: .mzML file mmapped successfully.")
+        catch e
+            @warn "Memory mapping failed for mzML, falling back to standard I/O: $e"
+        end
+
         println("DEBUG: Seeking to index list at offset $index_offset.")
-        seek(ts_stream.handle, index_offset)
+        seek(primary_handle, index_offset)
         
         println("DEBUG: Searching for '<index name=\"spectrum\">'.")
-        if find_tag(ts_stream.handle, r"<index\s+name=\"spectrum\"") === nothing
+        if find_tag(primary_handle, r"<index\s+name=\"spectrum\"") === nothing
             throw(FileFormatError("Could not find spectrum index."))
         end
-        println("DEBUG: Found spectrum index tag.")
 
         println("DEBUG: Parsing spectrum offsets...")
-        spectrum_offsets = parse_offset_list(ts_stream.handle)
+        spectrum_offsets = parse_offset_list(primary_handle)
         if isempty(spectrum_offsets)
             throw(FileFormatError("No spectrum offsets found."))
         end
@@ -433,31 +447,25 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         println("DEBUG: Found $num_spectra spectrum offsets.")
 
         println("DEBUG: Parsing metadata for each spectrum...")
-        # Pre-allocate the metadata vector for better performance
         spectra_metadata = Vector{SpectrumMetadata}(undef, num_spectra)
         
-        # Use @inbounds for faster indexing in the loop
         @inbounds for i in 1:num_spectra
-            spectra_metadata[i] = parse_spectrum_metadata(ts_stream.handle, spectrum_offsets[i])
+            spectra_metadata[i] = parse_spectrum_metadata(primary_handle, spectrum_offsets[i])
             
-            # Progress reporting for large files
             if i % 1000 == 0
                 println("DEBUG: Processed $i/$num_spectra spectra")
             end
         end
         println("DEBUG: Metadata parsing complete for all $num_spectra spectra.")
 
-        # Assuming uniform data formats, take from the first spectrum
+        # Inferred global formats from first spectrum
         first_meta = spectra_metadata[1]
         mz_format = first_meta.mz_asset.format
         intensity_format = first_meta.int_asset.format
-        println("DEBUG: Inferred global m/z format: $mz_format")
-        println("DEBUG: Inferred global intensity format: $intensity_format")
         
-        # --- NEW: Determine overall acquisition mode ---
-        modes = [meta.mode for meta in spectra_metadata]
-        num_centroid = count(m -> m == CENTROID, modes)
-        num_profile = count(m -> m == PROFILE, modes)
+        # Determine overall acquisition mode ...
+        num_centroid = count(m -> m.mode == CENTROID, spectra_metadata)
+        num_profile = count(m -> m.mode == PROFILE, spectra_metadata)
         
         acq_mode_symbol = if num_centroid > 0 && num_profile == 0
             :centroid
@@ -468,26 +476,28 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         else
             :unknown
         end
-        println("DEBUG: Inferred overall acquisition mode: $acq_mode_symbol (Centroid: $num_centroid, Profile: $num_profile)")
 
         final_instrument_meta = InstrumentMetadata(
             instrument_meta.resolution,
-            acq_mode_symbol, # Update with parsed mode
+            acq_mode_symbol, 
             instrument_meta.mz_axis_type,
             instrument_meta.calibration_status,
             instrument_meta.instrument_model,
             instrument_meta.mass_accuracy_ppm,
             instrument_meta.laser_settings,
             instrument_meta.polarity,
-            instrument_meta.vendor_preprocessing_steps # Add this new field
+            instrument_meta.vendor_preprocessing_steps
         )
 
-        source = MzMLSource(ts_stream, mz_format, intensity_format)
+        source = MzMLSource(mzml_handles, mz_format, intensity_format, mmap_data)
         println("DEBUG: Creating MSIData object.")
         return MSIData(source, spectra_metadata, final_instrument_meta, (0, 0), nothing, cache_size)
 
     catch e
-        close(ts_stream) # Ensure stream is closed on error
+        # Close all handles in the pool if initialization fails
+        for h in mzml_handles
+            isopen(h) && close(h)
+        end
         rethrow(e)
     end
 end

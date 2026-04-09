@@ -1314,18 +1314,16 @@ function _fit_gaussian_and_r2(mz::AbstractVector{<:Real}, intensity::AbstractVec
     end_idx = min(n, peak_idx + half_window)
     
     # Ensure there's enough data to fit
-    if (end_idx - start_idx + 1) < 3
+    count = end_idx - start_idx + 1
+    if count < 3
         return 0.0
     end
 
-    x_data = mz[start_idx:end_idx]
-    y_data = intensity[start_idx:end_idx]
-
     # Estimate Gaussian parameters
     # Amplitude (A): peak intensity
-    A_est = intensity[peak_idx]
+    A_est = float(intensity[peak_idx])
     # Mean (μ): m/z at peak intensity
-    mu_est = mz[peak_idx]
+    mu_est = float(mz[peak_idx])
     # Standard deviation (σ): related to FWHM. FWHM = 2 * sqrt(2 * ln(2)) * σ ≈ 2.355 * σ
     # So, σ ≈ FWHM / 2.355
     fwhm_delta_m = _calculate_fwhm_delta_m(mz, intensity, peak_idx)
@@ -1339,19 +1337,27 @@ function _fit_gaussian_and_r2(mz::AbstractVector{<:Real}, intensity::AbstractVec
         return 0.0
     end
 
-    # Gaussian function
-    gaussian(x, A, mu, sigma) = A * exp.(-(x .- mu).^2 ./ (2 * sigma^2))
+    # Calculate SS_res, mean_y in a single pass to avoid allocations
+    SS_res = 0.0
+    sum_y = 0.0
+    
+    @inbounds for i in start_idx:end_idx
+        x_val = float(mz[i])
+        y_val = float(intensity[i])
+        
+        # Gaussian function estimate
+        y_est = A_est * exp(-((x_val - mu_est)^2) / (2 * sigma_est^2))
+        
+        SS_res += (y_val - y_est)^2
+        sum_y += y_val
+    end
 
-    # Generate estimated Gaussian curve
-    y_est = gaussian(x_data, A_est, mu_est, sigma_est)
-
-    # Calculate pseudo R-squared
-    # R^2 = 1 - (SS_res / SS_tot)
-    # SS_res = sum((y_data - y_est).^2)
-    # SS_tot = sum((y_data - mean(y_data)).^2)
-
-    SS_res = sum((y_data .- y_est).^2)
-    SS_tot = sum((y_data .- mean(y_data)).^2)
+    mean_y = sum_y / count
+    SS_tot = 0.0
+    
+    @inbounds for i in start_idx:end_idx
+        SS_tot += (float(intensity[i]) - mean_y)^2
+    end
 
     if SS_tot == 0
         return 1.0 # Perfect fit if all y_data are the same

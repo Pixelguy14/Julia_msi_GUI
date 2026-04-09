@@ -29,6 +29,9 @@ if !@isdefined(increment_image)
     include("./julia_imzML_visual.jl")
 end
 
+const global_msi_data = Ref{Union{MSIData, Nothing}}(nothing)
+
+
 # --- Memory Validation Logging ---
 if get(ENV, "GENIE_ENV", "dev") != "prod"
     function get_rss_mb()
@@ -60,7 +63,7 @@ if get(ENV, "GENIE_ENV", "dev") != "prod"
         println("--- MEMORY LOG [$(context)] ---")
         println("  Timestamp: $(now())")
         println("  Process RSS: $(rss_mb) MB")
-        println("  msi_data size: $(msi_data_size_mb) MB")
+        println("  global_msi_data[] size: $(msi_data_size_mb) MB")
         println("  Cumulative GC time: $(gc_time_s) s")
         println("--------------------------")
     end
@@ -192,6 +195,15 @@ macro ui_log(message, level="INFO", log_entries)
     end
 end
 =#
+
+# --- CRITICAL: Disable Stipple's session-to-disk persistence ---
+# Stipple's ModelStorage registers on(field) handlers that serialize the ENTIRE
+# ReactiveModel to disk via GenieSessionFileSession on every UI state change.
+# With 253 reactive variables including multi-MB Plotly traces, this generates
+# gigabytes of orphaned session files in /tmp/jl_XXXXXX, exhausting disk space.
+# For a single-user desktop application, session persistence is unnecessary.
+Stipple.enable_model_storage(false)
+Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage is disabled") during layout render
 
 # Reactive code to make the UI interactive
 @app begin
@@ -476,7 +488,7 @@ end
 
     # == DATA MANAGEMENT VARIABLES ==
     # Centralized MSIData object
-    @out msi_data::Union{MSIData, Nothing} = nothing
+    # global_msi_data[] is now global to avoid Genie Session memory leaks
 
     # Image file management
     @out text_nmass="" # For specific mass charge image creation
@@ -661,7 +673,7 @@ end
         
         try
             # 1. Clear large data objects explicitly
-            msi_data = nothing
+            global_msi_data[] = nothing
             feature_matrix_result = nothing
             bin_info_result = nothing
             
@@ -717,30 +729,42 @@ end
     sure the file can be processed by later steps like mainProcess 
     =#
     @onbutton btnSearch begin
-        is_processing = true
-        push!(__model__)
+        # 0. Robustness Guard: Prevent double-trigger during processing
+        if is_processing
+            println("DEBUG: btnSearch ignored because another process is already running.")
+            return
+        end
+        btnSearch = false # Manual reset of the trigger
+
+        # 1. Grab the file path from the main task
         picked_route = pick_file(; filterlist="imzML,imzml,mzML,mzml")
         
         if isnothing(picked_route) || isempty(picked_route)
-            is_processing = false
             return
         end
 
-        # --- Close previous dataset if one is open ---
-        if msi_data !== nothing
-            println("DEBUG: Closing previously loaded dataset before opening new one: $(basename(full_route))")
-            close(msi_data)
-            msi_data = nothing
-            GC.gc()
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0)
-            end
-        end
-
+        # 2. Update reactive state synchronously
+        is_processing = true
         msg = "Opening file: $(basename(picked_route))..."
+        SpectraEnabled = false
+        btnMetadataDisable = true
+        push!(__model__)
 
-        try
-            dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML|mzml))$"i => "")
+        # 3. Spawn background computational thread
+        Threads.@spawn begin
+            try
+                # --- Close previous dataset if one is open ---
+                if global_msi_data[] !== nothing
+                    println("DEBUG: Closing previously loaded dataset before opening new one...")
+                    close(global_msi_data[])
+                    global_msi_data[] = nothing
+                    GC.gc()
+                    if Sys.islinux()
+                        ccall(:malloc_trim, Int32, (Int32,), 0)
+                    end
+                end
+
+                dataset_name = replace(basename(picked_route), r"(\.(imzML|imzml|mzML|mzml))$"i => "")
             registry = load_registry(registry_path)
             existing_entry = get(registry, dataset_name, nothing)
 
@@ -757,8 +781,8 @@ end
                 dims = parse.(Int, split(dims_str, " x "))
                 imgWidth, imgHeight = dims[1], dims[2]
 
-                msi_data = nothing # Ensure data is not held in memory
-                log_memory_usage("Fast Load (msi_data cleared)", msi_data)
+                global_msi_data[] = nothing # Ensure data is not held in memory
+                log_memory_usage("Fast Load (global_msi_data[] cleared)", global_msi_data[])
                 btnMetadataDisable = false
                 SpectraEnabled = true
                 selected_folder_main = dataset_name
@@ -1000,10 +1024,10 @@ end
             image_available_folders = deepcopy(img_folders)
 
             selected_folder_main = dataset_name
-            msi_data = loaded_data
+            global_msi_data[] = loaded_data
 
             # Determine plot mode from loaded data
-            df = msi_data.spectrum_stats_df
+            df = global_msi_data[].spectrum_stats_df
             if df !== nothing && "Mode" in names(df)
                 profile_count = count(==(MSI_src.PROFILE), df.Mode)
                 total_count = length(df.Mode)
@@ -1013,26 +1037,29 @@ end
                 last_plot_mode = "lines" # Default
             end
 
-            log_memory_usage("Full Load", msi_data)
+            log_memory_usage("Full Load", global_msi_data[])
 
             eTime = round(time() - sTime, digits=3)
             msg = "Active file loaded in $(eTime) seconds. Dataset '$(dataset_name)' is ready for analysis."
 
             SpectraEnabled = true
             
-        catch e
-            msi_data = nothing
-            msg = "Error loading active file: $e"
-            warning_msg = true
-            SpectraEnabled = false
-            btnMetadataDisable = true
-            @error "File loading failed" exception=(e, catch_backtrace())
-        finally
-            GC.gc() # Trigger garbage collection
-            if Sys.islinux()
-                ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
+            catch e
+                global_msi_data[] = nothing
+                msg = "Error loading active file: $e"
+                warning_msg = true
+                SpectraEnabled = false
+                btnMetadataDisable = true
+                @error "File loading failed" exception=(e, catch_backtrace())
+                push!(__model__) # Force sending error back to UI immediately
+            finally
+                GC.gc() # Trigger garbage collection
+                if Sys.islinux()
+                    ccall(:malloc_trim, Int32, (Int32,), 0) # Ensure Julia returns the freed memory to OS
+                end
+                is_processing = false
+                push!(__model__) # Clear spinner loop 
             end
-            is_processing = false
         end
     end
 
@@ -1232,6 +1259,11 @@ end
     This reactive handler job is to run the full preprocessing pipeline on the selected dataset.
     =#
     @onbutton run_full_pipeline begin
+        if is_processing
+            println("DEBUG: run_full_pipeline ignored because another process is already running.")
+            return
+        end
+        run_full_pipeline = false # Manual reset
         is_processing = true
         push!(__model__)
         overall_progress = 0.0
@@ -1259,9 +1291,9 @@ end
             end
             target_path = entry["source_path"]
 
-            # Ensure msi_data is for the currently selected file and load if needed
+            # Ensure global_msi_data[] is for the currently selected file and load if needed
             # NOTE: For the pipeline, we will open a DEDICATED instance to avoid race conditions
-            # with the global msi_data used for plotting/interactive exploration.
+            # with the global global_msi_data[] used for plotting/interactive exploration.
             println("DEBUG: Opening isolated MSIData instance for pipeline stability...")
             pipeline_msi_data = OpenMSIData(target_path)
 
@@ -1686,9 +1718,9 @@ end
                     
                     # Determine plot mode for this specific spectrum
                     spectrum_mode_for_plot = "lines" # Default to lines
-                    if msi_data.spectrum_stats_df !== nothing && "Mode" in names(msi_data.spectrum_stats_df)
-                        if selected_spectrum_id_for_plot > 0 && selected_spectrum_id_for_plot <= length(msi_data.spectrum_stats_df.Mode)
-                            mode = msi_data.spectrum_stats_df.Mode[selected_spectrum_id_for_plot]
+                    if global_msi_data[].spectrum_stats_df !== nothing && "Mode" in names(global_msi_data[].spectrum_stats_df)
+                        if selected_spectrum_id_for_plot > 0 && selected_spectrum_id_for_plot <= length(global_msi_data[].spectrum_stats_df.Mode)
+                            mode = global_msi_data[].spectrum_stats_df.Mode[selected_spectrum_id_for_plot]
                             if mode == MSI_src.CENTROID
                                 spectrum_mode_for_plot = "stem"
                             end
@@ -1939,7 +1971,7 @@ end
     @onbutton recalculate_suggestions_btn begin
         is_processing = true
         push!(__model__)
-        if msi_data === nothing
+        if global_msi_data[] === nothing
             msg = "Please load a file first."
             warning_msg = true
             return
@@ -1953,7 +1985,7 @@ end
                 for p in reference_peaks_list 
                 if tryparse(Float64, string(p["mz"])) !== nothing
             )
-            recommended_params = main_precalculation(msi_data, reference_peaks=ref_peaks)
+            recommended_params = main_precalculation(global_msi_data[], reference_peaks=ref_peaks)
             
 
             for (step_name, params) in recommended_params
@@ -2348,6 +2380,11 @@ end
     end
     
     @onbutton mainProcess @time begin
+        if is_processing
+            println("DEBUG: mainProcess ignored because another process is already running.")
+            return
+        end
+        mainProcess = false # Manual reset
         # --- UI State Update ---
         overall_progress = 0.0
         progress_message = "Preparing batch process..."
@@ -2572,21 +2609,21 @@ end
                 return
             end
 
-            if msi_data === nothing || full_route != target_path
-                if msi_data !== nothing
-                    close(msi_data)
+            if global_msi_data[] === nothing || full_route != target_path
+                if global_msi_data[] !== nothing
+                    close(global_msi_data[])
                 end
                 msg = "Reloading $(basename(target_path)) for analysis..."
                 full_route = target_path
-                msi_data = OpenMSIData(target_path)
+                global_msi_data[] = OpenMSIData(target_path)
                 if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
                     raw_min = entry["metadata"]["global_min_mz"]
                     raw_max = entry["metadata"]["global_max_mz"]
                     min_val = isa(raw_min, Dict) ? get(raw_min, "value", raw_min) : raw_min
                     max_val = isa(raw_max, Dict) ? get(raw_max, "value", raw_max) : raw_max
-                    set_global_mz_range!(msi_data, convert(Float64, min_val), convert(Float64, max_val))
+                    set_global_mz_range!(global_msi_data[], convert(Float64, min_val), convert(Float64, max_val))
                 else
-                    precompute_analytics(msi_data)
+                    precompute_analytics(global_msi_data[])
                 end
             end
 
@@ -2599,7 +2636,7 @@ end
                 end
             end
 
-            plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
+            plotdata, plotlayout, xSpectraMz, ySpectraMz = meanSpectrumPlot(global_msi_data[], selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
             last_plot_type = "mean"
@@ -2607,7 +2644,7 @@ end
             fTime = time()
             eTime = round(fTime - sTime, digits=3)
             msg = "Plot loaded in $(eTime) seconds"
-            log_memory_usage("Mean Plot Generated", msi_data)
+            log_memory_usage("Mean Plot Generated", global_msi_data[])
         catch e
             msg = "Could not generate mean spectrum plot: $e"
             warning_msg = true
@@ -2661,21 +2698,21 @@ end
                 return
             end
 
-            if msi_data === nothing || full_route != target_path
-                if msi_data !== nothing
-                    close(msi_data)
+            if global_msi_data[] === nothing || full_route != target_path
+                if global_msi_data[] !== nothing
+                    close(global_msi_data[])
                 end
                 msg = "Reloading $(basename(target_path)) for analysis..."
                 full_route = target_path
-                msi_data = OpenMSIData(target_path)
+                global_msi_data[] = OpenMSIData(target_path)
                 if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
                     raw_min = entry["metadata"]["global_min_mz"]
                     raw_max = entry["metadata"]["global_max_mz"]
                     min_val = isa(raw_min, Dict) ? get(raw_min, "value", raw_min) : raw_min
                     max_val = isa(raw_max, Dict) ? get(raw_max, "value", raw_max) : raw_max
-                    set_global_mz_range!(msi_data, convert(Float64, min_val), convert(Float64, max_val))
+                    set_global_mz_range!(global_msi_data[], convert(Float64, min_val), convert(Float64, max_val))
                 else
-                    precompute_analytics(msi_data)
+                    precompute_analytics(global_msi_data[])
                 end
             end
             local mask_path_for_plot::Union{String, Nothing} = nothing
@@ -2687,7 +2724,7 @@ end
                 end
             end
 
-            plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(msi_data, selected_folder_main, mask_path=mask_path_for_plot)
+            plotdata, plotlayout, xSpectraMz, ySpectraMz = sumSpectrumPlot(global_msi_data[], selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
             last_plot_type = "sum"
@@ -2695,7 +2732,7 @@ end
             fTime = time()
             eTime = round(fTime - sTime, digits=3)
             msg = "Total plot loaded in $(eTime) seconds"
-            log_memory_usage("Sum Plot Generated", msi_data)
+            log_memory_usage("Sum Plot Generated", global_msi_data[])
         catch e
             msg = "Could not generate total spectrum plot: $e"
             warning_msg = true
@@ -2752,21 +2789,21 @@ end
                 return
             end
 
-            if msi_data === nothing || full_route != target_path
-                if msi_data !== nothing
-                    close(msi_data)
+            if global_msi_data[] === nothing || full_route != target_path
+                if global_msi_data[] !== nothing
+                    close(global_msi_data[])
                 end
                 msg = "Reloading $(basename(target_path)) for analysis..."
                 full_route = target_path
-                msi_data = OpenMSIData(target_path)
+                global_msi_data[] = OpenMSIData(target_path)
                 if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
                     raw_min = entry["metadata"]["global_min_mz"]
                     raw_max = entry["metadata"]["global_max_mz"]
                     min_val = isa(raw_min, Dict) ? get(raw_min, "value", raw_min) : raw_min
                     max_val = isa(raw_max, Dict) ? get(raw_max, "value", raw_max) : raw_max
-                    set_global_mz_range!(msi_data, convert(Float64, min_val), convert(Float64, max_val))
+                    set_global_mz_range!(global_msi_data[], convert(Float64, min_val), convert(Float64, max_val))
                 else
-                    precompute_analytics(msi_data)
+                    precompute_analytics(global_msi_data[])
                 end
             end
 
@@ -2781,7 +2818,7 @@ end
 
             # Convert to positive coordinates for processing
             y_positive = yCoord < 0 ? abs(yCoord) : yCoord
-            plotdata, plotlayout, xSpectraMz, ySpectraMz, spectrum_id = xySpectrumPlot(msi_data, xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
+            plotdata, plotlayout, xSpectraMz, ySpectraMz, spectrum_id = xySpectrumPlot(global_msi_data[], xCoord, y_positive, imgWidth, imgHeight, selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
             last_plot_type = "single"
@@ -2822,7 +2859,7 @@ end
             fTime = time()
             eTime = round(fTime - sTime, digits=3)
             msg = "Plot loaded in $(eTime) seconds"
-            log_memory_usage("XY Plot Generated", msi_data)
+            log_memory_usage("XY Plot Generated", global_msi_data[])
         catch e
             msg = "Could not retrieve spectrum: $e"
             warning_msg = true
@@ -2867,21 +2904,21 @@ end
                 return
             end
 
-            if msi_data === nothing || full_route != target_path
-                if msi_data !== nothing
-                    close(msi_data)
+            if global_msi_data[] === nothing || full_route != target_path
+                if global_msi_data[] !== nothing
+                    close(global_msi_data[])
                 end
                 msg = "Reloading $(basename(target_path)) for analysis..."
                 full_route = target_path
-                msi_data = OpenMSIData(target_path)
+                global_msi_data[] = OpenMSIData(target_path)
                 if haskey(get(entry, "metadata", Dict()), "global_min_mz") && entry["metadata"]["global_min_mz"] !== nothing
                     raw_min = entry["metadata"]["global_min_mz"]
                     raw_max = entry["metadata"]["global_max_mz"]
                     min_val = isa(raw_min, Dict) ? get(raw_min, "value", raw_min) : raw_min
                     max_val = isa(raw_max, Dict) ? get(raw_max, "value", raw_max) : raw_max
-                    set_global_mz_range!(msi_data, convert(Float64, min_val), convert(Float64, max_val))
+                    set_global_mz_range!(global_msi_data[], convert(Float64, min_val), convert(Float64, max_val))
                 else
-                    precompute_analytics(msi_data)
+                    precompute_analytics(global_msi_data[])
                 end
             end
 
@@ -2895,7 +2932,7 @@ end
             end
 
             # Call the new nSpectrumPlot function
-            plotdata, plotlayout, xSpectraMz, ySpectraMz, spectrum_id = nSpectrumPlot(msi_data, idSpectrum, selected_folder_main, mask_path=mask_path_for_plot)
+            plotdata, plotlayout, xSpectraMz, ySpectraMz, spectrum_id = nSpectrumPlot(global_msi_data[], idSpectrum, selected_folder_main, mask_path=mask_path_for_plot)
             plotdata_before = plotdata
             plotlayout_before = plotlayout
             last_plot_type = "single"
@@ -2905,7 +2942,7 @@ end
             fTime = time()
             eTime = round(fTime - sTime, digits=3)
             msg = "Plot loaded in $(eTime) seconds"
-            log_memory_usage("nSpectrum Plot Generated", msi_data)
+            log_memory_usage("nSpectrum Plot Generated", global_msi_data[])
         catch e
             msg = "Could not retrieve spectrum: $e"
             warning_msg = true
@@ -3186,7 +3223,7 @@ end
 
     # This handler will now correctly load the first image from the newly selected folder.
     @onchange selected_folder_main begin
-        # The msi_data object lifecycle is managed by the btnSearch handler.
+        # The global_msi_data[] object lifecycle is managed by the btnSearch handler.
         # This handler is now only for updating the UI images when the folder changes.
 
         if !isempty(selected_folder_main)
@@ -3418,7 +3455,7 @@ end
             fTime = time()
             eTime = round(fTime - sTime, digits=3)
             msg = "Plot loaded in $(eTime) seconds"
-            log_memory_usage("Mean Plot Generated", msi_data)
+            log_memory_usage("Mean Plot Generated", global_msi_data[])
         catch e
             msg = "Failed to load and process image: $e"
             warning_msg = true
@@ -3476,7 +3513,7 @@ end
             fTime = time()
             eTime = round(fTime - sTime, digits=3)
             msg = "Plot loaded in $(eTime) seconds"
-            log_memory_usage("Mean Plot Generated", msi_data)
+            log_memory_usage("Mean Plot Generated", global_msi_data[])
         catch e
             msg = "Failed to load and process image: $e"
             warning_msg = true
@@ -3577,7 +3614,7 @@ end
     # To include a visualization in the spectrum plot indicating where is the selected mass
     @onchange Nmass begin
         if !isempty(xSpectraMz)
-            df = msi_data.spectrum_stats_df
+            df = global_msi_data[].spectrum_stats_df
             plot_as_lines = false # Default to stem
             if df !== nothing && hasproperty(df, :Mode) && !isempty(df.Mode)
                 profile_count = count(==(MSI_src.PROFILE), df.Mode)
@@ -3836,7 +3873,7 @@ end
         eTime=round(fTime-sTime,digits=3)
         is_initializing = false # Hide loading screen when initialization is complete (current code is hidden due to incompatibility)
         msg = "The app took $(eTime) seconds to get ready."
-        log_memory_usage("App Ready", msi_data)
+        log_memory_usage("App Ready", global_msi_data[])
     end
     # is_processing = false
     GC.gc() # Trigger garbage collection
