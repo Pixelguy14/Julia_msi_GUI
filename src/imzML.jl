@@ -499,11 +499,6 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100, use_mmap::Bool=
     if use_mmap
         try
             file_size = filesize(ibd_path)
-            free_ram = Sys.free_memory()
-            
-            if file_size > free_ram * 0.8
-                @warn "Dataset size ($(round(file_size/1e9, digits=2)) GB) exceeds 80% of free RAM. Mmap will still work via 'Streaming', but expect slight I/O overhead."
-            end
 
             @debug "Memory mapping .ibd file..."
             # We use the first handle for mmapping
@@ -773,7 +768,7 @@ function get_mz_slice(data::MSIData, mass::Real, tolerance::Real; mask_path::Uni
         end
     end
     
-    println("Populated $(results_count[]) pixels with intensity data")
+    #println("Populated $(results_count[]) pixels with intensity data")
     replace!(slice_matrix, NaN => 0.0)
     return slice_matrix
 end

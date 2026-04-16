@@ -19,9 +19,9 @@ function create_warmup_datasets(dir, T_mz::Type, T_int::Type)
     mz_bytes = n_points * sizeof(T_mz)
     int_bytes = n_points * sizeof(T_int)
     
-    # Write some dummy binary data
+    # Write some dummy binary data (m/z must be sorted for validation)
     open(ibd_path, "w") do f
-        write(f, rand(T_mz, n_points))
+        write(f, sort(rand(T_mz, n_points)))
         write(f, rand(T_int, n_points))
     end
     
@@ -83,7 +83,7 @@ function create_warmup_datasets(dir, T_mz::Type, T_int::Type)
 
     # 2. Create minimal mzML (Base64)
     mzml_path = joinpath(dir, "warmup_$(T_mz)_$(T_int).mzML")
-    b64_mz = base64encode(rand(T_mz, n_points))
+    b64_mz = base64encode(sort(rand(T_mz, n_points)))
     b64_int = base64encode(rand(T_int, n_points))
     
     mzml_content = """<?xml version="1.0" encoding="utf-8"?>
@@ -140,8 +140,7 @@ try
                         MSI_src.StreamingStep(:normalization, Dict(:method => :tic)),
                         MSI_src.StreamingStep(:peak_picking, Dict(:method => :profile, :snr_threshold => 3.0))
                     ],
-                    adaptive_binning=true,
-                    bin_tolerance_ppm=50.0
+                    num_bins=2000
                 )
                 try
                     MSI_src.process_dataset!(imzml_data, config)
@@ -167,8 +166,8 @@ try
         p = PlotlyBase.Plot(PlotlyBase.scatter(x=1:2, y=[1,2]))
     end
 catch e
-    @warn "Global Warmup failed: $e"
-catch
-    # Silent fail for interrupt
+    if !(e isa InterruptException)
+        @warn "Global Warmup failed: $e"
+    end
 end
 println("Precompilation workload completed.")

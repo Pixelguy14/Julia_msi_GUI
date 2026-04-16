@@ -417,10 +417,6 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
         mmap_data = nothing
         try
             file_size = filesize(file_path)
-            free_ram = Sys.free_memory()
-            if file_size > free_ram * 0.8
-                @warn "Dataset size ($(round(file_size/1e9, digits=2)) GB) exceeds 80% of free RAM. Mmap will still work via 'Streaming' mode."
-            end
 
             println("DEBUG: Memory mapping .mzML file...")
             seekstart(primary_handle) # Anchor Mmap to the beginning of the file to prevent overflow
