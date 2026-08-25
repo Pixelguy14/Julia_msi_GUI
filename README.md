@@ -22,7 +22,7 @@ https://codeberg.org/LabABI/JuliaMSI
    Example of a correct route:<br>
    ~/Downloads/JuliaMSI-main/juliamsi
 2. Without entering the Julia environment, launch the project in your terminal with the following command (which works for all operating systems):
-   ```
+   ```bash
    julia --threads auto --project=. start_MSI_GUI.jl
    ```
 3. After the script has finished loading, you can open a [page](http://127.0.0.1:1481/) in your browser with the web app running.
@@ -33,6 +33,47 @@ It is normal to see errors before initialization; you can refresh the page once 
 Minimum system requirements: 4 core processor, 8 GB RAM<br>
 
 JuliaMSI is a Graphical User Interface for a library of MSI tools in Julia: https://github.com/CINVESTAV-LABI/julia_mzML_imzML
+
+## Build the System Image (One-time)
+Alternatively, you can generate custom pre-compiled `.so` / `.dll` system images by running the build script in your directory. This bakes the heavy mass-spectrometry kernels and UI dependencies into a single machine-code binary for ultra-fast startup times.
+
+### 1. Build the GUI Sysimage (for full App usage)
+```bash
+julia --project=. build_sysimage.jl
+```
+This may take 5–15 minutes. The resulting `sys_msi_gui.so` (or `.dll` on Windows) file will be around **300MB–600MB** because it contains the pre-compiled machine code for your entire graphical environment.
+*Note: A sysimage built on Linux (.so) will not work on Windows. You must run the build script once on each target operating system.*
+
+Once `sys_msi_gui.so` is created in your directory, adapt your launch command:
+```bash
+julia --project=. -e 'using Pkg; Pkg.precompile()'
+# Adjust the .so extension to .dll if on Windows or .dylib if on macOS
+julia --threads auto --project=. --sysimage sys_msi_gui.so start_MSI_GUI.jl
+```
+
+### 2. Build the Headless Sysimage (for Scripts & Data Scientists)
+If you only want to run scripts or the core `MSI_src` engine without the overhead of the Genie web server and Plotly, you can build a stripped-down, high-speed system image:
+
+```bash
+julia --project=. build_sysimage.jl --headless
+```
+
+Launch your automated tests or custom processing scripts using the headless image to bypass virtually all compilation overhead:
+```bash
+julia --threads auto --project=. --sysimage sys_msi_headless.so test/test_streaming_pipeline.jl
+```
+
+### 3. Docker Option for High-Speed Processing
+For maximum portability and execution speed without clutter, we provide a `Dockerfile.headless`. This option creates a minimal, ultra-fast container that completely omits `app.jl` and the web interface. 
+
+It automatically builds and bundles the headless sysimage, giving researchers an instant-start engine ready for heavy-duty `.imzML` batch pipelines with zero JIT latency.
+
+To build and run the Docker image:
+```bash
+docker build -t juliamsi-headless -f Dockerfile.headless .
+# Run a script mapped from your local data folder:
+docker run -it -v /my/local/data:/data juliamsi-headless julia -J sys_msi_headless.so /data/my_processing_script.jl
+```
 
 ## License
 

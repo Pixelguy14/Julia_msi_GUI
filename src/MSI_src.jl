@@ -20,7 +20,18 @@ export OpenMSIData,
        MSIData,
        _iterate_spectra_fast,
        validate_spectrum,
-       REGISTRY_LOCK
+       get_mz_slice,
+       REGISTRY_LOCK,
+       SpectrumMetadata,
+       SpectrumAsset,
+       SpectrumMode,
+       CENTROID,
+       PROFILE,
+       MzMLSource,
+       ImzMLSource,
+       SimpleBufferPool,
+       get_buffer!,
+       release_buffer!
 
 # Define shared registry lock
 const REGISTRY_LOCK = ReentrantLock()
@@ -60,9 +71,21 @@ export apply_baseline_correction,
        apply_intensity_transformation,
        save_feature_matrix
 
+# Sprint 2: Streaming Pipeline API
+export process_dataset!,
+       PipelineConfig,
+       StreamingStep,
+       normalize_inplace!,
+       transform_inplace!,
+       smooth_inplace!,
+       baseline_subtract_inplace!,
+       detect_peaks_streaming,
+       calibrate_inplace!
+
 # Include all source files directly into the main module
 include("BloomFilters.jl")
 include("Common.jl")
+include("ResourcePool.jl")
 include("MSIData.jl")
 include("ParserHelpers.jl")
 include("mzML.jl")
@@ -72,6 +95,8 @@ include("Preprocessing.jl")
 include("ImageProcessing.jl")
 include("Precalculations.jl")
 include("PreprocessingPipeline.jl")
+include("StreamingKernels.jl")
+include("StreamingPipeline.jl")
 
 using Setfield # For immutable struct updates
 
@@ -95,13 +120,17 @@ This is the main entry point for the new data access API.
 - An `MSIData` object.
 """
 function OpenMSIData(filepath::String; cache_size=300, spectrum_type_map::Union{Dict{Int, Symbol}, Nothing}=nothing)
+    # Apply standard path normalization for cross-platform compatibility
+    # Ensure Windows backslashes are converted to OS-native separators
+    norm_filepath = normpath(replace(filepath, "\\" => "/"))
+    
     local msi_data
-    if endswith(lowercase(filepath), ".mzml")
-        msi_data = load_mzml_lazy(filepath, cache_size=cache_size)
-    elseif endswith(lowercase(filepath), ".imzml")
-        msi_data = load_imzml_lazy(filepath, cache_size=cache_size)
+    if endswith(lowercase(norm_filepath), ".mzml")
+        msi_data = load_mzml_lazy(norm_filepath, cache_size=cache_size)
+    elseif endswith(lowercase(norm_filepath), ".imzml")
+        msi_data = load_imzml_lazy(norm_filepath, cache_size=cache_size)
     else
-        error("Unsupported file type: $filepath. Please provide a .mzML or .imzML file.")
+        error("Unsupported file type: $norm_filepath. Please provide a .mzML or .imzML file.")
     end
 
     # Apply spectrum type map if provided

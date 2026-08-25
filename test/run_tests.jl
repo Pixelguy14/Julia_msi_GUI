@@ -31,9 +31,10 @@ using MSI_src
 # --- Test Case 1: Standard .mzML file ---
 # A regular, non-imaging mzML file.
 # const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/mzML/T9_A1.mzML"
-const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/CE4_BF_R1/CE4_BF_R1.mzML"
+# const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/CE4_BF_R1/CE4_BF_R1.mzML"
 # const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging_paper_spray/Imaging_paper_spray.mzML"
 # const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging prueba Roya 1/Roya.mzML"
+const TEST_MZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/mzML"
 const SPECTRUM_TO_PLOT = 1 # Which spectrum to plot from the file
 
 # --- Test Case 2: .mzML + Sync File for Conversion ---
@@ -58,16 +59,17 @@ const CONVERSION_TARGET_IMZML = "test/results/converted_mzml.imzML"
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Imaging prueba Roya 1/royaimg.imzML"
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/ltpmsi-chilli.imzML" # centroid aparently?
 # const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_compressed.imzML" # centroid compressed
-const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML" # centroid
+# const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML" # centroid
+const TEST_IMZML_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML"
 # The m/z value to use for creating an image slice.
 # const MZ_VALUE_FOR_SLICE = 309.06 # BF
-# const MZ_VALUE_FOR_SLICE = 896.0 # HR2MSI
+const MZ_VALUE_FOR_SLICE = 896.0 # HR2MSI
 # const MZ_VALUE_FOR_SLICE = 76.03 # I PS
 # const MZ_VALUE_FOR_SLICE = 313 # ROYA
-const MZ_VALUE_FOR_SLICE = 100 # advanced processing
+# const MZ_VALUE_FOR_SLICE = 100 # advanced processing
 # const MZ_TOLERANCE = 0.1
 # const MZ_TOLERANCE = 1
-const MZ_TOLERANCE = 0.1
+const MZ_TOLERANCE = 0.2
 
 # Coordinates to plot a specific spectrum from imzML
 const COORDS_TO_PLOT = (50, 50) # Example coordinates (X, Y)

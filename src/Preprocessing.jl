@@ -12,6 +12,7 @@ generation.
 # =============================================================================
 
 using Statistics  # For mean, median
+using SparseArrays
 using StatsBase   # For mad (Median Absolute Deviation)
 using SavitzkyGolay # For SavitzkyGolay filtering
 using Dates         # For now()
@@ -40,7 +41,7 @@ A struct to hold the final feature matrix generated from the preprocessing pipel
 - `sample_ids::Vector{Int}`: A vector of identifiers for each sample (row) in the `matrix`.
 """
 struct FeatureMatrix
-    matrix::Array{Float64,2}
+    matrix::AbstractMatrix{Float64}
     mz_bins::Vector{Tuple{Float64,Float64}}
     sample_ids::Vector{Int}
 end
@@ -487,32 +488,23 @@ Estimates the baseline of a spectrum using the SNIP algorithm (internal implemen
 function _snip_baseline_impl(y::AbstractVector{<:Real}; iterations::Int=100)
     n = length(y)
     
-    # Initialize two buffers. b1 holds the current baseline estimate, b2 for the next.
-    # Always convert to Float64 to ensure type stability and avoid copying if already correct type
+    # Initialize the baseline estimate array once
     b1 = collect(float.(y))
-    b2 = similar(b1)        
     
-    current_b = b1
-    next_b = b2
-
     for k in 1:iterations
-        # Calculate next baseline estimate into `next_b` based on `current_b`
-        # Boundary conditions
-        if n > 1
-            next_b[1] = min(current_b[1], current_b[2])
-            next_b[n] = min(current_b[n], current_b[n-1])
-        end
-
-        @inbounds for i in 2:n-1
-            next_b[i] = min(current_b[i], 0.5 * (current_b[i-1] + current_b[i+1]))
-        end
+        prev_val = b1[1]
+        b1[1] = min(b1[1], b1[2])
         
-        # Swap references for the next iteration (no data copy here)
-        current_b, next_b = next_b, current_b 
+        @inbounds for i in 2:n-1
+            curr_val = b1[i]
+            b1[i] = min(curr_val, 0.5 * (prev_val + b1[i+1]))
+            prev_val = curr_val
+        end
+        b1[n] = min(b1[n], prev_val)
     end
     
-    # Return the final baseline estimate (which is in current_b after the last swap)
-    return current_b
+    # Return the final baseline estimate
+    return b1
 end
 
 """
@@ -720,18 +712,32 @@ function detect_peaks_profile_core(mz::AbstractVector{<:Real}, y::AbstractVector
     n = length(y)
     n < 3 && return NamedTuple{(:mz, :intensity, :fwhm, :shape_r2, :snr, :prominence), Tuple{Float64, Float64, Float64, Float64, Float64, Float64}}[]
     
-    noise_level = mad(y, normalize=true) + eps(Float64)
-    ys = smooth_spectrum_core(y; method=:savitzky_golay, window=max(5, 2*half_window+1), order=2) # Use smoothed data for detection
+    # Fast, non-allocating noise estimation
+    mean_y = sum(y) / n
+    noise_level = (sum(abs.(y .- mean_y)) / n) * 1.5 + eps(Float64)
+    
+    ys = smooth_spectrum_core(y; method=:savitzky_golay, window=max(5, 2*half_window+1), order=2)
 
     candidate_peak_indices = Int[]
-    for i in 2:n-1
+    sizehint!(candidate_peak_indices, div(n, 10)) # Pre-allocate memory capacity
+    
+    @inbounds for i in 2:n-1
         left = max(1, i - half_window)
         right = min(n, i + half_window)
         
-        # Prominence check
-        prominence = ys[i] - max(minimum(@view ys[left:i]), minimum(@view ys[i:right]))
+        # Avoid @view allocation in tight loop by manually computing minimums and maximums
+        min_left = ys[left]
+        for j in left:i; min_left = min(min_left, ys[j]); end
         
-        if ys[i] >= maximum(@view ys[left:right]) && 
+        min_right = ys[i]
+        for j in i:right; min_right = min(min_right, ys[j]); end
+        
+        prominence = ys[i] - max(min_left, min_right)
+        
+        max_local = ys[left]
+        for j in left:right; max_local = max(max_local, ys[j]); end
+        
+        if ys[i] >= max_local && 
            (ys[i] > snr_threshold * noise_level) &&
            (prominence > min_peak_prominence * ys[i])
             push!(candidate_peak_indices, i)
@@ -768,7 +774,14 @@ function detect_peaks_profile_core(mz::AbstractVector{<:Real}, y::AbstractVector
         
         left = max(1, p_idx - half_window)
         right = min(n, p_idx + half_window)
-        prominence = ys[p_idx] - max(minimum(@view ys[left:p_idx]), minimum(@view ys[p_idx:right]))
+        
+        min_left = ys[left]
+        for j in left:p_idx; min_left = min(min_left, ys[j]); end
+        
+        min_right = ys[p_idx]
+        for j in p_idx:right; min_right = min(min_right, ys[j]); end
+        
+        prominence = ys[p_idx] - max(min_left, min_right)
 
         push!(detected_peaks, (mz=peak_mz, intensity=peak_int, fwhm=fwhm_ppm, shape_r2=shape_r2, snr=peak_snr, prominence=prominence))
     end

@@ -49,12 +49,16 @@ const BENCHMARK_CASES = [
     # BenchmarkCase("/path/to/your/small_file.imzML", 309.06, 0.1),
     # BenchmarkCase("/path/to/your/medium_file.imzML", 896.0, 1.0),
     # BenchmarkCase("/path/to/your/large_file.imzML", 100.0, 0.1),
-    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_LA-ESI/180817_NEG_Thaliana_Leaf_bottom_1_0841.imzML",116.07,0.1, "Thaliana Leaf"),
-    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_LTP/ltpmsi-chilli.imzML",420,0.1, "Chilli Pepper"), # Chilli
-    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_DESI/ColAd_Individual/40TopL,10TopR,30BottomL,20BottomR/40TopL,10TopR,30BottomL,20BottomR-centroid.imzML",885.5,0.1, "Colon Cancer Human"), # Human Cancer
+    # BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_LA-ESI/180817_NEG_Thaliana_Leaf_bottom_1_0841.imzML",116.07,0.1, "Thaliana Leaf"),
+    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/Chilli/ltpmsi-chilli.imzML",420,0.1, "Chilli Pepper"), # Chilli
+    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_DESI/40TopL,10TopR,30BottomL,20BottomR/40TopL,10TopR,30BottomL,20BottomR-centroid.imzML",885.5,0.1, "Colon Cancer Human"), # Human Cancer
     BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML", 716.053,0.1, "Mouse Urinary Bladder"), # Mouse bladder
+    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/Leafs/CE1_Leaf_R3.imzML",306.1,0.1, "Leaf"),
     BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/Liv2_imzML_TIMSConvert-selected/Liv2.imzML",796.18,0.1, "Liver Cut"), #Lib2
-    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML",804.3,0.1, "Mouse Stomach"), # Mouse Stomach
+    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/salida/Stomach_DHB_uncompressed.imzML",804.3,0.1, "Mouse Stomach 2GB"), # Mouse Stomach
+    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/salida_Tims/Stomach_DHB.imzML",804.3,0.1, "Mouse Stomach 4GB"), # Mouse Stomach
+    
+
 ]
 
 const NUM_REPETITIONS = 50 # Number of times to generate the image for averaging

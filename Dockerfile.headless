@@ -1,0 +1,31 @@
+# Dockerfile.headless
+# This Dockerfile creates a minimal, high-speed container solely intended
+# for running JuliaMSI scripts via the pre-compiled headless sysimage.
+# It explicitly excludes the Genie UI and graphical routing to optimize size and start speed.
+
+FROM julia:1.11
+
+# System dependencies for core MSI math libraries 
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Only copy essential library files (no UI or app.jl required)
+COPY Project.toml Manifest.toml ./
+COPY src/ ./src/
+COPY build_sysimage.jl precompile_script.jl ./
+COPY test/ ./test/
+
+# Instantiate the environment
+RUN julia --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.precompile()'
+
+# Build the headless sysimage
+# This command strips out Genie and plot libraries, creating a pure data-engine .so
+RUN julia --project=. build_sysimage.jl --headless
+
+# The resulting image is heavily optimized for zero-JIT execution.
+# Default command simply enters a fast REPL.
+CMD ["julia", "--project=.", "--threads", "auto", "-J", "sys_msi_headless.so"]

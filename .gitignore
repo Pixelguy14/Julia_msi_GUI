@@ -8,3 +8,5 @@ R_original_scripts/
 test/results/
 test/binarization_results/
 Manifest.toml
+MSI_sysimage.dll
+MSI_sysimage.so
