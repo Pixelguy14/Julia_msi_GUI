@@ -6,7 +6,8 @@ using Test
 using Base.Threads
 
 # --- Test Configuration ---
-const TEST_FILE = "/home/pixel/Documents/Cinvestav_2025/Analisis/Stomach/Stomach_DHB_uncompressed.imzML"
+const TEST_FILE = get(ENV, "JULIA_MSI_TEST_IMZML",
+    "/home/pixel/Documents/Cinvestav_2025/Analisis/Stomach/Stomach_DHB_uncompressed.imzML")
 
 println("Starting concurrency test with file: $TEST_FILE")
 

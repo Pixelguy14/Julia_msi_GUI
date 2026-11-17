@@ -7,12 +7,10 @@ export OpenMSIData,
        GetSpectrum, 
        IterateSpectra, 
        ImportMzmlFile,
-       plot_slice, 
        get_total_spectrum, 
        get_average_spectrum,
        precompute_analytics, 
        process_spectrum,
-       generate_colorbar_image,
        process_image_pipeline,
        load_and_prepare_mask,
        set_global_mz_range!,
@@ -31,7 +29,11 @@ export OpenMSIData,
        ImzMLSource,
        SimpleBufferPool,
        get_buffer!,
-       release_buffer!
+       release_buffer!,
+       PROJECT_ROOT,
+       PUBLIC_DIR,
+       DEFAULT_REGISTRY_PATH,
+       ensure_public_dir
 
 # Define shared registry lock
 const REGISTRY_LOCK = ReentrantLock()
@@ -83,6 +85,7 @@ export process_dataset!,
        calibrate_inplace!
 
 # Include all source files directly into the main module
+include("Paths.jl")
 include("BloomFilters.jl")
 include("Common.jl")
 include("ResourcePool.jl")
@@ -90,6 +93,7 @@ include("MSIData.jl")
 include("ParserHelpers.jl")
 include("mzML.jl")
 include("imzML.jl")
+include("PlottingStubs.jl")
 include("MzmlConverter.jl")
 include("Preprocessing.jl")
 include("ImageProcessing.jl")

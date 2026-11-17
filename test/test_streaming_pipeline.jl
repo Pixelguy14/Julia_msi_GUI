@@ -12,7 +12,7 @@
 # ============================================================================
 
 using Pkg
-Pkg.activate(".")
+Pkg.activate(joinpath(@__DIR__, ".."))
 
 using MSI_src
 using SparseArrays
@@ -21,7 +21,8 @@ using SparseArrays
 # Configuration
 # =============================================================================
 
-const IMZML_PATH = "/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML"
+const IMZML_PATH = get(ENV, "JULIA_MSI_TEST_IMZML",
+    "/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML")
 
 function main()
     println("=" ^ 60)

@@ -9,12 +9,14 @@ using Statistics, NaturalSort, LinearAlgebra, StipplePlotly
 using Base.Filesystem: mv
 
 using MSI_src
-using .MSI_src: MSIData, process_image_pipeline, REGISTRY_LOCK
+using .MSI_src: MSIData, process_image_pipeline, REGISTRY_LOCK, PUBLIC_DIR, DEFAULT_REGISTRY_PATH, ensure_public_dir
 
 # Plot Handling
 if !@isdefined(increment_image)
     include("./julia_imzML_visual.jl")
 end
+
+ensure_public_dir()
 
 # Image Processing Pipeline
 using ImageBinarization
@@ -37,7 +39,7 @@ function alter_image(img_path, otsu_scale, noise_size_percent, hole_size_percent
     try
         # Strip query parameters from img_path
         clean_img_path = replace(img_path, r"\?.*" => "")
-        full_image_path = joinpath("public", lstrip(clean_img_path, '/'))
+        full_image_path = joinpath(PUBLIC_DIR, lstrip(clean_img_path, '/'))
         if !isfile(full_image_path)
             return (success=false, message="Image file not found: $(full_image_path)", path="")
         end
@@ -50,7 +52,7 @@ function alter_image(img_path, otsu_scale, noise_size_percent, hole_size_percent
                 otsu_scale=otsu_scale, noise_size_percent=noise_size_percent,
                 hole_size_percent=hole_size_percent, smoothing=smoothing_level)
 
-        output_dir = joinpath("public", "css", "masks")
+        output_dir = joinpath(PUBLIC_DIR, "css", "masks")
         mkpath(output_dir)
 
         path_smooth = "/css/masks/smoothed.png"
@@ -70,7 +72,7 @@ function display_slice(slice_path)
         return [PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())], PlotlyBase.Layout(margin=attr(l=0,r=0,t=0,b=0,pad=0)), false
     end
     
-    full_path = joinpath("public", lstrip(slice_path, '/'))
+    full_path = joinpath(PUBLIC_DIR, lstrip(slice_path, '/'))
     if !isfile(full_path)
         return [PlotlyBase.heatmap(x=Vector{Float64}(), y=Vector{Float64}())], PlotlyBase.Layout(margin=attr(l=0,r=0,t=0,b=0,pad=0)), false
     end
@@ -145,14 +147,16 @@ function update_main_plot(imgInt::String, smoothed_mask_path::String, imgTrans::
     end
 end
 
-@genietools
+# Genie tools/autoreload are initialized once in App. Marking this module as
+# already initialized prevents a second Revise/GenieAutoReload watcher.
+const GENIE_TOOLS_LOADED = true
 
 @app begin
     # --- State for Slice Selection (from app.jl) ---
     @in selected_folder_main = ""
     @out available_folders = String[]
     @out image_available_folders = String[]
-    @out registry_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+    @out registry_path = DEFAULT_REGISTRY_PATH
     @private registry_init_done = false
     @in refetch_folders = false
 
@@ -237,7 +241,7 @@ end
                 img_from_canvas = load(IOBuffer(decoded_img_bytes))
                 binary_mask = binarize(ensure_grayscale(img_from_canvas), Otsu())
 
-                mask_path = joinpath("public", lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
+                mask_path = joinpath(PUBLIC_DIR, lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
                 save(mask_path, binary_mask)
 
                 smoothed_mask_path = get_timestamped_path(smoothed_mask_path)
@@ -252,7 +256,7 @@ end
         if !isempty(selected_folder_main)
             is_browsing_slices = true
             is_editing_mask = false
-            folder_path = joinpath("public", selected_folder_main)
+            folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
             if !isdir(folder_path) 
                 imgInt = ""
                 msgimg = "Folder not found."
@@ -277,7 +281,7 @@ end
             end
             
             # --- Check for mask in registry and update message ---
-            reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+            reg_path = DEFAULT_REGISTRY_PATH
             if isfile(reg_path)
                 registry = JSON.parsefile(reg_path) # Assuming JSON.jl is loaded
                 if haskey(registry, selected_folder_main)
@@ -307,7 +311,7 @@ end
     
     @onbutton btn_img_plus begin
         if isempty(selected_folder_main) || is_editing_mask return end
-        folder_path = joinpath("public", selected_folder_main)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
         if !isdir(folder_path) return end
         msi_bmp = sort(filter(f -> startswith(f, "MSI_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
         new_msi = increment_image(current_msi, msi_bmp)
@@ -324,7 +328,7 @@ end
 
     @onbutton btn_img_minus begin
         if isempty(selected_folder_main) || is_editing_mask return end
-        folder_path = joinpath("public", selected_folder_main)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
         if !isdir(folder_path) return end
         msi_bmp = sort(filter(f -> startswith(f, "MSI_") && endswith(f, ".bmp"), readdir(folder_path)), lt=natural)
         new_msi = decrement_image(current_msi, msi_bmp)
@@ -357,7 +361,7 @@ end
     @onbutton btn_upload_mask begin
         picked_path = pick_file(; filterlist="png,bmp,jpg,jpeg")
         if !isempty(picked_path)
-            target_dir = joinpath("public", "css", "masks")
+            target_dir = joinpath(PUBLIC_DIR, "css", "masks")
             mkpath(target_dir)
             uploaded_filename = "uploaded_mask_input.png"
             destination_path = joinpath(target_dir, uploaded_filename)
@@ -379,7 +383,7 @@ end
     @onbutton btn_upload_premade_mask begin
         picked_path = pick_file(; filterlist="png,bmp,jpg,jpeg")
         if !isempty(picked_path)
-            target_dir = joinpath("public", "css", "masks")
+            target_dir = joinpath(PUBLIC_DIR, "css", "masks")
             mkpath(target_dir)
             
             uploaded_filename = "premade_mask.png"
@@ -420,7 +424,7 @@ end
                 
                 # --- Resizing to Slice (if imgInt is present) ---
                 slice_path_cleaned = replace(imgInt, r"\?.*" => "")
-                slice_full_path = joinpath("public", lstrip(slice_path_cleaned, '/'))
+                slice_full_path = joinpath(PUBLIC_DIR, lstrip(slice_path_cleaned, '/'))
 
                 if !isempty(imgInt) && isfile(slice_full_path) # Only resize if a slice is present
                     slice_img = load(slice_full_path)
@@ -472,9 +476,9 @@ end
         result = alter_image(mask_input_path, otsu_scale, noise_size_percent, hole_size_percent, smoothing_level)
         
         if result.success
-            local_smoothed_path = joinpath("public", lstrip(result.path, '/'))
+            local_smoothed_path = joinpath(PUBLIC_DIR, lstrip(result.path, '/'))
             slice_path_cleaned = replace(imgInt, r"\?.*" => "")
-            slice_full_path = joinpath("public", lstrip(slice_path_cleaned, '/'))
+            slice_full_path = joinpath(PUBLIC_DIR, lstrip(slice_path_cleaned, '/'))
 
             if isfile(slice_full_path) && isfile(local_smoothed_path)
                 slice_img = load(slice_full_path)
@@ -515,9 +519,9 @@ end
             result = alter_image(mask_input_path, otsu_scale, noise_size_percent, hole_size_percent, smoothing_level)
             
             if result.success
-                local_smoothed_path = joinpath("public", lstrip(result.path, '/'))
+                local_smoothed_path = joinpath(PUBLIC_DIR, lstrip(result.path, '/'))
                 slice_path_cleaned = replace(imgInt, r"\?.*" => "")
-                slice_full_path = joinpath("public", lstrip(slice_path_cleaned, '/'))
+                slice_full_path = joinpath(PUBLIC_DIR, lstrip(slice_path_cleaned, '/'))
 
                 if isfile(slice_full_path) && isfile(local_smoothed_path)
                     slice_img = load(slice_full_path)
@@ -561,7 +565,7 @@ end
 
     @onbutton btn_edit_manually begin
         if !isempty(smoothed_mask_path)
-            mask_path = joinpath("public", lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
+            mask_path = joinpath(PUBLIC_DIR, lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
             if isfile(mask_path)
                 mask_img = load(mask_path)
                 h, w = size(mask_img)
@@ -586,7 +590,7 @@ end
     @onchange mouse_x, mouse_y, is_drawing begin
         if show_editor && is_drawing && mouse_x > 0 && mouse_y > 0
             try
-                mask_path = joinpath("public", lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
+                mask_path = joinpath(PUBLIC_DIR, lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
                 if !isfile(mask_path) return end
                 
                 img = load(mask_path)
@@ -621,7 +625,7 @@ end
     @onchange bucket_fill_trigger begin
         if show_editor && !isempty(bucket_fill_trigger)
             try
-                mask_path = joinpath("public", lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
+                mask_path = joinpath(PUBLIC_DIR, lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
                 if !isfile(mask_path) return end
                 
                 img = load_and_binarize_mask(mask_path)
@@ -647,7 +651,7 @@ end
     @onchange rotate_degrees begin
         if show_editor && rotate_degrees != 0
             try
-                mask_path = joinpath("public", lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
+                mask_path = joinpath(PUBLIC_DIR, lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
                 if !isfile(mask_path) return end
                 
                 img = load_and_binarize_mask(mask_path)
@@ -711,7 +715,7 @@ end
     @onbutton btn_flip_mask begin
         if show_editor
             try
-                mask_path = joinpath("public", lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
+                mask_path = joinpath(PUBLIC_DIR, lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
                 if !isfile(mask_path) return end
                 
                 img = load_and_binarize_mask(mask_path)
@@ -731,7 +735,7 @@ end
     @onchange move_mask_payload begin
         if show_editor && move_pixels > 0 && !isempty(move_mask_payload)
             try
-                mask_path = joinpath("public", lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
+                mask_path = joinpath(PUBLIC_DIR, lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
                 if !isfile(mask_path) return end
 
                 img = load_and_binarize_mask(mask_path)
@@ -771,8 +775,8 @@ end
             parent_folder = split(selected_folder_main, '/')[end]
             final_mask_name = "$(parent_folder).png"
             
-            source_path = joinpath("public", lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
-            target_dir = joinpath("public", "css", "masks")
+            source_path = joinpath(PUBLIC_DIR, lstrip(replace(smoothed_mask_path, r"\?.*" => ""), '/'))
+            target_dir = joinpath(PUBLIC_DIR, "css", "masks")
             mkpath(target_dir)
             final_path = joinpath(target_dir, final_mask_name)
             
@@ -781,7 +785,7 @@ end
                 cp(source_path, final_path; force=true)
                 
                 # Update registry directly in the handler
-                reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+                reg_path = DEFAULT_REGISTRY_PATH
                 registry = isfile(reg_path) ? JSON.parsefile(reg_path) : Dict{String, Any}()
 
                 full_mask_path = abspath(final_path)
@@ -843,15 +847,15 @@ end
             sleep(1.0) # Give frontend time to initialize
             try
                 println("Synchronizing registry for mask editor...")
-                reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+                reg_path = DEFAULT_REGISTRY_PATH
                 # Assuming load_registry is available from MSI_src or a similar utility file
                 # For now, handle its absence gracefully if it's not explicitly defined here.
                 registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
 
-                public_dirs = isdir("public") ? readdir("public") : []
+                public_dirs = isdir(PUBLIC_DIR) ? readdir(PUBLIC_DIR) : []
                 ignored_dirs = ["css", "masks"]
                 
-                dataset_dirs = filter(d -> isdir(joinpath("public", d)) && !(d in ignored_dirs), public_dirs)
+                dataset_dirs = filter(d -> isdir(joinpath(PUBLIC_DIR, d)) && !(d in ignored_dirs), public_dirs)
                 
                 registry_keys = Set(keys(registry))
                 folder_set = Set(dataset_dirs)

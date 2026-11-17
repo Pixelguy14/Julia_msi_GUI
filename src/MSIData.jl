@@ -243,14 +243,16 @@ mutable struct MSIData
 
     function MSIData(source, metadata, instrument_meta, dims, coordinate_map, cache_size)
         obj = new(source, metadata, instrument_meta, dims, coordinate_map, 
-                  Dict(), [], min(10, cache_size), ReentrantLock(),
+                  Dict(), [], max(0, cache_size), ReentrantLock(),
                   SimpleBufferPool(),
                   Base.Threads.Atomic{Float64}(0.0), Base.Threads.Atomic{Float64}(0.0), 
                   nothing, nothing, AtomicFlag(), nothing)
         
-        # Initialize mz bounds cleanly instead of Inf
-        Base.Threads.atomic_xchg!(obj.global_min_mz, 1e9)
-        Base.Threads.atomic_xchg!(obj.global_max_mz, -1e9)
+        # Use the conventional invalid sentinel so callers can detect an
+        # uncomputed range. (The previous 1e9/-1e9 pair was finite, which made
+        # `!== Inf` checks always true and produced bogus bin ranges.)
+        Base.Threads.atomic_xchg!(obj.global_min_mz, Inf)
+        Base.Threads.atomic_xchg!(obj.global_max_mz, -Inf)
 
         
         # Ensure all file handles in the pool are closed when the object is garbage collected
@@ -380,10 +382,17 @@ function Base.close(data::MSIData)
         for handle in data.source.ibd_handles
             isopen(handle) && close(handle)
         end
+        # Drop the mmap reference so Windows can release the file mapping
+        # (otherwise the source file cannot be moved/deleted until GC).
+        data.source = ImzMLSource(IO[], data.source.mz_format,
+                                  data.source.intensity_format, nothing,
+                                  data.source.is_any_compressed)
     elseif data.source isa MzMLSource
         for handle in data.source.file_handles
             isopen(handle) && close(handle)
         end
+        data.source = MzMLSource(IO[], data.source.mz_format,
+                                 data.source.intensity_format, nothing)
     end
 
     # Clear cache
@@ -880,10 +889,23 @@ function precompute_analytics(msi_data::MSIData)
         start_time = time_ns()
 
         num_spectra = length(msi_data.spectra_metadata)
-        
+
+        if num_spectra == 0
+            msi_data.spectrum_stats_df = DataFrame(
+                SpectrumID = Int[], TIC = Float64[], BPI = Float64[],
+                BasePeakMZ = Float64[], NumPoints = Int[],
+                MinMZ = Float64[], MaxMZ = Float64[], Mode = SpectrumMode[]
+            )
+            set!(msi_data.analytics_ready)
+            return
+        end
+
+        # `maxthreadid()` also covers threads from the interactive pool.
+        n_slots = max(1, Base.Threads.maxthreadid())
+
         # Initialize thread-local variables for global stats
-        thread_local_min_mz = [Inf for _ in 1:Base.Threads.nthreads()]
-        thread_local_max_mz = [-Inf for _ in 1:Base.Threads.nthreads()]
+        thread_local_min_mz = [Inf for _ in 1:n_slots]
+        thread_local_max_mz = [-Inf for _ in 1:n_slots]
 
         # Initialize vectors for per-spectrum stats
         tics = Vector{Float64}(undef, num_spectra)
@@ -997,6 +1019,40 @@ end
 
 
 """
+    compute_global_mz_range!(msi_data::MSIData; indices=nothing)
+
+Computes and caches the global m/z range using per-thread accumulators.
+
+This is the thread-safe equivalent of an OpenMP `reduction(min:...)` /
+`reduction(max:...)`: every thread owns one slot, and the slots are combined
+after the parallel iterator returns. It also works with the interactive thread
+pool, unlike arrays sized with `Threads.nthreads()`.
+"""
+function compute_global_mz_range!(msi_data::MSIData; indices=nothing, cache::Bool=true)
+    n_slots = max(1, Base.Threads.maxthreadid())
+    thread_local_min = fill(Inf, n_slots)
+    thread_local_max = fill(-Inf, n_slots)
+
+    _iterate_spectra_fast(msi_data, indices) do idx, mz, _
+        isempty(mz) && return
+        lo, hi = extrema(mz)
+        tid = Base.Threads.threadid()
+        thread_local_min[tid] = min(thread_local_min[tid], lo)
+        thread_local_max[tid] = max(thread_local_max[tid], hi)
+    end
+
+    g_min = minimum(thread_local_min)
+    g_max = maximum(thread_local_max)
+
+    if isfinite(g_min) && isfinite(g_max) && g_min < g_max
+        cache && set_global_mz_range!(msi_data, g_min, g_max)
+        return (g_min, g_max)
+    end
+
+    return nothing
+end
+
+"""
     get_total_spectrum_core(msi_data::MSIData; num_bins::Int=2000, masked_indices::Union{Set{Int}, Nothing}=nothing)
 
 Internal function to calculate the total spectrum.
@@ -1022,51 +1078,60 @@ function get_total_spectrum_core(msi_data::MSIData; num_bins::Int=2000, masked_i
 
     local global_min_mz, global_max_mz
 
-    if Base.Threads.atomic_add!(msi_data.global_min_mz, 0.0) !== Inf
-        println("  Using pre-computed m/z range.")
-        global_min_mz = Base.Threads.atomic_add!(msi_data.global_min_mz, 0.0)
-        global_max_mz = Base.Threads.atomic_add!(msi_data.global_max_mz, 0.0)
+    # Use a cached range only when it is valid. The old sentinel check
+    # (`!== Inf`) was always true because the fields are initialized to 1e9.
+    if masked_indices === nothing
+        cached_min, cached_max = get_global_mz_range(msi_data)
+        if isfinite(cached_min) && isfinite(cached_max) && cached_min < cached_max
+            println("  Using pre-computed m/z range.")
+            global_min_mz = cached_min
+            global_max_mz = cached_max
+        else
+            range_result = compute_global_mz_range!(msi_data)
+            range_result === nothing && return (Float64[], Float64[], 0)
+            global_min_mz, global_max_mz = range_result
+        end
     else
-        # 1. First Pass: Find the global m/z range
+        # Compute the range over the requested subset. This path is also used
+        # for masked spectra, where using the full-dataset range would be wrong.
         pass1_start_time = time_ns()
         println("  Pass 1: Finding global m/z range...")
-        g_min_mz = Inf
-        g_max_mz = -Inf
-        _iterate_spectra_fast(msi_data, masked_indices === nothing ? nothing : collect(masked_indices)) do idx, mz, _
-            if !isempty(mz)
-                local_min, local_max = extrema(mz)
-                g_min_mz = min(g_min_mz, local_min)
-                g_max_mz = max(g_max_mz, local_max)
-            end
-        end
+        indices = masked_indices === nothing ? nothing : collect(masked_indices)
+        range_result = compute_global_mz_range!(msi_data; indices=indices, cache=(masked_indices === nothing))
         pass1_duration = (time_ns() - pass1_start_time) / 1e9
-        
-        if !isfinite(g_min_mz)
+
+        if range_result === nothing
             @warn "Could not determine a valid m/z range. All spectra might be empty."
             return (Float64[], Float64[], 0)
         end
-        
-        # Use and cache the result
-        global_min_mz = g_min_mz
-        global_max_mz = g_max_mz
-        set_global_mz_range!(msi_data, global_min_mz, global_max_mz)
+
+        global_min_mz, global_max_mz = range_result
         println("  Global m/z range found and cached: [$(global_min_mz), $(global_max_mz)]")
         @printf "  (Pass 1 took %.2f seconds)\n" pass1_duration
     end
-    
+
+    # A single-point (or degenerate) range would give a zero bin width.
+    if !(isfinite(global_min_mz) && isfinite(global_max_mz)) || global_min_mz >= global_max_mz
+        @warn "Invalid global m/z range [$global_min_mz, $global_max_mz]."
+        return (Float64[], Float64[], 0)
+    end
+
     # 2. Define Bins and precompute constants
-    mz_bins = range(global_min_mz, stop=global_max_mz, length=num_bins)
+    bins = max(2, Int(num_bins))
+    mz_bins = range(global_min_mz, stop=global_max_mz, length=bins)
     bin_step = step(mz_bins)
     inv_bin_step = 1.0 / bin_step  # Precompute reciprocal to avoid division
     min_mz = global_min_mz
 
-    # Initialize thread-local intensity sums
-    thread_local_intensity_sums = [zeros(Float64, num_bins) for _ in 1:Base.Threads.nthreads()]
-    thread_local_spectra_processed = [0 for _ in 1:Base.Threads.nthreads()]
+    # Initialize thread-local intensity sums. `maxthreadid()` keeps this safe
+    # for tasks scheduled on the interactive thread pool.
+    n_slots = max(1, Base.Threads.maxthreadid())
+    thread_local_intensity_sums = [zeros(Float64, bins) for _ in 1:n_slots]
+    thread_local_spectra_processed = [0 for _ in 1:n_slots]
 
     # 3. Second Pass: Optimized binning
     pass2_start_time = time_ns()
-    println("  Pass 2: Summing intensities into $num_bins bins...")
+    println("  Pass 2: Summing intensities into $bins bins...")
     _iterate_spectra_fast(msi_data, masked_indices === nothing ? nothing : collect(masked_indices)) do idx, mz, intensity
         thread_id = Base.Threads.threadid()
         thread_local_spectra_processed[thread_id] += 1
@@ -1085,15 +1150,15 @@ function get_total_spectrum_core(msi_data::MSIData; num_bins::Int=2000, masked_i
             bin_index = trunc(Int, raw_index)
             
             # Branchless version using clamp
-            final_index = clamp(bin_index, 1, num_bins)
+            final_index = clamp(bin_index, 1, bins)
             thread_local_intensity_sums[thread_id][final_index] += intensity_view[i]
         end
     end
 
     # Combine thread-local results
-    intensity_sum = zeros(Float64, num_bins)
+    intensity_sum = zeros(Float64, bins)
     num_spectra_processed = 0
-    for i in 1:Base.Threads.nthreads()
+    for i in 1:n_slots
         intensity_sum .+= thread_local_intensity_sums[i]
         num_spectra_processed += thread_local_spectra_processed[i]
     end
@@ -1532,9 +1597,12 @@ end
 function _iterate_uncompressed_fast(f::Function, data::MSIData, source::ImzMLSource, indices_to_iterate::Union{AbstractVector{Int}, Nothing})
     spectrum_indices = (indices_to_iterate === nothing) ? (1:length(data.spectra_metadata)) : indices_to_iterate
     
-    # Intialize local buffers for this thread's sequential iteration
-    mz_buf = Vector{Float64}()
-    int_buf = Vector{Float64}()
+    # Initialize local buffers for this thread's sequential iteration.
+    # IMPORTANT: the element type must match the on-disk format. Using Float64
+    # buffers here made `read!` consume twice as many bytes for Float32 datasets
+    # and misinterpret them as Float64 garbage (breaking use_mmap=false).
+    mz_buf = Vector{source.mz_format}()
+    int_buf = Vector{source.intensity_format}()
 
     for i in spectrum_indices
         meta = data.spectra_metadata[i]

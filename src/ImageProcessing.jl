@@ -31,8 +31,15 @@ function load_and_prepare_mask(mask_path::String, target_dims::Tuple{Int, Int})
     # Load the image
     img = Images.load(mask_path)
 
-    # Convert to grayscale if it's a color image
-    gray_img = Gray.(img)
+    # Convert to grayscale. Most images are already Colorant arrays, but TIFFs
+    # with extra samples (e.g. the optical reference images shipped with MSI
+    # datasets) load as TiffImages.WidePixel, for which Gray.(img) has no method.
+    # Fall back to the embedded color channel in that case.
+    gray_img = if eltype(img) <: Colorant
+        Gray.(img)
+    else
+        Gray.([getproperty(p, :color) for p in img])
+    end
 
     # Binarize using Otsu's method - white regions become 'true'
     binary_img = binarize(gray_img, Otsu())
@@ -101,7 +108,11 @@ function process_image_pipeline(gray_img;
 
     # --- Step 4: Smooth Edges ---
     # A morphological closing with a small disk smooths outlines.
-    smoothing_kernel = ones(Bool, (smoothing, smoothing))
+    # ImageMorphology requires odd-sized structuring elements; the historical
+    # default smoothing=2 produced a 2×2 matrix and threw "connectivity must be
+    # odd-sized". Normalize to the next odd size (minimum 3).
+    smooth_size = max(3, isodd(smoothing) ? smoothing : smoothing + 1)
+    smoothing_kernel = ones(Bool, (smooth_size, smooth_size))
     smoothed_img = closing(holes_filled_img, smoothing_kernel)
 
     # --- Return all intermediate steps for visualization ---

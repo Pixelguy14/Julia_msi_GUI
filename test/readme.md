@@ -5,7 +5,7 @@ This document provides instructions on how to set up and run the test suite for 
 ## Local Installation and Setup
 
 ### 1. Prerequisites
-Make sure you have Julia installed (at least version 1.6). If not, we recommend using `juliaup` for installation.
+Make sure you have Julia 1.11 or 1.12 installed. If not, we recommend using `juliaup` for installation.
 - **juliaup**: [https://github.com/JuliaLang/juliaup](https://github.com/JuliaLang/juliaup)
 - **Official binaries**: [https://julialang.org/downloads/](https://julialang.org/downloads/)
 

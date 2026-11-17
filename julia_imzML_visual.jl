@@ -1,5 +1,7 @@
 # julia_imzML_visual.jl
 
+using Dates, JSON, Printf
+
 
 """
     increment_image(current_image, image_list)
@@ -269,7 +271,7 @@ function loadContourPlot(interfaceImg::String)
     img_gray=Gray.(img)
     img_array=Array(img_gray)
     elevation=Float32.(Array(img_array))./ 255.0 # Normalize between 0 and 1
-    
+
     # Smooth the image
     sigma=3.0
     kernel=Kernel.gaussian(sigma)
@@ -278,7 +280,7 @@ function loadContourPlot(interfaceImg::String)
     # --- DOWNSAMPLING FOR PERFORMANCE ---
     elevation_smoothed = downsample_image(elevation_smoothed, 512)
     # ---
-    
+
     # Create the X, Y meshgrid coordinates
     x=1:size(elevation_smoothed, 2)
     y=1:size(elevation_smoothed, 1)
@@ -290,7 +292,7 @@ function loadContourPlot(interfaceImg::String)
     max_val = maximum(elevation_smoothed)
     tickV = range(min_val, stop=max_val, length=8)
     tickT = log_tick_formatter(collect(tickV))
-                
+
     layout=PlotlyBase.Layout(
         title=PlotlyBase.attr(
             text="2D topographic map of $cleaned_img (downsampled)",
@@ -313,7 +315,7 @@ function loadContourPlot(interfaceImg::String)
         z=elevation_smoothed,
         x=X[1, :],  # Use the first row
         y=-Y[:, 1],  # Use the first column
-        contours_coloring="Viridis", 
+        contours_coloring="Viridis",
         colorscale="Viridis",
         colorbar = attr(
             tickvals = tickV,
@@ -347,8 +349,8 @@ function loadSurfacePlot(interfaceImg::String)
     img_gray=Gray.(img) # Convert to grayscale
     img_array=Array(img_gray)
     elevation=Float32.(Array(img_array)) ./ 255.0 # Normalize between 0 and 1
-    
-    # Smooth the image 
+
+    # Smooth the image
     sigma=3.0
     kernel=Kernel.gaussian(sigma)
     elevation_smoothed=imfilter(elevation, kernel)
@@ -356,9 +358,9 @@ function loadSurfacePlot(interfaceImg::String)
     # --- DOWNSAMPLING FOR PERFORMANCE ---
     elevation_smoothed = downsample_image(elevation_smoothed, 256)
     # ---
-    
-    # Create the X, Y meshgrid coordinates 
-    x=1:size(elevation_smoothed, 2) 
+
+    # Create the X, Y meshgrid coordinates
+    x=1:size(elevation_smoothed, 2)
     y=1:size(elevation_smoothed, 1)
     X=repeat(reshape(x, 1, length(x)), length(y), 1)
     Y=repeat(reshape(y, length(y), 1), 1, length(x))
@@ -387,8 +389,8 @@ function loadSurfacePlot(interfaceImg::String)
         scene=attr(
             xaxis_nticks=x_nticks,
             yaxis_nticks=y_nticks,
-            zaxis_nticks=z_nticks, 
-            camera=attr(eye=attr(x=0, y=1, z=0.5)), 
+            zaxis_nticks=z_nticks,
+            camera=attr(eye=attr(x=0, y=1, z=0.5)),
             aspectratio=aspect_ratio
         ),
         margin=attr(l=0,r=0,t=120,b=0,pad=0)
@@ -402,15 +404,15 @@ function loadSurfacePlot(interfaceImg::String)
     end
 
     trace3D=PlotlyBase.surface(
-        x=X[1, :], 
-        y=Y[:, 1], 
+        x=X[1, :],
+        y=Y[:, 1],
         z=elevation_smoothed,
         contours_z=attr(
             show=true,
             usecolormap=true,
             highlightcolor="limegreen",
             project_z=true
-        ), 
+        ),
         colorscale="Viridis",
         colorbar = attr(
             tickvals = tickV,
@@ -508,9 +510,9 @@ function meanSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Uni
     else
         "Average Spectrum"
     end
-    
+
     title_text = isempty(dataset_name) ? base_title : "$base_title for: $dataset_name"
-    
+
     layout = PlotlyBase.Layout(
         title=PlotlyBase.attr(
             text=title_text,
@@ -532,9 +534,9 @@ function meanSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Uni
         ),
         margin=attr(l=0, r=0, t=120, b=0, pad=0),
         legend=attr(
-            x=1.0, 
-            y=1.0, 
-            xanchor="right", 
+            x=1.0,
+            y=1.0,
+            xanchor="right",
             yanchor="top"
         )
     )
@@ -672,9 +674,9 @@ function xySpectrumPlot(data::MSIData, xCoord::Int, yCoord::Int, imgWidth::Int, 
         ),
         margin=attr(l=0, r=0, t=120, b=0, pad=0),
         legend=attr(
-            x=1.0, 
-            y=1.0, 
-            xanchor="right", 
+            x=1.0,
+            y=1.0,
+            xanchor="right",
             yanchor="top"
         )
     )
@@ -763,9 +765,9 @@ function nSpectrumPlot(data::MSIData, id::Int, dataset_name::String=""; mask_pat
         ),
         margin=attr(l=0, r=0, t=120, b=0, pad=0),
         legend=attr(
-            x=1.0, 
-            y=1.0, 
-            xanchor="right", 
+            x=1.0,
+            y=1.0,
+            xanchor="right",
             yanchor="top"
         )
     )
@@ -807,9 +809,9 @@ function sumSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Unio
     else
         "Total Spectrum"
     end
-    
+
     title_text = isempty(dataset_name) ? base_title : "$base_title for: $dataset_name"
-    
+
     layout = PlotlyBase.Layout(
         title=PlotlyBase.attr(
             text=title_text,
@@ -831,9 +833,9 @@ function sumSpectrumPlot(data::MSIData, dataset_name::String=""; mask_path::Unio
         ),
         margin=attr(l=0, r=0, t=120, b=0, pad=0),
         legend=attr(
-            x=1.0, 
-            y=1.0, 
-            xanchor="right", 
+            x=1.0,
+            y=1.0,
+            xanchor="right",
             yanchor="top"
         )
     )
@@ -886,8 +888,8 @@ function warmup_init()
         catch
         end
 
-        dummy_bmp_path = joinpath("public", "dummy.bmp")
-        dummy_png_path = joinpath("public", "dummy.png")
+        dummy_bmp_path = joinpath(PUBLIC_DIR, "dummy.bmp")
+        dummy_png_path = joinpath(PUBLIC_DIR, "dummy.png")
         try
             save_bitmap(dummy_bmp_path, zeros(UInt8, 10, 10), ViridisPalette)
             loadImgPlot("/dummy.bmp")
@@ -916,6 +918,42 @@ function clean_registry_path(registry_path::String)
 end
 
 """
+    normalize_source_path(path::AbstractString) -> String
+
+Normalizes a dataset source path for storage and comparison.
+
+Windows treats `/` and `\\` (and usually letter case) as equivalent, so raw
+string comparison of a path returned by a native file dialog against a path
+stored in `registry.json` can incorrectly trigger a full re-import.
+"""
+function normalize_source_path(path::AbstractString)
+    cleaned = strip(replace(String(path), "\\" => "/"))
+    isempty(cleaned) && return cleaned
+    return normpath(abspath(cleaned))
+end
+
+"""
+    _read_registry_text(path::String) -> String
+
+Reads `registry.json` as UTF-8 and strips a UTF-8 BOM. A UTF-16 BOM is reported
+with an actionable error instead of being parsed as binary garbage.
+"""
+function _read_registry_text(path::String)
+    raw = read(path)
+    isempty(raw) && return ""
+
+    if length(raw) >= 3 && raw[1] == 0xEF && raw[2] == 0xBB && raw[3] == 0xBF
+        raw = raw[4:end]
+    elseif length(raw) >= 2 && raw[1] == 0xFF && raw[2] == 0xFE
+        error("registry.json is UTF-16LE encoded. Save it as UTF-8 (without a BOM).")
+    elseif length(raw) >= 2 && raw[1] == 0xFE && raw[2] == 0xFF
+        error("registry.json is UTF-16BE encoded. Save it as UTF-8 (without a BOM).")
+    end
+
+    return String(raw)
+end
+
+"""
     load_registry(registry_path)
 
 Loads the dataset registry from a JSON file, with retries for robustness on Windows.
@@ -924,26 +962,39 @@ Loads the dataset registry from a JSON file, with retries for robustness on Wind
 - `registry_path`: Path to the `registry.json` file.
 
 # Returns
-- A dictionary containing the registry data. Returns an empty dictionary if the file doesn't exist or fails to parse.
+- A dictionary containing the registry data. Returns an empty dictionary if the
+  file does not exist. A corrupt file is backed up and an empty dictionary is
+  returned so the application can continue without overwriting the original.
 """
 function load_registry(registry_path::String)
     return lock(REGISTRY_LOCK) do
         clean_path = clean_registry_path(registry_path)
-        if isfile(clean_path)
-            for attempt in 1:5
-                try
-                    return JSON.parsefile(clean_path, dicttype=Dict{String,Any})
-                catch e
-                    if attempt == 5
-                        @error "Final attempt failed to parse registry.json: $(sprint(showerror, e))"
-                        return Dict{String,Any}()
-                    else
-                        @warn "Attempt $attempt to read registry.json failed, retrying in 0.2s... Error: $(sprint(showerror, e))"
-                        sleep(0.2)
+        isfile(clean_path) || return Dict{String,Any}()
+
+        for attempt in 1:6
+            try
+                text = _read_registry_text(clean_path)
+                isempty(strip(text)) && return Dict{String,Any}()
+                parsed = JSON.parse(text; dicttype=Dict{String,Any})
+                return parsed isa Dict{String,Any} ? parsed : Dict{String,Any}()
+            catch e
+                if attempt == 6
+                    @error "Failed to parse registry.json after 6 attempts" path=clean_path exception=(e, catch_backtrace())
+                    backup = clean_path * ".corrupt-" * string(round(Int, time()))
+                    try
+                        cp(clean_path, backup; force=true)
+                        @error "A copy of the unreadable registry was preserved" backup=backup
+                    catch backup_error
+                        @warn "Could not preserve a copy of the unreadable registry" exception=backup_error
                     end
+                    return Dict{String,Any}()
                 end
+                # Exponential backoff with jitter; Windows AV/OneDrive locks are
+                # often longer than the previous fixed 1 second budget.
+                sleep(0.05 * 2.0^(attempt - 1) + 0.05 * rand())
             end
         end
+
         return Dict{String,Any}()
     end
 end
@@ -956,11 +1007,11 @@ Returns a dictionary with a "summary" key containing parameter-value pairs.
 """
 function extract_metadata(loaded_data::MSIData, full_route::String)
     stats = []
-    
+
     # Basic File Info
     push!(stats, Dict("parameter" => "Filename", "value" => basename(full_route)))
     push!(stats, Dict("parameter" => "Source Path", "value" => full_route))
-    
+
     # Image Dimensions
     w, h = loaded_data.image_dims
     if w > 0 && h > 0
@@ -968,11 +1019,11 @@ function extract_metadata(loaded_data::MSIData, full_route::String)
     else
         push!(stats, Dict("parameter" => "Image Dimensions", "value" => "N/A (Non-imaging)"))
     end
-    
+
     # Spectrum Counts
     num_spectra = length(loaded_data.spectra_metadata)
     push!(stats, Dict("parameter" => "Total Spectra", "value" => string(num_spectra)))
-    
+
     # m/z Range
     min_mz, max_mz = get_global_mz_range(loaded_data)
     if isfinite(min_mz) && isfinite(max_mz)
@@ -980,58 +1031,88 @@ function extract_metadata(loaded_data::MSIData, full_route::String)
     else
         push!(stats, Dict("parameter" => "Global m/z Range", "value" => "Unknown"))
     end
-    
+
     # Instrument Metadata
     if loaded_data.instrument_metadata !== nothing
         inst = loaded_data.instrument_metadata
         push!(stats, Dict("parameter" => "Instrument Model", "value" => inst.instrument_model))
         push!(stats, Dict("parameter" => "Polarity", "value" => titlecase(string(inst.polarity))))
         push!(stats, Dict("parameter" => "Acquisition Mode", "value" => titlecase(string(inst.acquisition_mode))))
-        
+
         if inst.resolution !== nothing
             push!(stats, Dict("parameter" => "Instrument Resolution", "value" => string(inst.resolution)))
         end
     end
-    
+
     return Dict("summary" => stats)
 end
 
 """
     save_registry(registry_path::String, registry_data::Dict)
 
-Saves the dataset registry to a JSON file atomically to prevent data loss 
+Saves the dataset registry to a JSON file atomically to prevent data loss
 and sharing violations on Windows. Writes to a `.tmp` file first.
 """
 function save_registry(registry_path::String, registry_data)
     lock(REGISTRY_LOCK) do
         clean_path = clean_registry_path(registry_path)
         dir = dirname(clean_path)
-        if !isdir(dir)
+        try
             mkpath(dir)
+        catch e
+            @error "Could not create the registry directory" path=dir exception=(e, catch_backtrace())
+            return false
         end
 
-        temp_path = clean_path * ".tmp"
-
-        for attempt in 1:6
+        # A unique temp file in the same directory avoids collisions between
+        # two writers or two Julia processes. Writing first and renaming last
+        # keeps registry.json readable for the whole operation.
+        temp_path = ""
+        try
+            temp_path, io = mktemp(dir; cleanup=false)
             try
-                open(temp_path, "w") do f
-                    JSON.print(f, registry_data, 4)
-                end
-                
-                # Replace final file with temp atomically. Force=true maps to ReplaceFile/MoveFileEx
-                mv(temp_path, clean_path, force=true)
-                return true
+                JSON.print(io, registry_data, 4)
+                flush(io)
+            finally
+                close(io)
+            end
+        catch e
+            isempty(temp_path) || rm(temp_path; force=true)
+            @error "Could not write the temporary registry file" path=dir exception=(e, catch_backtrace())
+            return false
+        end
+
+        if isfile(clean_path)
+            try
+                cp(clean_path, clean_path * ".bak"; force=true)
             catch e
-                if attempt == 6
-                    @error "Final attempt failed to write to registry.json: $(sprint(showerror, e))"
-                    isfile(temp_path) && rm(temp_path, force=true)
-                    return false
-                else
-                    @warn "Attempt $attempt to write to registry.json failed (Error: $(sprint(showerror, e))), retrying in 0.2s..."
-                    sleep(0.2)
+                @warn "Could not create a registry backup" path=clean_path exception=e
+            end
+
+            # On Windows, chmod(path, 0o644) clears the read-only attribute.
+            if !iswritable(clean_path)
+                try
+                    chmod(clean_path, 0o644)
+                catch e
+                    @warn "Could not clear the read-only attribute on registry.json" path=clean_path exception=e
                 end
             end
         end
+
+        for attempt in 1:6
+            try
+                mv(temp_path, clean_path; force=true)
+                return true
+            catch e
+                if attempt == 6
+                    @error "Failed to replace registry.json after 6 attempts" path=clean_path exception=(e, catch_backtrace())
+                    isfile(temp_path) && rm(temp_path; force=true)
+                    return false
+                end
+                sleep(0.05 * 2.0^(attempt - 1) + 0.05 * rand())
+            end
+        end
+
         return false
     end
 end
@@ -1049,22 +1130,25 @@ Adds or updates an entry in the dataset registry JSON file.
 - `is_imzML`: Boolean indicating if the source is an imzML file.
 """
 function update_registry(registry_path::String, dataset_name::String, source_path::String, metadata=nothing, is_imzML=false)
-    lock(REGISTRY_LOCK) do
+    saved = lock(REGISTRY_LOCK) do
         registry = load_registry(registry_path)
 
         existing_entry = get(registry, dataset_name, Dict{String,Any}())
         entry = copy(existing_entry)
-        entry["source_path"] = source_path
+        entry["source_path"] = normalize_source_path(source_path)
         entry["processed_date"] = string(now())
         entry["is_imzML"] = is_imzML
-        
+
         if metadata !== nothing
             entry["metadata"] = metadata
         end
-        
+
         registry[dataset_name] = entry
         save_registry(registry_path, registry)
     end
+
+    saved || @error "Registry update was not persisted" dataset=dataset_name path=registry_path
+    return saved
 end
 
 """
@@ -1088,7 +1172,7 @@ and updating the data registry. It includes error handling and memory cleanup.
 function process_file_safely(file_path, masses, params, progress_message_ref, overall_progress_ref; use_mask::Bool=false)
     local_msi_data = nothing
     dataset_name = replace(basename(file_path), r"\.imzML$"i => "")
-    output_dir = joinpath("public", dataset_name)
+    output_dir = joinpath(PUBLIC_DIR, dataset_name)
     println("Processing: $dataset_name -> $output_dir")
 
     try
@@ -1133,9 +1217,9 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
 
         # --- Save Slices (Parallelized) ---
         mkpath(output_dir)
-        
+
         progress_lock = ReentrantLock()
-        
+
         # Parallelize over the requested masses to fully utilize multi-core CPUs
         Threads.@threads for mass in masses
             slice = slice_dict[mass]
@@ -1154,7 +1238,7 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
                 else
                     sliceQuant, bounds = quantize_intensity(slice, params.colorL, mask_matrix=mask_matrix_for_triq)
                 end
-                
+
                 if params.medianF
                     sliceQuant = round.(UInt8, median_filter(sliceQuant))
                 end
@@ -1162,13 +1246,13 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
 
             # Disk I/O (Saving BMP)
             save_bitmap(joinpath(output_dir, bitmap_filename), sliceQuant, ViridisPalette)
-            
+
             if !all(iszero, slice)
                 # CairoMakie colorbar generation is now also parallelized
-                generate_colorbar_image(slice, params.colorL, joinpath(output_dir, colorbar_filename), 
+                generate_colorbar_image(slice, params.colorL, joinpath(output_dir, colorbar_filename),
                                       bounds; use_triq=params.triqE, triq_prob=params.triqP, mask_path=mask_path)
             end
-            
+
             lock(progress_lock) do
                 progress_message_ref = "File $(params.fileIdx)/$(params.nFiles): Saved slice for m/z=$mass"
             end
@@ -1176,7 +1260,8 @@ function process_file_safely(file_path, masses, params, progress_message_ref, ov
 
 
         is_imzML = local_msi_data.source isa ImzMLSource
-        update_registry(params.registry, dataset_name, file_path, metadata, is_imzML)
+        saved = update_registry(params.registry, dataset_name, file_path, metadata, is_imzML)
+        saved || return (false, "File: $(basename(file_path)) - registry update could not be saved")
         return (true, "")
 
     catch e
@@ -1197,7 +1282,7 @@ end
 function update_registry_mask_fields(registry_path::String, dataset_name::String, has_mask::Bool, mask_path::String)
     lock(REGISTRY_LOCK) do
         registry = load_registry(registry_path)
-        
+
         if haskey(registry, dataset_name)
             registry[dataset_name]["has_mask"] = has_mask
             registry[dataset_name]["mask_path"] = mask_path
@@ -1255,7 +1340,7 @@ function loadSurfacePlot(interfaceImg::String, mask_path::String)
 
     row_indices = [idx[1] for idx in non_nan_indices]
     col_indices = [idx[2] for idx in non_nan_indices]
-    
+
     y_range = minimum(row_indices):maximum(row_indices)
     x_range = minimum(col_indices):maximum(col_indices)
 
@@ -1292,7 +1377,7 @@ function loadSurfacePlot(interfaceImg::String, mask_path::String)
     y_nticks = min(20, length(y_coords))
     z_nticks = 5
     aspect_ratio = attr(x=1, y=length(y_coords) / length(x_coords), z=0.5)
-    
+
     # Define the layout for the 3D plot
     layout3D = PlotlyBase.Layout(
         title=PlotlyBase.attr(
@@ -1333,4 +1418,299 @@ function loadSurfacePlot(interfaceImg::String, mask_path::String)
     plotdata = [trace3D]
     plotlayout = layout3D
     return plotdata, plotlayout
+end
+
+# ============================================================================
+# GUI-only plotting helpers (CairoMakie)
+# ============================================================================
+
+"""
+    plot_slice(msi_data::MSIData, mass::Float64, tolerance::Float64, output_dir::String; stage_name="slice", bins=256)
+
+Generates and saves a plot of a single image slice for a given m/z value.
+This function closely imitates the logic of the original `GetSlice` but uses
+the modern `MSIData` access patterns and robust peak finding.
+
+# Arguments
+
+- `msi_data::MSIData`: The MSIData object.
+- `mass::Real`: The target mass.
+- `tolerance::Real`: The tolerance.
+- `output_dir::String`: The output directory.
+- `stage_name::String`: The name of the stage.
+- `bins::Int`: The number of bins.
+- `mask_path::Union{String, Nothing}`: The path to the mask.
+
+# Returns
+- `fig::Figure`: A figure with the data plotted with colors applied.
+"""
+function plot_slice(msi_data::MSIData, mass::Real, tolerance::Real, output_dir::String;
+                    stage_name="slice_mz_$(mass)", bins=256, mask_path::Union{String, Nothing}=nothing)
+
+    # 1. Generate the slice, applying the mask if provided.
+    println("Generating slice for m/z $mass...")
+    slice_matrix = get_mz_slice(msi_data, mass, tolerance, mask_path=mask_path)
+    println("Slice generation complete.")
+
+    # 2. Plot the resulting slice matrix using CairoMakie
+    println("Plotting slice...")
+
+    fig = Figure(size = (600, 500))
+    ax = Axis(fig[1, 1],
+        aspect=DataAspect(),
+        title=@sprintf("Slice for m/z: %.2f", mass),
+        yreversed=true
+    )
+    hidedecorations!(ax)
+
+    # Use mass-specific bounds for colorrange, ensuring a valid range
+    min_val, max_val = extrema(slice_matrix)
+    if min_val == max_val
+        max_val = min_val + 1.0 # Ensure the color range has a non-zero width
+    end
+    hm = heatmap!(ax, slice_matrix,
+        colormap=cgrad(:viridis, bins),
+        colorrange=(min_val, max_val)
+    )
+
+    Colorbar(fig[1, 2], hm, label="Intensity")
+    colgap!(fig.layout, 5)
+
+    # 3. Save the plot
+    mkpath(output_dir)
+    filename = "$(stage_name).png"
+    save_path = joinpath(output_dir, filename)
+    save(save_path, fig)
+    @info "Saved slice plot to $save_path"
+
+    return fig
+end
+
+"""
+    plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dpi=150, global_bounds=nothing)
+
+Generates and saves a grid of image slice plots. Each row corresponds to a
+file and each column to a mass, creating a comprehensive overview.
+
+# Arguments
+- `slices`: A 2D array of image slice matrices (`n_files` x `n_masses`).
+- `names`: A vector of file names, used for titling rows.
+- `masses`: A vector of m/z values, used for titling columns.
+- `output_dir`: The directory where the output plots will be saved.
+
+# Keyword Arguments
+- `stage_name`: A string used to name the output files (e.g., "raw", "normalized").
+- `bins`: The number of color levels in the heatmap palette.
+- `dpi`: The resolution for the saved image files.
+- `global_bounds`: A vector of `(min, max)` tuples, one for each mass, to ensure a consistent
+  color scale across all files for a given mass. If `nothing`, bounds are calculated automatically.
+
+# Returns
+- The generated `Figure` object from Makie.
+"""
+function plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dpi=150, global_bounds=nothing)
+    n_files, n_masses = size(slices)
+
+    mkpath(output_dir)
+
+    # If global_bounds is provided, it should now be a VECTOR of bounds (one per mass)
+    # If not provided, calculate per-mass bounds
+    if global_bounds === nothing
+        global_bounds = []
+        for mass_idx in 1:n_masses
+            mass_slices = [slices[i, mass_idx] for i in 1:n_files]
+            all_vals = reduce(vcat, [vec(s) for s in mass_slices])
+            filter!(isfinite, all_vals)
+            mass_bounds = isempty(all_vals) ? (0.0, 1.0) : extrema(all_vals)
+            push!(global_bounds, mass_bounds)
+        end
+    end
+
+    # With Makie, we define a Figure and a layout.
+    fig = Figure(size = (400 * n_masses, 330 * n_files))  # Adjusted size calculation
+
+    # Add a title for the entire figure.
+    Label(fig[0, 1:(2*n_masses)], "Image Slices - $(stage_name)", fontsize=24, font=:bold, tellwidth=false, padding=(0,0,10,0))
+
+    for file_idx in 1:n_files
+        for mass_idx in 1:n_masses
+            img = slices[file_idx, mass_idx]
+            mass = masses[mass_idx]
+            name = names[file_idx]
+            mass_global_bounds = global_bounds[mass_idx]  # Get bounds for THIS specific mass
+
+            # --- Calculate tick properties for THIS mass ---
+            min_val, max_val = mass_global_bounds
+            levels = range(min_val, stop=max_val, length=bins + 1)
+            level_range = levels[end] - levels[1]
+
+            if level_range == 0
+                levels = range(min_val - 0.1, stop=max_val + 0.1, length=bins + 1)
+                level_range = 0.2
+            end
+
+            exponent = level_range > 0 ? floor(log10(level_range)) / 3 : 0
+            scale = 10^(3 * exponent)
+            scaled_levels = levels ./ scale
+
+            format_num = level_range > 0 ? floor(log10(level_range)) % 3 : 0
+            labels = if format_num == 0
+                [@sprintf("%3.2f", lvl) for lvl in scaled_levels]
+            elseif format_num == 1
+                [@sprintf("%3.2f", lvl) for lvl in scaled_levels]
+            else
+                [@sprintf("%3.2f", lvl) for lvl in scaled_levels]
+            end
+
+            divisors = 2:7
+            remainders = (bins - 1) .% divisors
+            best_divisor = divisors[findlast(x -> x == minimum(remainders), remainders)]
+            tick_indices = round.(Int, range(1, stop=bins + 1, length=best_divisor + 1))
+
+            if !(1 in tick_indices)
+                pushfirst!(tick_indices, 1)
+            end
+            if !((bins + 1) in tick_indices)
+                push!(tick_indices, bins + 1)
+            end
+            unique!(sort!(tick_indices))
+
+            tick_positions = levels[tick_indices]
+            tick_labels = labels[tick_indices]
+            # --- End of mass-specific tick calculation ---
+
+            # Create an Axis for the heatmap
+            ax = Axis(fig[file_idx, 2*mass_idx-1],
+                aspect=DataAspect(),
+                title=@sprintf("%s\nm/z: %.2f", basename(name), mass),
+                titlesize=14
+            )
+            hidedecorations!(ax)
+
+            # Use mass-specific bounds for colorrange
+            hm = heatmap!(ax, transpose(img),
+                colormap=cgrad(:viridis, bins),
+                colorrange=mass_global_bounds  # ← This is mass-specific
+            )
+
+            # Add a colorbar with mass-specific scale
+            cb = Colorbar(fig[file_idx, 2*mass_idx], hm,
+                label=(scale == 1 ? "" : "×10^$(round(Int, 3 * exponent))"),
+                labelpadding=2,
+                labelsize=12,
+                ticks=(tick_positions, tick_labels),
+                ticklabelsize=10
+            )
+            colsize!(fig.layout, 2*mass_idx, 30)
+        end
+    end
+
+    colgap!(fig.layout, 5)
+    rowgap!(fig.layout, 10)
+
+    # Save in multiple formats.
+    formats = ["png", "pdf"]
+
+    for fmt in formats
+        filename = "$(stage_name)_overview.$(fmt)"
+        save_path = joinpath(output_dir, filename)
+        save(save_path, fig, px_per_unit = dpi / 96.0)
+        @info "Saved $(fmt) overview plot to $save_path"
+    end
+    return fig
+end
+
+"""
+    generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String,
+                               bounds::Tuple{Float64, Float64};
+                               use_triq::Bool=false, triq_prob::Float64=0.98,
+                               mask_path::Union{String, Nothing}=nothing)
+
+Generates a colorbar image for a given slice of data.
+
+# Arguments
+
+- `slice_data`: The slice data.
+- `color_levels`: The number of color levels.
+- `output_path`: The output path.
+- `bounds`: The bounds for the colorbar.
+- `use_triq`: Whether to use triq.
+- `triq_prob`: The probability of using triq.
+- `mask_path`: The path to the mask.
+
+# Returns
+- `fig::Figure`: A figure with the colorbar.
+"""
+function generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String,
+                               bounds::Tuple{Real, Real};
+                               use_triq::Bool=false, triq_prob::Float64=0.98,
+                               mask_path::Union{String, Nothing}=nothing)
+    # Use the provided bounds instead of recalculating
+    min_val, max_val = bounds
+
+    # If bounds are invalid, calculate fallback
+    if min_val == max_val == 0.0
+        local data_for_bounds
+        if mask_path !== nothing
+            height, width = size(slice_data)
+            mask_matrix = load_and_prepare_mask(mask_path, (width, height))
+            data_for_bounds = slice_data[mask_matrix]
+            filter!(x -> x > 0, data_for_bounds)
+        else
+            data_for_bounds = vec(slice_data)
+        end
+        min_val, max_val = isempty(data_for_bounds) ? (0.0, 1.0) : extrema(data_for_bounds)
+    end
+
+    # 2. Replicate the tick calculation logic from plot_slices
+    bins = color_levels
+    levels = range(min_val, stop=max_val, length=bins + 1)
+    level_range = levels[end] - levels[1]
+
+    if level_range == 0
+        levels = range(min_val - 0.1, stop=max_val + 0.1, length=bins + 1)
+        level_range = 0.2
+    end
+
+    exponent = level_range > 0 ? floor(log10(level_range)) / 3 : 0
+    scale = 10^(3 * exponent)
+    scaled_levels = levels ./ scale
+
+    format_num = level_range > 0 ? floor(log10(level_range)) % 3 : 0
+    labels = if format_num == 0
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    elseif format_num == 1
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    else
+        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
+    end
+
+    divisors = 2:7
+    remainders = (bins - 1) .% divisors
+    best_divisor = divisors[findlast(x -> x == minimum(remainders), remainders)]
+    tick_indices = round.(Int, range(1, stop=bins + 1, length=best_divisor + 1))
+
+    if !(1 in tick_indices)
+        pushfirst!(tick_indices, 1)
+    end
+    if !((bins + 1) in tick_indices)
+        push!(tick_indices, bins + 1)
+    end
+    unique!(sort!(tick_indices))
+
+    tick_positions = levels[tick_indices]
+    tick_labels = labels[tick_indices]
+
+    # 3. Create and save the colorbar image
+    fig = Figure(size=(150, 250))
+    Colorbar(fig[1, 1],
+        colormap=cgrad(:viridis, bins, categorical=true),
+        # limits=(min_val, max_val),
+        limits=(levels[1], levels[end]),
+        label=(scale == 1 ? "Intensity" : "Intensity ×10^$(round(Int, 3 * exponent))"),
+        ticks=(tick_positions, tick_labels),
+        labelsize=20,
+        ticklabelsize=16
+    )
+    save(output_path, fig)
 end

@@ -3,10 +3,11 @@
 https://codeberg.org/LabABI/JuliaMSI
 
 ## Local Installation
-1. Make sure you have Julia installed and at least Julia version 1.6 but not higher than 1.11, If not, follow the next installation guide which contains the latest files and instructions for [juliaup](https://github.com/JuliaLang/juliaup) (recommended) alternatively, you can follow the official Julia installation instructions at [julia](https://julialang.org/downloads/platform/).
+1. Make sure you have Julia installed. JuliaMSI supports **Julia 1.11 and 1.12**. If Julia is not installed, follow the [juliaup](https://github.com/JuliaLang/juliaup) guide (recommended), or the official Julia installation instructions at [julia](https://julialang.org/downloads/platform/).
 2. Download and decompress the following repository (You can download the repository from [download](https://codeberg.org/LabABI/JuliaMSI/archive/main.zip) or locate the option manually at the top right of the page, in the box with [•••] (More operations). For a more advanced method using Git, use this link:  https://codeberg.org/LabABI/JuliaMSI.git).
 3. Ensure that you have decompressed the ZIP file and know the working directory where it is located (the folder on your computer where you saved the JuliaMSI files).
-4. Julia Version 1.11 is required. You might need to downgrade your whole Julia installation to support it.
+4. Julia version 1.11 or 1.12 is required.
+5. Ensure that the project's `public/` directory is writable. JuliaMSI writes generated images, masks, and `registry.json` there and will stop with a clear error if it cannot.
 
 ## Load User Interface
 1. Set the working directory to where JuliaMSI is located (the specific location of the folder on your computer where you decompressed the ZIP) in your terminal.<br>
@@ -21,11 +22,21 @@ https://codeberg.org/LabABI/JuliaMSI
    ```
    Example of a correct route:<br>
    ~/Downloads/JuliaMSI-main/juliamsi
-2. Without entering the Julia environment, launch the project in your terminal with the following command (which works for all operating systems):
+2. Install/verify the Julia dependencies once (safe to repeat):
+   ```bash
+   julia --project=. -e 'using Pkg; Pkg.instantiate()'
+   ```
+3. Without entering the Julia environment, launch the project in your terminal with the following command (which works for all operating systems):
    ```bash
    julia --threads auto --project=. start_MSI_GUI.jl
    ```
-3. After the script has finished loading, you can open a [page](http://127.0.0.1:1481/) in your browser with the web app running.
+4. After the script has finished loading, you can open a [page](http://127.0.0.1:1481/) in your browser with the web app running.
+
+   The GUI starts in production mode by default. For live-reload development use:
+   ```bash
+   JULIA_MSI_DEV=1 julia --threads auto --project=. start_MSI_GUI.jl
+   ```
+   Set `JULIA_MSI_VERBOSE=1` to see the otherwise-filtered HTML parser warnings.
 
 Additional notes:<br>
 After the first boot, when the packages are initialized on your computer, subsequent uses of the app should take less time to load.<br>
@@ -83,6 +94,14 @@ JuliaMSI is published under the terms of the MIT License.
 
 Robert Winkler. (2023). mzML mass spectrometry and imzML mass spectrometry imaging test data [Data set]. 
 Zenodo. <https://doi.org/10.5281/zenodo.10084132>
+
+## Plotting API note
+
+`plot_slice`, `plot_slices`, and `generate_colorbar_image` are GUI/plotting helpers.
+They now live in the GUI layer (`julia_imzML_visual.jl`) so that `using MSI_src`
+does not load CairoMakie for headless/console use. They are not exported from
+`MSI_src`; calling `MSI_src.plot_slice(...)` returns an actionable migration
+error instead of silently failing with `UndefVarError`.
 
 ## User Guides
 

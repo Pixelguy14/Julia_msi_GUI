@@ -1,8 +1,5 @@
 using Test
-
-# We need to simulate loading the MSI_src module directly
-include("../src/MSI_src.jl")
-using .MSI_src
+using MSI_src
 
 @testset "JuliaMSI Core Systems" begin
     @testset "Basic Instantiation" begin
@@ -54,5 +51,23 @@ using .MSI_src
         # Test reuse
         buf2 = get_buffer!(pool, 1024)
         @test buf === buf2 # Should return the EXACT same buffer object
+    end
+
+    @testset "Bloom Filter Hashing and Probing" begin
+        bf = MSI_src.BloomFilter{Int}(1000, 0.01)
+        inserted = collect(1:1000)
+        foreach(x -> push!(bf, x), inserted)
+
+        # Bloom filters must never produce false negatives.
+        @test all(x -> x in bf, inserted)
+        @test all(x -> MSI_src.contains(bf, x), inserted)
+        @test MSI_src.false_positive_rate(bf) > 0.0
+        @test MSI_src.fill_ratio(bf) > 0.0
+    end
+
+    @testset "Application Paths" begin
+        # `PUBLIC_DIR` must be absolute and independent of the caller's cwd.
+        @test isabspath(MSI_src.PUBLIC_DIR)
+        @test MSI_src.ensure_public_dir() == MSI_src.PUBLIC_DIR
     end
 end

@@ -43,12 +43,10 @@ function create_warmup_datasets(dir, T_mz::Type, T_int::Type)
     <referenceableParamGroup id="mz_array_settings">
       <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" value=""/>
       <cvParam cvRef="MS" accession="MS:$(T_mz == Float64 ? "1000523" : "1000521")" name="$(T_mz == Float64 ? "64-bit float" : "32-bit float")" value=""/>
-      <cvParam cvRef="MS" accession="MS:1000574" name="zlib compression" value=""/>
     </referenceableParamGroup>
     <referenceableParamGroup id="intensity_array_settings">
       <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" value=""/>
       <cvParam cvRef="MS" accession="MS:$(T_int == Float64 ? "1000523" : "1000521")" name="$(T_int == Float64 ? "64-bit float" : "32-bit float")" value=""/>
-      <cvParam cvRef="MS" accession="MS:1000574" name="zlib compression" value=""/>
     </referenceableParamGroup>
   </referenceableParamGroupList>
   <run id="run_1">
@@ -106,13 +104,19 @@ function create_warmup_datasets(dir, T_mz::Type, T_int::Type)
       </spectrum>
     </spectrumList>
   </run>
-  <indexList count="1"><index name="spectrum"><offset idRef="scan=1">PLACEHOLDER</offset></index></indexList>
+  <indexList count="1">
+    <index name="spectrum">
+      <offset idRef="scan=1">PLACEHOLDER</offset>
+    </index>
+  </indexList>
   <indexListOffset>ID_OFFSET</indexListOffset>
 </mzML>
 """
+    # Replace the spectrum offset first. Replacing PLACEHOLDER changes the
+    # length of the document, so the index offset must be measured afterwards.
     spec_start = findfirst("<spectrum", mzml_content).start - 1
-    index_start = findfirst("<indexList", mzml_content).start - 1
     mzml_content = replace(mzml_content, "PLACEHOLDER" => string(spec_start))
+    index_start = findfirst("<indexList", mzml_content).start - 1
     mzml_content = replace(mzml_content, "ID_OFFSET" => string(index_start))
     
     write(mzml_path, mzml_content)
