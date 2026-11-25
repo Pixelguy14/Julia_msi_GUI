@@ -1,4 +1,4 @@
-using Images, Statistics, CairoMakie, DataFrames, Printf, ColorSchemes, StatsBase, Mmap
+using Statistics, DataFrames, ColorSchemes, StatsBase, Mmap
 
 """
 This file provides a library for parsing `.imzML` and `.ibd` files in pure Julia.
@@ -314,7 +314,8 @@ Helper function to parse binary data arrays from a spectrum block.
 """
 function parse_binary_data_arrays(spectrum_block::String, spectrum_start_line::String, 
                                   default_mz_format::DataType, default_intensity_format::DataType, 
-                                  mz_is_compressed::Bool, int_is_compressed::Bool)
+                                  mz_is_compressed::Bool, int_is_compressed::Bool;
+                                  param_groups::Dict{String, SpecDim}=Dict{String, SpecDim}())
     
     array_data_type = @NamedTuple{is_mz::Bool, array_length::Int32, encoded_length::Int64, offset::Int64}
     current_array_data = array_data_type[]
@@ -322,14 +323,28 @@ function parse_binary_data_arrays(spectrum_block::String, spectrum_start_line::S
     for bda_match in eachmatch(r"<binaryDataArray.*?>(.*?)</binaryDataArray>"sm, spectrum_block)
         bda_content = bda_match.match # This will be the full <binaryDataArray> block
 
-        is_mz = occursin("MS:1000514", bda_content) || occursin("mzArray", bda_content)
+        # Many imzML writers put the m/z and intensity cvParams in a
+        # <referenceableParamGroup> and only reference it from the spectrum.
+        # Resolve the reference first so those files are classified correctly.
+        ref_match = match(r"<referenceableParamGroupRef\s+ref=\"([^\"]+)\"", bda_content)
+        is_mz = if ref_match !== nothing && haskey(param_groups, ref_match.captures[1])
+            param_groups[ref_match.captures[1]].Axis == 1
+        else
+            occursin("MS:1000514", bda_content) || occursin("mzArray", bda_content)
+        end
         
-        array_len_cv_match = match(r"IMS:1000103.*?value=\"(\d+)\"", bda_content)
+        # imzML 1.1 external-array accessions:
+        #   IMS:1000101 external encoded length
+        #   IMS:1000102 external data
+        #   IMS:1000103 external offset
+        #   IMS:1000104 external array length
+        # The previous order mapped offset/array-length/encoded-length incorrectly.
+        array_len_cv_match = match(r"IMS:1000104.*?value=\"(\d+)\"", bda_content)
         array_length = Int32(0)
         if array_len_cv_match !== nothing
             array_length = parse(Int32, array_len_cv_match.captures[1])
         end
-        
+
         # Fallback for defaultArrayLength from the spectrum_start_line
         if array_length == 0
             default_match = match(r"defaultArrayLength=\"(\d+)\"", spectrum_start_line)
@@ -338,7 +353,7 @@ function parse_binary_data_arrays(spectrum_block::String, spectrum_start_line::S
             end
         end
 
-        encoded_len_cv_match = match(r"IMS:1000104.*?value=\"(\d+)\"", bda_content)
+        encoded_len_cv_match = match(r"IMS:1000101.*?value=\"(\d+)\"", bda_content)
         encoded_length = Int64(0)
         if encoded_len_cv_match !== nothing
             encoded_length = parse(Int64, encoded_len_cv_match.captures[1])
@@ -349,13 +364,19 @@ function parse_binary_data_arrays(spectrum_block::String, spectrum_start_line::S
             end
         end
 
-        offset_match = match(r"IMS:1000102.*?value=\"(\d+)\"", bda_content)
+        offset_match = match(r"IMS:1000103.*?value=\"(\d+)\"", bda_content)
         offset = Int64(0)
         if offset_match !== nothing
             offset = parse(Int64, offset_match.captures[1])
+        else
+            # Legacy files sometimes put the offset directly in IMS:1000102.
+            legacy_offset_match = match(r"IMS:1000102.*?value=\"(\d+)\"", bda_content)
+            if legacy_offset_match !== nothing
+                offset = parse(Int64, legacy_offset_match.captures[1])
+            end
         end
-        
-        if array_length > 0 && offset > 0
+
+        if array_length > 0 && offset >= 0
             push!(current_array_data, (is_mz=is_mz, array_length=array_length, 
                                      encoded_length=encoded_length, offset=offset))
         end
@@ -423,7 +444,8 @@ function parse_imzml_spectrum_block(stream::IO, hIbd::IO, param_groups::Dict{Str
 
         current_array_data = parse_binary_data_arrays(spectrum_block_content, spectrum_start_line_from_block, 
                                                         default_mz_format, default_intensity_format, 
-                                                        mz_is_compressed, int_is_compressed)
+                                                        mz_is_compressed, int_is_compressed;
+                                                        param_groups=param_groups)
         
         # Separate m/z and intensity arrays
         mz_data = filter(d -> d.is_mz, current_array_data)
@@ -491,7 +513,7 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100, use_mmap::Bool=
     
     # --- Handle Pool Optimization ---
     # We open multiple handles to the same .ibd file to avoid lock contention in parallel code.
-    num_handles = Threads.nthreads()
+    num_handles = max(1, Threads.maxthreadid())
     ibd_handles = [open(ibd_path, "r") for _ in 1:num_handles]
     
     # --- Mmap Optimization with RAM Safety ---
@@ -559,10 +581,21 @@ function load_imzml_lazy(file_path::String; cache_size::Int=100, use_mmap::Bool=
                                                         mz_is_compressed, int_is_compressed, global_mode)
             
             @debug "Metadata parsing complete. Saving cache for next time..."
-            # We create a temporary MSIData just for save_metadata_cache
-            tmp_source = ImzMLSource(ibd_handles, default_mz_format, default_intensity_format, mmap_data, any_comp)
+            # We create a temporary MSIData just for save_metadata_cache.
+            # IMPORTANT: do NOT share the real `ibd_handles` vector here. MSIData
+            # installs a finalizer that closes every handle in `source.ibd_handles`;
+            # when this temporary object is garbage-collected it would close the
+            # handles owned by the real dataset (breaking use_mmap=false reads with
+            # "Bad file descriptor"). The cache writer only needs the formats.
+            tmp_source = ImzMLSource(IO[], default_mz_format, default_intensity_format, nothing, any_comp)
             tmp_msi = MSIData(tmp_source, spectra_metadata, instrument_meta, (width, height), nothing, cache_size)
-            save_metadata_cache(tmp_msi, cache_path)
+            try
+                save_metadata_cache(tmp_msi, cache_path)
+            catch e
+                # Read-only media, network shares, and locked files must not
+                # prevent opening the dataset. The cache is an optimization.
+                @warn "Could not write the metadata cache; continuing without it" path=cache_path exception=e
+            end
         end
         
         # Build coordinate map ...
@@ -726,7 +759,7 @@ function get_mz_slice(data::MSIData, mass::Real, tolerance::Real; mask_path::Uni
         # Bloom filter rejection (very fast)
         if bloom_filters !== nothing
             bf = bloom_filters[i]
-            if !is_empty(bf)
+            if bf !== nothing && !is_empty(bf)
                 min_mass_int = round(Int, (mass - tolerance) * discretization_factor)
                 max_mass_int = round(Int, (mass + tolerance) * discretization_factor)
                 
@@ -841,7 +874,7 @@ function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, t
         
         if m_start_idx <= m_end_idx
             # Range overlap found, now check Bloom filter if available
-            if bloom_filters !== nothing && !is_empty(bloom_filters[i])
+            if bloom_filters !== nothing && bloom_filters[i] !== nothing && !is_empty(bloom_filters[i])
                 found_any = false
                 @inbounds for m_idx in m_start_idx:m_end_idx
                     mass = sorted_masses[m_idx]
@@ -905,68 +938,6 @@ function get_multiple_mz_slices(data::MSIData, masses::AbstractVector{<:Real}, t
     return slice_dict
 end
 
-
-"""
-    plot_slice(msi_data::MSIData, mass::Float64, tolerance::Float64, output_dir::String; stage_name="slice", bins=256)
-
-Generates and saves a plot of a single image slice for a given m/z value.
-This function closely imitates the logic of the original `GetSlice` but uses
-the modern `MSIData` access patterns and robust peak finding.
-
-# Arguments
-
-- `msi_data::MSIData`: The MSIData object.
-- `mass::Real`: The target mass.
-- `tolerance::Real`: The tolerance.
-- `output_dir::String`: The output directory.
-- `stage_name::String`: The name of the stage.
-- `bins::Int`: The number of bins.
-- `mask_path::Union{String, Nothing}`: The path to the mask.
-
-# Returns
-- `fig::Figure`: A figure with the data plotted with colors applied.
-"""
-function plot_slice(msi_data::MSIData, mass::Real, tolerance::Real, output_dir::String; 
-                    stage_name="slice_mz_$(mass)", bins=256, mask_path::Union{String, Nothing}=nothing)
-    
-    # 1. Generate the slice, applying the mask if provided.
-    println("Generating slice for m/z $mass...")
-    slice_matrix = get_mz_slice(msi_data, mass, tolerance, mask_path=mask_path)
-    println("Slice generation complete.")
-
-    # 2. Plot the resulting slice matrix using CairoMakie
-    println("Plotting slice...")
-    
-    fig = Figure(size = (600, 500))
-    ax = CairoMakie.Axis(fig[1, 1],
-        aspect=DataAspect(),
-        title=@sprintf("Slice for m/z: %.2f", mass),
-        yreversed=true
-    )
-    hidedecorations!(ax)
-
-    # Use mass-specific bounds for colorrange, ensuring a valid range
-    min_val, max_val = extrema(slice_matrix)
-    if min_val == max_val
-        max_val = min_val + 1.0 # Ensure the color range has a non-zero width
-    end
-    hm = heatmap!(ax, slice_matrix,
-        colormap=cgrad(ColorSchemes.viridis, bins),
-        colorrange=(min_val, max_val)
-    )
-    
-    Colorbar(fig[1, 2], hm, label="Intensity")
-    colgap!(fig.layout, 5)
-
-    # 3. Save the plot
-    mkpath(output_dir)
-    filename = "$(stage_name).png"
-    save_path = joinpath(output_dir, filename)
-    save(save_path, fig)
-    @info "Saved slice plot to $save_path"
-    
-    return fig
-end
 
 # ============================================================================
 #
@@ -1276,140 +1247,6 @@ end
 # ============================================================================
 
 """
-    plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dpi=150, global_bounds=nothing)
-
-Generates and saves a grid of image slice plots. Each row corresponds to a
-file and each column to a mass, creating a comprehensive overview.
-
-# Arguments
-- `slices`: A 2D array of image slice matrices (`n_files` x `n_masses`).
-- `names`: A vector of file names, used for titling rows.
-- `masses`: A vector of m/z values, used for titling columns.
-- `output_dir`: The directory where the output plots will be saved.
-
-# Keyword Arguments
-- `stage_name`: A string used to name the output files (e.g., "raw", "normalized").
-- `bins`: The number of color levels in the heatmap palette.
-- `dpi`: The resolution for the saved image files.
-- `global_bounds`: A vector of `(min, max)` tuples, one for each mass, to ensure a consistent
-  color scale across all files for a given mass. If `nothing`, bounds are calculated automatically.
-
-# Returns
-- The generated `Figure` object from Makie.
-"""
-function plot_slices(slices, names, masses, output_dir; stage_name, bins=256, dpi=150, global_bounds=nothing)
-    n_files, n_masses = size(slices)
-    
-    mkpath(output_dir)
-
-    # If global_bounds is provided, it should now be a VECTOR of bounds (one per mass)
-    # If not provided, calculate per-mass bounds
-    if global_bounds === nothing
-        global_bounds = []
-        for mass_idx in 1:n_masses
-            mass_slices = [slices[i, mass_idx] for i in 1:n_files]
-            all_vals = reduce(vcat, [vec(s) for s in mass_slices])
-            filter!(isfinite, all_vals)
-            mass_bounds = isempty(all_vals) ? (0.0, 1.0) : extrema(all_vals)
-            push!(global_bounds, mass_bounds)
-        end
-    end
-
-    # With Makie, we define a Figure and a layout.
-    fig = Figure(size = (400 * n_masses, 330 * n_files))  # Adjusted size calculation
-
-    # Add a title for the entire figure.
-    Label(fig[0, 1:(2*n_masses)], "Image Slices - $(stage_name)", fontsize=24, font=:bold, tellwidth=false, padding=(0,0,10,0))
-
-    for file_idx in 1:n_files
-        for mass_idx in 1:n_masses
-            img = slices[file_idx, mass_idx]
-            mass = masses[mass_idx]
-            name = names[file_idx]
-            mass_global_bounds = global_bounds[mass_idx]  # Get bounds for THIS specific mass
-
-            # --- Calculate tick properties for THIS mass ---
-            min_val, max_val = mass_global_bounds
-            levels = range(min_val, stop=max_val, length=bins + 1)
-            level_range = levels[end] - levels[1]
-            
-            if level_range == 0
-                levels = range(min_val - 0.1, stop=max_val + 0.1, length=bins + 1)
-                level_range = 0.2
-            end
-            
-            exponent = level_range > 0 ? floor(log10(level_range)) / 3 : 0
-            scale = 10^(3 * exponent)
-            scaled_levels = levels ./ scale
-            
-            format_num = level_range > 0 ? floor(log10(level_range)) % 3 : 0
-            labels = if format_num == 0
-                [@sprintf("%3.2f", lvl) for lvl in scaled_levels]
-            elseif format_num == 1
-                [@sprintf("%3.2f", lvl) for lvl in scaled_levels]
-            else
-                [@sprintf("%3.2f", lvl) for lvl in scaled_levels]
-            end
-            
-            divisors = 2:7
-            remainders = (bins - 1) .% divisors
-            best_divisor = divisors[findlast(x -> x == minimum(remainders), remainders)]
-            tick_indices = round.(Int, range(1, stop=bins + 1, length=best_divisor + 1))
-
-            if !(1 in tick_indices)
-                pushfirst!(tick_indices, 1)
-            end
-            if !((bins + 1) in tick_indices)
-                push!(tick_indices, bins + 1)
-            end
-            unique!(sort!(tick_indices))
-            
-            tick_positions = levels[tick_indices]
-            tick_labels = labels[tick_indices]
-            # --- End of mass-specific tick calculation ---
-
-            # Create an Axis for the heatmap
-            ax = CairoMakie.Axis(fig[file_idx, 2*mass_idx-1],
-                aspect=DataAspect(),
-                title=@sprintf("%s\nm/z: %.2f", basename(name), mass),
-                titlesize=14
-            )
-            hidedecorations!(ax)
-
-            # Use mass-specific bounds for colorrange
-            hm = heatmap!(ax, transpose(img),
-                colormap=cgrad(ColorSchemes.viridis, bins),
-                colorrange=mass_global_bounds  # ← This is mass-specific
-            )
-
-            # Add a colorbar with mass-specific scale
-            cb = Colorbar(fig[file_idx, 2*mass_idx], hm,
-                label=(scale == 1 ? "" : "×10^$(round(Int, 3 * exponent))"),
-                labelpadding=2,
-                labelsize=12,
-                ticks=(tick_positions, tick_labels),
-                ticklabelsize=10
-            )
-            colsize!(fig.layout, 2*mass_idx, 30)
-        end
-    end
-
-    colgap!(fig.layout, 5)
-    rowgap!(fig.layout, 10)
-
-    # Save in multiple formats.
-    formats = ["png", "pdf"]
-    
-    for fmt in formats
-        filename = "$(stage_name)_overview.$(fmt)"
-        save_path = joinpath(output_dir, filename)
-        save(save_path, fig, px_per_unit = dpi / 96.0)
-        @info "Saved $(fmt) overview plot to $save_path"
-    end
-    return fig
-end
-
-"""
     save_bitmap(name::String, pixMap::Matrix{UInt8}, colorTable::Vector{UInt32})
 
 Saves an 8-bit indexed image as a BMP file.
@@ -1516,98 +1353,3 @@ end
 
 # Viridis color palette (256 colors) - defined as constant
 const ViridisPalette = generate_palette(ColorSchemes.viridis)
-
-"""
-    generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String, 
-                               bounds::Tuple{Float64, Float64}; 
-                               use_triq::Bool=false, triq_prob::Float64=0.98, 
-                               mask_path::Union{String, Nothing}=nothing)
-
-Generates a colorbar image for a given slice of data.
-
-# Arguments
-
-- `slice_data`: The slice data.
-- `color_levels`: The number of color levels.
-- `output_path`: The output path.
-- `bounds`: The bounds for the colorbar.
-- `use_triq`: Whether to use triq.
-- `triq_prob`: The probability of using triq.
-- `mask_path`: The path to the mask.
-
-# Returns
-- `fig::Figure`: A figure with the colorbar.
-"""
-function generate_colorbar_image(slice_data::AbstractMatrix, color_levels::Int, output_path::String, 
-                               bounds::Tuple{Real, Real}; 
-                               use_triq::Bool=false, triq_prob::Float64=0.98, 
-                               mask_path::Union{String, Nothing}=nothing)
-    # Use the provided bounds instead of recalculating
-    min_val, max_val = bounds
-    
-    # If bounds are invalid, calculate fallback
-    if min_val == max_val == 0.0
-        local data_for_bounds
-        if mask_path !== nothing
-            height, width = size(slice_data)
-            mask_matrix = load_and_prepare_mask(mask_path, (width, height))
-            data_for_bounds = slice_data[mask_matrix]
-            filter!(x -> x > 0, data_for_bounds)
-        else
-            data_for_bounds = vec(slice_data)
-        end
-        min_val, max_val = isempty(data_for_bounds) ? (0.0, 1.0) : extrema(data_for_bounds)
-    end
-
-    # 2. Replicate the tick calculation logic from plot_slices
-    bins = color_levels
-    levels = range(min_val, stop=max_val, length=bins + 1)
-    level_range = levels[end] - levels[1]
-    
-    if level_range == 0
-        levels = range(min_val - 0.1, stop=max_val + 0.1, length=bins + 1)
-        level_range = 0.2
-    end
-    
-    exponent = level_range > 0 ? floor(log10(level_range)) / 3 : 0
-    scale = 10^(3 * exponent)
-    scaled_levels = levels ./ scale
-    
-    format_num = level_range > 0 ? floor(log10(level_range)) % 3 : 0
-    labels = if format_num == 0
-        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
-    elseif format_num == 1
-        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
-    else
-        [ @sprintf("%3.2f", lvl) for lvl in scaled_levels]
-    end
-    
-    divisors = 2:7
-    remainders = (bins - 1) .% divisors
-    best_divisor = divisors[findlast(x -> x == minimum(remainders), remainders)]
-    tick_indices = round.(Int, range(1, stop=bins + 1, length=best_divisor + 1))
-
-    if !(1 in tick_indices)
-        pushfirst!(tick_indices, 1)
-    end
-    if !((bins + 1) in tick_indices)
-        push!(tick_indices, bins + 1)
-    end
-    unique!(sort!(tick_indices))
-    
-    tick_positions = levels[tick_indices]
-    tick_labels = labels[tick_indices]
-
-    # 3. Create and save the colorbar image
-    fig = Figure(size=(150, 250))
-    Colorbar(fig[1, 1], 
-        colormap=cgrad(:viridis, bins, categorical=true),
-        # limits=(min_val, max_val),
-        limits=(levels[1], levels[end]),
-        label=(scale == 1 ? "Intensity" : "Intensity ×10^$(round(Int, 3 * exponent))"),
-        ticks=(tick_positions, tick_labels),
-        labelsize=20,
-        ticklabelsize=16
-    )
-    save(output_path, fig)
-end

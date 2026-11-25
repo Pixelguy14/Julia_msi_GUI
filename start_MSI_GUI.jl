@@ -1,21 +1,85 @@
 using Pkg
-sTime=time()
-Pkg.activate(".")
-ENV["GENIE_ENV"] = "dev"
-#ENV["GENIE_ENV"] = "prod"
+sTime = time()
 
-manifest_path = joinpath(@__DIR__, "Manifest.toml")
+# Always activate the repository's own project, not the caller's cwd.
+Pkg.activate(@__DIR__)
 
-# Selective instantiation for faster startup
-if get(ENV, "GENIE_ENV", "dev") != "prod" && !isfile(manifest_path)
-    @info "Development environment detected and Manifest.toml missing. Instantiating packages..."
+# Keep the user's environment choice. Normal GUI launches use production mode:
+# dev mode starts Revise/GenieAutoReload watchers, which adds startup cost and
+# duplicate "Watching"/"Autoreloading" log lines. Use JULIA_MSI_DEV=1 to opt in.
+if !haskey(ENV, "GENIE_ENV")
+    ENV["GENIE_ENV"] = get(ENV, "JULIA_MSI_DEV", "0") == "1" ? "dev" : "prod"
+end
+
+# NativeFileDialog uses GTK on Linux. A C/POSIX locale produces the noisy
+# "Locale not supported by C library" warning when the dialog opens.
+if Sys.islinux() && get(ENV, "LC_ALL", "") == "" &&
+   get(ENV, "LANG", "") in ("", "C", "POSIX")
+    ENV["LC_ALL"] = "C.UTF-8"
+end
+
+# `instantiate` is idempotent and is required even when Manifest.toml exists:
+# a manifest can be present while packages are missing from the depot.
+try
+    Pkg.instantiate()
+catch e
+    @warn "Pkg.instantiate() failed; retrying after Pkg.resolve()" exception=e
     Pkg.resolve()
     Pkg.instantiate()
-    Pkg.gc()
-elseif get(ENV, "GENIE_ENV", "dev") != "prod"
-    @info "Manifest.toml found. Skipping Pkg.instantiate() for faster boot. Delete Manifest.toml if you need to re-instantiate."
-    ENV["GENIE_ENV"] = "prod"
 end
+
+# Fail before Genie loads if generated assets cannot be written.
+include(joinpath(@__DIR__, "src", "Paths.jl"))
+ensure_public_dir()
+
+using Logging
+
+# Genie/EzXML prints one warning per Vue/Quasar custom tag while parsing the
+# Stipple layout. Those warnings are harmless but make the console unreadable.
+# Keep real warnings/errors; allow `JULIA_MSI_VERBOSE=1` to see everything.
+struct JuliaMSIFilterLogger <: Logging.AbstractLogger
+    inner::Logging.AbstractLogger
+    verbose::Bool
+end
+
+Logging.min_enabled_level(l::JuliaMSIFilterLogger) =
+    Logging.min_enabled_level(l.inner)
+
+Logging.shouldlog(l::JuliaMSIFilterLogger, level, _module, group, id) =
+    Logging.shouldlog(l.inner, level, _module, group, id)
+
+Logging.catch_exceptions(l::JuliaMSIFilterLogger) =
+    Logging.catch_exceptions(l.inner)
+
+function Logging.handle_message(l::JuliaMSIFilterLogger, level, message, _module,
+                                group, id, file, line; kwargs...)
+    if !l.verbose
+        text = try
+            string(message)
+        catch
+            ""
+        end
+        # EzXML/libxml2 logs one "Tag <x> invalid" warning per Vue/Quasar custom
+        # tag while Genie parses the Stipple layout. Genie 5.35 already silences
+        # most of these; keep this guard for older/edge render paths.
+        if occursin("XMLError:", text) && occursin("HTML parser", text)
+            return nothing
+        end
+        # Safety net for the Stipple watcher `isempty(nothing)` bug (the root
+        # cause is fixed in app.jl by emitting an empty sesstoken meta tag).
+        if nameof(_module) === :Stipple &&
+           occursin("MethodError(iterate, (nothing", text)
+            return nothing
+        end
+    end
+    return Logging.handle_message(l.inner, level, message, _module, group, id,
+                                  file, line; kwargs...)
+end
+
+Logging.global_logger(JuliaMSIFilterLogger(
+    Logging.ConsoleLogger(stderr, Logging.Info),
+    get(ENV, "JULIA_MSI_VERBOSE", "0") == "1"
+))
 
 using Genie
 
@@ -46,6 +110,10 @@ function cleanup_orphaned_sessions()
             end
             is_session_dir || continue
 
+            # Do not remove sessions from another currently-running instance.
+            # Only clean directories that have been idle for at least an hour.
+            (time() - mtime(full_path)) < 3600 && continue
+
             # Safe to remove — this is an orphaned Genie session directory
             dir_size = sum(filesize(joinpath(full_path, f)) for f in contents; init=0)
             rm(full_path; recursive=true, force=true)
@@ -65,11 +133,9 @@ end
 cleanup_orphaned_sessions()
 
 
-# Load and configure Genie
+# Load and configure Genie. Do not redirect stderr: errors must remain visible
+# to the user and to the log/diagnostics workflow.
 Genie.loadapp()
-
-# Remove html parser error discrepancy
-redirect_stderr(devnull)
 
 # Start the Genie server
 @async begin
@@ -77,15 +143,27 @@ redirect_stderr(devnull)
     eTime=round(time()-sTime,digits=3)
     println("Julia MSI GUI took $(eTime) seconds booting")
     url = "http://127.0.0.1:1481"
-    # Open the URL in the default web browser based on the OS
+    # Open the URL in the default web browser based on the OS.
+    # `start` and `Start-Process` are shell built-ins, not executables, so
+    # Windows must go through `cmd /c`.
     if Sys.isapple()
-        @async run(`open $url`) # For macOS
+        @async try
+            run(`open $url`)
+        catch e
+            @warn "Could not open the browser automatically" url=url exception=e
+        end
     elseif Sys.islinux()
-        @async run(`xdg-open $url`) # For Linux
+        @async try
+            run(`xdg-open $url`)
+        catch e
+            @warn "Could not open the browser automatically" url=url exception=e
+        end
     elseif Sys.iswindows()
-        @async run(`start $url`) # For Windows
-        @async run(`explorer $url`)
-        @async run(`Start-Process $url`) # For Windows
+        @async try
+            run(`cmd /c start "" $url`)
+        catch e
+            @warn "Could not open the browser automatically" url=url exception=e
+        end
     end
 end
 wait()

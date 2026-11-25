@@ -397,7 +397,7 @@ function load_mzml_lazy(file_path::String; cache_size::Int=100)
     
     # --- Handle Pool Optimization ---
     # Open multiple handles to the .mzML file to avoid lock contention
-    num_handles = Threads.nthreads()
+    num_handles = max(1, Threads.maxthreadid())
     mzml_handles = [open(file_path, "r") for _ in 1:num_handles]
     
     # Use the first handle for initial parsing

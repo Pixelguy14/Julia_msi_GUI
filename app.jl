@@ -23,31 +23,37 @@ using Dates
 using Base.Threads
 
 # Bring MSIData into App module's scope
-using .MSI_src: MSIData, OpenMSIData, process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile, generate_colorbar_image, load_and_prepare_mask, set_global_mz_range!, main_precalculation, MutableSpectrum, execute_full_preprocessing
+using .MSI_src: MSIData, OpenMSIData, process_spectrum, IterateSpectra, ImzMLSource, _iterate_spectra_fast, MzMLSource, find_mass, ViridisPalette, get_mz_slice, get_multiple_mz_slices, quantize_intensity, save_bitmap, median_filter, save_bitmap, downsample_spectrum, TrIQ, precompute_analytics, ImportMzmlFile, load_and_prepare_mask, set_global_mz_range!, main_precalculation, MutableSpectrum, execute_full_preprocessing, PUBLIC_DIR, DEFAULT_REGISTRY_PATH, ensure_public_dir
 
 if !@isdefined(increment_image)
     include("./julia_imzML_visual.jl")
 end
 
-const global_msi_data = Ref{Union{MSIData, Nothing}}(nothing)
+# Fail early with an actionable message if generated assets cannot be written.
+ensure_public_dir()
+
+if !@isdefined(global_msi_data)
+    const global_msi_data = Ref{Union{MSIData, Nothing}}(nothing)
+end
 
 
 # --- Memory Validation Logging ---
 if get(ENV, "GENIE_ENV", "dev") != "prod"
     function get_rss_mb()
-        if !Sys.islinux()
-            return 0.0
-        end
         try
             pid = getpid()
-            cmd = `ps -p $pid -o rss=`
-            rss_kb_str = read(cmd, String)
-            rss_kb = parse(Int, strip(rss_kb_str))
-            return round(rss_kb / 1024, digits=2)
+            if Sys.iswindows()
+                out = read(`powershell -NoProfile -Command "(Get-Process -Id $pid).WorkingSet64"`, String)
+                return round(parse(Int, strip(out)) / (1024^2), digits=2)
+            elseif Sys.islinux() || Sys.isapple()
+                rss_kb_str = read(`ps -p $pid -o rss=`, String)
+                rss_kb = parse(Int, strip(rss_kb_str))
+                return round(rss_kb / 1024, digits=2)
+            end
         catch e
-            @warn "Could not get RSS via `ps` command. Error: $e"
-            return 0.0
+            @debug "Could not determine RSS" exception=e
         end
+        return 0.0
     end
 
     function log_memory_usage(context::String, msi_data_val)
@@ -58,7 +64,8 @@ if get(ENV, "GENIE_ENV", "dev") != "prod"
             msi_data_size_mb = round(Base.summarysize(msi_data_val) / (1024^2), digits=2)
         end
 
-        gc_time_s = round(GC.time(), digits=3)
+        # GC.time() is reported in nanoseconds in current Julia versions.
+        gc_time_s = round(GC.time() / 1e9, digits=3)
         
         println("--- MEMORY LOG [$(context)] ---")
         println("  Timestamp: $(now())")
@@ -203,7 +210,13 @@ end
 # gigabytes of orphaned session files in /tmp/jl_XXXXXX, exhausting disk space.
 # For a single-user desktop application, session persistence is unnecessary.
 Stipple.enable_model_storage(false)
-Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage is disabled") during layout render
+# Prevent ErrorException("Model storage is disabled") during layout render.
+# Return an EMPTY <meta name="sesstoken" content=""> tag (instead of the empty
+# string) so the browser sends `sesstoken: ""` rather than `sesstoken: null`.
+# Stipple's watcher handler guards with `!isempty(payload["sesstoken"])`, and
+# `isempty(nothing)` falls back to `iterate(nothing)`, which throws the noisy
+# `MethodError(iterate, (nothing,))` seen on every browser interaction.
+Core.eval(Stipple, :(sesstoken() = meta(name = "sesstoken", content = "")))
 
 # Reactive code to make the UI interactive
 @app begin
@@ -399,6 +412,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @in import_params_btn = false # Import parameters from file
     @in save_feature_matrix_btn = false # Save feature matrix results
     @in reset_session_btn = false # Deep session reset
+    @in shutdown = false # Gracefully stop the JuliaMSI server
 
     # Preprocessing results
     @in selected_spectrum_id_for_plot = 1
@@ -463,7 +477,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @in refetch_folders = false
     @in available_folders = String[]
     @in image_available_folders = String[]
-    @out registry_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+    @out registry_path = DEFAULT_REGISTRY_PATH
 
     # Folder selection state
     @in selected_folder_main = ""
@@ -492,10 +506,10 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
 
     # Image file management
     @out text_nmass="" # For specific mass charge image creation
-    @in msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-    @in col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")),lt=natural)
-    @in triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")),lt=natural)
-    @in col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")),lt=natural)
+    @in msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(PUBLIC_DIR)),lt=natural)
+    @in col_msi_png=sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(PUBLIC_DIR)),lt=natural)
+    @in triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(PUBLIC_DIR)),lt=natural)
+    @in col_triq_png=sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(PUBLIC_DIR)),lt=natural)
 
     # Current image display
     @out current_msi=""
@@ -667,6 +681,23 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     # Reactive handlers watch a variable and execute a block of code when its value changes
     # The onbutton handler will set the variable to false after the block is executed
 
+    # Gracefully stop the server when the "turn off" button is pressed.
+    # Run the shutdown on a short delay so the websocket response reaches the
+    # browser before the process exits; `exit(0)` runs Julia's atexit hooks,
+    # which release the mmap'd MSI data and close open files cleanly.
+    @onbutton shutdown begin
+        msg = "Shutting down JuliaMSI..."
+        @info "Shutdown requested from the GUI"
+        @async begin
+            sleep(1)
+            try
+                Genie.down!()
+            catch
+            end
+            exit(0)
+        end
+    end
+
     @onbutton reset_session_btn begin
         is_processing = true
         push!(__model__)
@@ -688,10 +719,10 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
             end
             
             # 3. Reset file lists (these will be repopulated by normal operation)
-            msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
-            col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir("public")), lt=natural)
-            triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir("public")), lt=natural)
-            col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir("public")), lt=natural)
+            msi_bmp = sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(PUBLIC_DIR)), lt=natural)
+            col_msi_png = sort(filter(filename -> startswith(filename, "colorbar_MSI_") && endswith(filename, ".png"), readdir(PUBLIC_DIR)), lt=natural)
+            triq_bmp = sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(PUBLIC_DIR)), lt=natural)
+            col_triq_png = sort(filter(filename -> startswith(filename, "colorbar_TrIQ_") && endswith(filename, ".png"), readdir(PUBLIC_DIR)), lt=natural)
             
             # 4. Clear any cached images/plots
             imgInt = "/.bmp"
@@ -769,7 +800,9 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
             existing_entry = get(registry, dataset_name, nothing)
 
             # --- Fast Load Path ---
-            is_same_file = (existing_entry !== nothing && existing_entry["source_path"] == picked_route)
+            is_same_file = (existing_entry !== nothing &&
+                            normalize_source_path(get(existing_entry, "source_path", "")) ==
+                            normalize_source_path(picked_route))
             if is_same_file && !isempty(get(existing_entry, "metadata", Dict()))
                 msg = "Fast loading pre-processed file: $(dataset_name)"
                 println(msg)
@@ -799,16 +832,11 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
 
 
             # --- Full Load Path ---
-            
-            local local_full_route
-            if endswith(picked_route, r"imzml"i)
-                local_full_route = replace(picked_route, r"\.imzml$"i => ".imzML")
-                if picked_route != local_full_route
-                    mv(picked_route, local_full_route, force=true)
-                end
-            else
-                local_full_route = picked_route
-            end
+            # Never rename the user's source data. Extension matching is
+            # case-insensitive in OpenMSIData/load_imzml_lazy, and renaming
+            # fails on read-only files, network shares, and Windows files that
+            # are open in another program.
+            local_full_route = picked_route
             full_route = local_full_route
 
             sTime = time()
@@ -1014,7 +1042,8 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
             w, h = loaded_data.image_dims
             imgWidth, imgHeight = w > 0 ? (w, h) : (500, 500)
 
-            update_registry(registry_path, dataset_name, local_full_route, summary_stats, is_imzML)
+            saved = update_registry(registry_path, dataset_name, local_full_route, summary_stats, is_imzML)
+            saved || @warn "Could not persist the registry entry for this dataset" dataset=dataset_name
             
             # Update folder lists in UI
             registry = load_registry(registry_path)
@@ -1885,7 +1914,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
 
             # Save feature matrix if binning was performed
             if feature_matrix_result !== nothing
-                output_dir = joinpath("public", selected_folder_main, "preprocessing_results")
+                output_dir = joinpath(PUBLIC_DIR, selected_folder_main, "preprocessing_results")
                 mkpath(output_dir)
                 save_feature_matrix(feature_matrix_result, bin_info_result, output_dir)
                 msg = "Pipeline completed successfully. Feature matrix saved."
@@ -2518,7 +2547,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
             # Update UI to display the last generated image
             if !isempty(newly_created_folders)
                 timestamp = string(time_ns())
-                folder_path = joinpath("public", selected_folder_main)
+                folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
 
                 if current_triq_enabled
                     triq_files = filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path))
@@ -2960,7 +2989,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgMinus begin
         if isempty(selected_folder_main) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_main)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
         # Check if folder exists to prevent errors
         if !isdir(folder_path) return end
         
@@ -2982,7 +3011,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgPlus begin
         if isempty(selected_folder_main) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_main)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
         if !isdir(folder_path) return end
 
         msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3004,7 +3033,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgMinusT begin
         if isempty(selected_folder_main) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_main)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
         if !isdir(folder_path) return end
 
         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3025,7 +3054,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgPlusT begin
         if isempty(selected_folder_main) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_main)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
         if !isdir(folder_path) return end
 
         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3048,7 +3077,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgMinusCompLeft begin
         if isempty(selected_folder_compare_left) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_left)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_left)
         if !isdir(folder_path) return end
 
         msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3070,7 +3099,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgPlusCompLeft begin
         if isempty(selected_folder_compare_left) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_left)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_left)
         if !isdir(folder_path) return end
 
         msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3092,7 +3121,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgMinusTCompLeft begin
         if isempty(selected_folder_compare_left) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_left)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_left)
         if !isdir(folder_path) return end
 
         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3114,7 +3143,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgPlusTCompLeft begin
         if isempty(selected_folder_compare_left) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_left)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_left)
         if !isdir(folder_path) return end
 
         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3136,7 +3165,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgMinusCompRight begin
         if isempty(selected_folder_compare_right) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_right)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_right)
         if !isdir(folder_path) return end
 
         msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3158,7 +3187,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgPlusCompRight begin
         if isempty(selected_folder_compare_right) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_right)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_right)
         if !isdir(folder_path) return end
 
         msi_bmp=sort(filter(filename -> startswith(filename, "MSI_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3180,7 +3209,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgMinusTCompRight begin
         if isempty(selected_folder_compare_right) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_right)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_right)
         if !isdir(folder_path) return end
 
         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3202,7 +3231,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onbutton imgPlusTCompRight begin
         if isempty(selected_folder_compare_right) return end
         timestamp=string(time_ns())
-        folder_path = joinpath("public", selected_folder_compare_right)
+        folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_right)
         if !isdir(folder_path) return end
 
         triq_bmp=sort(filter(filename -> startswith(filename, "TrIQ_") && endswith(filename, ".bmp"), readdir(folder_path)),lt=natural)
@@ -3227,7 +3256,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
         # This handler is now only for updating the UI images when the folder changes.
 
         if !isempty(selected_folder_main)
-            folder_path = joinpath("public", selected_folder_main)
+            folder_path = joinpath(PUBLIC_DIR, selected_folder_main)
             if !isdir(folder_path) 
                 imgInt = ""
                 colorbar = ""
@@ -3305,7 +3334,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onchange selected_folder_compare_left begin
         if !isempty(selected_folder_compare_left)
             timestamp = string(time_ns())
-            folder_path = joinpath("public", selected_folder_compare_left)
+            folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_left)
             
             if !isdir(folder_path)
                 imgIntCompLeft, colorbarCompLeft, imgIntTCompLeft, colorbarTCompLeft = "", "", "", ""
@@ -3360,7 +3389,7 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
     @onchange selected_folder_compare_right begin
         if !isempty(selected_folder_compare_right)
             timestamp = string(time_ns())
-            folder_path = joinpath("public", selected_folder_compare_right)
+            folder_path = joinpath(PUBLIC_DIR, selected_folder_compare_right)
             if !isdir(folder_path) 
                 imgIntCompRight, colorbarCompRight, imgIntTCompRight, colorbarTCompRight = "", "", "", ""
                 msgimgCompRight, msgtriqCompRight = "Folder not found.", "Folder not found."
@@ -3820,13 +3849,22 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
             msg = "Pre-compilation finished."
             try
                 msg = "Synchronizing registry with filesystem on backend init..."
-                reg_path = abspath(joinpath(@__DIR__, "public", "registry.json"))
+                reg_path = DEFAULT_REGISTRY_PATH
                 registry = isfile(reg_path) ? load_registry(reg_path) : Dict{String, Any}()
 
-                public_dirs = isdir("public") ? readdir("public") : []
+                # `ensure_public_dir()` has already verified that this directory
+                # exists and is writable. A read failure here must not be treated
+                # as "all folders were deleted".
+                public_dirs = try
+                    readdir(PUBLIC_DIR)
+                catch e
+                    error("JuliaMSI cannot read its public directory at \"$PUBLIC_DIR\". " *
+                          "Refusing to synchronize the registry because doing so could " *
+                          "delete valid entries. Original error: $(sprint(showerror, e))")
+                end
                 ignored_dirs = ["css", "masks"]
                 
-                dataset_dirs = filter(d -> isdir(joinpath("public", d)) && !(d in ignored_dirs), public_dirs)
+                dataset_dirs = filter(d -> isdir(joinpath(PUBLIC_DIR, d)) && !(d in ignored_dirs), public_dirs)
                 
                 registry_keys = Set(keys(registry))
                 folder_set = Set(dataset_dirs)
@@ -3849,7 +3887,8 @@ Core.eval(Stipple, :(sesstoken() = "")) # Prevent ErrorException("Model storage 
 
                 if !isempty(new_folders) || !isempty(removed_folders)
                     msg = "Registry changed, saving..."
-                    save_registry(reg_path, registry)
+                    saved = save_registry(reg_path, registry)
+                    saved || @error "Registry synchronization could not be persisted" path=reg_path
                 end
                 
                 all_folders = sort(collect(keys(registry)), lt=natural)

@@ -116,9 +116,10 @@ function hash_functions(item::T, count::Int, size::Int, seed::UInt64) where T
     # Use Julia's built-in hash with different seeds
     hashes = Vector{Int}(undef, count)
     
-    # First hash with the main seed
-    h1 = hash(item, seed)
-    h2 = hash(item, seed + 1)
+    # First hash with the main seed. Convert to `UInt` so the same code works
+    # on 32-bit Julia, where `hash(x, h::UInt)` does not accept a UInt64.
+    h1 = hash(item, UInt(seed))
+    h2 = hash(item, UInt(seed + 1))
     
     for i in 1:count
         # Double hashing: h_i = h1 + i * h2

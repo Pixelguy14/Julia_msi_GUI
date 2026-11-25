@@ -178,7 +178,8 @@ function process_dataset!(data::MSIData, config::PipelineConfig;
     indices_to_process = masked_indices === nothing ? nothing : masked_indices
     
     # --- Step 2: Create thread-local accumulators ---
-    n_threads = Base.Threads.nthreads()
+    # `maxthreadid()` also covers the interactive thread pool.
+    n_threads = max(1, Base.Threads.maxthreadid())
     accumulators = [SparseAccumulator(num_spectra * 10) for _ in 1:n_threads]
     spectra_processed = Base.Threads.Atomic{Int}(0)
     

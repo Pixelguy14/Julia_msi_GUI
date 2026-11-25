@@ -1,11 +1,10 @@
 # test/benchmark_v3.jl
 
 # ===================================================================
-# High-Precision Performance Benchmark Suite (v3)
+# High-Precision Performance Benchmark Suite (v3) - Cross-Engine
 # ===================================================================
-# This script integrates the robust statistical sampling of `BenchmarkTools`
-# with the visual comparative mechanics against the legacy library.
-# It captures the paradigm shift from "Time per slice" to "Pipeline Throughput".
+# Compares JuliaMSI (New) vs julia_mzML_imzML (Legacy)
+# Integrates formal academic metrics, error bars, and log-scale plots.
 # ===================================================================
 
 using Pkg
@@ -17,7 +16,6 @@ using CSV
 using CairoMakie
 using Statistics
 using MSI_src
-using julia_mzML_imzML
 
 struct BenchmarkCase
     filepath::String
@@ -27,13 +25,14 @@ struct BenchmarkCase
 end
 
 const RESULTS_DIR = joinpath(@__DIR__, "results")
+const NUM_REPETITIONS = 10
 
-# List to benchmark
 const BENCHMARK_CASES = [
+    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_LA-ESI/180817_NEG_Thaliana_Leaf_bottom_1_0841.imzML", 436.04, 0.1, "Thaliana Leaf"),
     BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/Chilli/ltpmsi-chilli.imzML", 420.0, 0.1, "Chilli Pepper"),
     BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_DESI/40TopL,10TopR,30BottomL,20BottomR/40TopL,10TopR,30BottomL,20BottomR-centroid.imzML", 885.5, 0.1, "Colon Cancer Human"),
     BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/imzML_AP_SMALDI/HR2MSImouseurinarybladderS096.imzML", 716.053, 0.1, "Mouse Urinary Bladder"),
-    BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/Leafs/CE1_Leaf_R3.imzML", 306.1, 0.1, "Leaf"),
+    #BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/Leafs/CE1_Leaf_R3.imzML", 306.1, 0.1, "Leaf"),
     BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/Liv2_imzML_TIMSConvert-selected/Liv2.imzML", 796.18, 0.1, "Liver Cut"),
     BenchmarkCase("/home/pixel/Documents/Cinvestav_2025/Analisis/salida_Tims/Stomach_DHB.imzML", 804.3, 0.1, "Mouse Stomach 4GB")
 ]
@@ -48,7 +47,6 @@ end
 function flush_memory()
     GC.gc(true)
     if Sys.islinux()
-        # Force the OS to reclaim memory from the glibc allocator
         ccall(:malloc_trim, Int32, (Int32,), 0)
     end
 end
@@ -76,18 +74,17 @@ function run_v3_benchmarks()
         println("[JuliaMSI - New Engine]")
         flush_memory()
         
-        # Load Phase (Metadata Only / Memory Mapping)
         load_stats_new = @timed OpenMSIData(case.filepath)
         msi_data = load_stats_new.value
         load_time_new_s = load_stats_new.time
         mem_load_new_mb = load_stats_new.bytes / 1024^2
         
-        # Slicing Phase (High Precision)
-        b_slice_new = @benchmark get_mz_slice($msi_data, $(case.mz_value), $(case.mz_tolerance)) samples=10 seconds=5
-        mean_time_new_s = mean(b_slice_new.times) / 1e9
+        # Benchmark slice generation and capture variability
+        b_slice_new = @benchmark get_mz_slice($msi_data, $(case.mz_value), $(case.mz_tolerance)) samples=NUM_REPETITIONS seconds=10
+        times_new_s = b_slice_new.times ./ 1e9
+        mean_time_new_s = mean(times_new_s)
+        std_time_new_s = std(times_new_s)
         
-        # Calculate Amortized Throughput (10 slices)
-        # Includes the 'Loading Wall' penalty
         total_time_10_new = load_time_new_s + (10 * mean_time_new_s)
         amortized_sps_new = 10.0 / total_time_10_new
         
@@ -99,65 +96,120 @@ function run_v3_benchmarks()
         # ------------------------------------------------------------
         println("[julia_mzML_imzML - Legacy]")
         
-        load_stats_old = try
-            @timed LoadImzml(case.filepath)
-        catch e
-            @warn "Legacy load failed: $e"
-            (time=Inf, bytes=Inf, value=nothing)
-        end
-        
-        old_data = load_stats_old.value
-        mem_load_old_mb = load_stats_old.bytes / 1024^2
-        
+        mem_load_old_mb = NaN
         load_time_old_s = Inf
         mean_time_old_s = Inf
+        std_time_old_s = 0.0
         amortized_sps_old = 0.0
+        legacy_status = "Success"
         
-        if old_data !== nothing
-            b_slice_old = try
-                # Legacy can be extremely slow, constrain it heavily
-                @benchmark GetSlice($old_data, $(case.mz_value), $(case.mz_tolerance)) samples=3 seconds=10
-            catch e
-                @warn "Legacy slice failed: $e"
-                nothing
-            end
+        # Skip files > 3 GB in legacy to prevent OOM / SIGKILL
+        if file_size > 5000
+            println("Skipping legacy benchmark for $(case.name) to prevent SIGKILL OOM.")
+            legacy_status = "OOM / Skipped"
+        else
+            temp_legacy_csv = joinpath(RESULTS_DIR, "temp_legacy_v3.csv")
+            rm(temp_legacy_csv, force=true)
             
-            if b_slice_old !== nothing
-                mean_time_old_s = mean(b_slice_old.times) / 1e9
+            legacy_cmd_str = """
+            using julia_mzML_imzML, Statistics, BenchmarkTools, CSV, DataFrames
+            try
+                load_stats = @timed LoadImzml("$(case.filepath)")
+                old_data = load_stats.value
+                mem_load_mb = load_stats.bytes / 1024^2
+                load_time_s = load_stats.time
                 
-                # Accurately reflect the massive load time in the throughput
-                load_time_old_s = load_stats_old.time
-                total_time_10_old = load_time_old_s + (10 * mean_time_old_s)
-                amortized_sps_old = 10.0 / total_time_10_old
+                b_slice = @benchmark GetSlice(\$old_data, $(case.mz_value), $(case.mz_tolerance)) samples=$NUM_REPETITIONS seconds=10
+                times_s = b_slice.times ./ 1e9
+                
+                df = DataFrame(
+                    LoadMem_MB=[mem_load_mb], 
+                    LoadTime_s=[load_time_s], 
+                    SliceMean_s=[mean(times_s)], 
+                    SliceStd_s=[std(times_s)]
+                )
+                CSV.write("$(temp_legacy_csv)", df)
+            catch e
+                df = DataFrame(LoadMem_MB=[NaN], LoadTime_s=[Inf], SliceMean_s=[NaN], SliceStd_s=[0.0])
+                CSV.write("$(temp_legacy_csv)", df)
+            end
+            """
+            
+            try
+                run(`julia --project=. -e $(legacy_cmd_str)`)
+                if isfile(temp_legacy_csv)
+                    legacy_df = CSV.read(temp_legacy_csv, DataFrame)
+                    mem_load_old_mb = legacy_df.LoadMem_MB[1]
+                    load_time_old_s = legacy_df.LoadTime_s[1]
+                    mean_time_old_s = legacy_df.SliceMean_s[1]
+                    std_time_old_s = legacy_df.SliceStd_s[1]
+                    
+                    if isfinite(mean_time_old_s)
+                        total_time_10_old = load_time_old_s + (10 * mean_time_old_s)
+                        amortized_sps_old = 10.0 / total_time_10_old
+                    else
+                        legacy_status = "Failed"
+                    end
+                    rm(temp_legacy_csv, force=true)
+                else
+                    legacy_status = "OOM / Failed"
+                end
+            catch e
+                @warn "Legacy process crashed: $e"
+                legacy_status = "OOM / Failed"
             end
         end
         
         flush_memory()
 
         # ------------------------------------------------------------
-        # Record
+        # Derived Metrics Calculation
         # ------------------------------------------------------------
+        # Throughput (Slices per second)
+        tput_new = 1.0 / mean_time_new_s
+        tput_old = isfinite(mean_time_old_s) ? (1.0 / mean_time_old_s) : 0.0
+        
+        # Memory Efficiency (MB RAM / GB File)
+        gb_file = file_size / 1024.0
+        mem_eff_new = mem_load_new_mb / gb_file
+        mem_eff_old = isfinite(mem_load_old_mb) ? (mem_load_old_mb / gb_file) : NaN
+        
+        # Fold Speedup (Legacy / JuliaMSI)
+        speedup = isfinite(mean_time_old_s) ? (mean_time_old_s / mean_time_new_s) : NaN
+        
+        # Load Bandwidth (MB/s)
+        bandwidth_new = file_size / load_time_new_s
+        bandwidth_old = isfinite(load_time_old_s) ? (file_size / load_time_old_s) : 0.0
+
         push!(results, (
             Dataset = case.name,
             FileSize_MB = file_size,
             
-            # Legacy Metrics
-            Legacy_LoadMem_MB = mem_load_old_mb,
-            Legacy_LoadTime_s = load_stats_old.time,
-            Legacy_Amortized_SPS_10 = amortized_sps_old,
-            
-            # New Metrics
-            New_LoadMem_MB = mem_load_new_mb,
+            # New Engine (JuliaMSI)
             New_LoadTime_s = load_time_new_s,
+            New_LoadMem_MB = mem_load_new_mb,
+            New_SliceMean_s = mean_time_new_s,
+            New_SliceStd_s = std_time_new_s,
+            New_Throughput_SPS = tput_new,
+            New_MemEff_MB_GB = mem_eff_new,
+            New_Bandwidth_MBs = bandwidth_new,
             New_Amortized_SPS_10 = amortized_sps_new,
             
-            # Competitive Deltas
+            # Legacy Engine
+            Legacy_LoadTime_s = load_time_old_s,
+            Legacy_LoadMem_MB = mem_load_old_mb,
+            Legacy_SliceMean_s = mean_time_old_s,
+            Legacy_SliceStd_s = std_time_old_s,
+            Legacy_Throughput_SPS = tput_old,
+            Legacy_MemEff_MB_GB = mem_eff_old,
+            Legacy_Bandwidth_MBs = bandwidth_old,
+            Legacy_Amortized_SPS_10 = amortized_sps_old,
+            
+            # Comparative Deltas
+            Fold_Speedup = speedup,
             RAM_Reduction_Pct = isfinite(mem_load_old_mb) ? ((mem_load_old_mb - mem_load_new_mb) / mem_load_old_mb)*100 : NaN,
-            UX_Speedup_Factor = isfinite(amortized_sps_old) ? (amortized_sps_new / amortized_sps_old) : NaN
+            Legacy_Status = legacy_status
         ))
-        
-        println("  > RAM Reduction: $(round(results[end, :RAM_Reduction_Pct], digits=2))%")
-        println("  > Amortized Throughput (10 Slices): $(round(amortized_sps_old, digits=2)) -> $(round(amortized_sps_new, digits=2)) slices/sec")
     end
 
     csv_path = joinpath(RESULTS_DIR, "v3_enterprise_benchmarks.csv")
@@ -171,45 +223,59 @@ end
 function plot_v3_results(df::DataFrame)
     if isempty(df) return end
 
-    fig = Figure(size=(1800, 1200), fontsize=24)
+    fig = Figure(size=(1800, 1200), fontsize=22)
     x_pos = 1:nrow(df)
     labels = df.Dataset
 
-    # ---------- Plot 1: The RAM Revolution ----------
+    # ---------- Panel A: Initial Load Time (Log Scale) ----------
     ax1 = Axis(fig[1, 1], 
-               title="Initial RAM Cost (Loading & Mmap)", 
-               ylabel="Memory (MB)",
+               title="Panel A: Metadata/File Load Time", 
+               ylabel="Time (seconds) - Log Scale",
+               yscale=log10,
                xticks=(x_pos, labels), xticklabelrotation=π/8)
     
-    barplot!(ax1, x_pos .- 0.2, df.New_LoadMem_MB, color="#10b981", width=0.4, label="JuliaMSI (Mmap Lazy)")
-    barplot!(ax1, x_pos .+ 0.2, df.Legacy_LoadMem_MB, color="#ef4444", width=0.4, label="Legacy (Dense Matrix)")
+    barplot!(ax1, x_pos .- 0.2, df.New_LoadTime_s, color="#10b981", width=0.4, label="JuliaMSI")
+    
+    # Only plot legacy if it succeeded
+    legacy_times = [row.Legacy_Status == "Success" ? row.Legacy_LoadTime_s : 1e-3 for row in eachrow(df)]
+    barplot!(ax1, x_pos .+ 0.2, legacy_times, color="#ef4444", width=0.4, label="Legacy")
     axislegend(ax1, position=:lt)
 
-    # ---------- Plot 2: Throughput Leap ----------
+    # ---------- Panel B: Initial RAM Cost (Log Scale) ----------
     ax2 = Axis(fig[1, 2], 
-               title="Amortized Throughput (10 Slices - Higher is Better)", 
-               ylabel="Slices / Second (Inc. Load Time)",
+               title="Panel B: Memory Footprint (RAM)", 
+               ylabel="Memory (MB) - Log Scale",
+               yscale=log10,
                xticks=(x_pos, labels), xticklabelrotation=π/8)
-               
-    barplot!(ax2, x_pos .- 0.2, df.New_Amortized_SPS_10, color="#10b981", width=0.4, label="JuliaMSI")
-    barplot!(ax2, x_pos .+ 0.2, df.Legacy_Amortized_SPS_10, color="#ef4444", width=0.4, label="Legacy")
+    
+    barplot!(ax2, x_pos .- 0.2, df.New_LoadMem_MB, color="#10b981", width=0.4, label="JuliaMSI (Mmap)")
+    
+    legacy_mems = [row.Legacy_Status == "Success" ? row.Legacy_LoadMem_MB : 1e-1 for row in eachrow(df)]
+    barplot!(ax2, x_pos .+ 0.2, legacy_mems, color="#ef4444", width=0.4, label="Legacy (Dense)")
     axislegend(ax2, position=:lt)
 
-    # ---------- Plot 3: The Scaling Wall (File Size vs Throughput) ----------
+    # ---------- Panel C: Slice Throughput & Error Bars ----------
     ax3 = Axis(fig[2, 1:2], 
-               title="Performance Scaling: UX Throughput vs Dataset Size", 
-               xlabel="Dataset File Size (MB)", 
-               ylabel="Amortized Throughput (Slices/sec)")
+               title="Panel C: Slice Generation Time (Mean ± SD)", 
+               ylabel="Time (seconds) - Log Scale",
+               yscale=log10,
+               xticks=(x_pos, labels), xticklabelrotation=π/8)
                
-    scatterlines!(ax3, df.FileSize_MB, df.New_Amortized_SPS_10, color="#10b981", markersize=15, linewidth=4, label="JuliaMSI Engine")
-    scatterlines!(ax3, df.FileSize_MB, df.Legacy_Amortized_SPS_10, color="#ef4444", markersize=15, linewidth=4, label="Legacy Engine")
+    # Plot JuliaMSI times and error bars
+    barplot!(ax3, x_pos .- 0.2, df.New_SliceMean_s, color="#10b981", width=0.4, label="JuliaMSI")
+    errorbars!(ax3, x_pos .- 0.2, df.New_SliceMean_s, df.New_SliceStd_s, color=:black, whiskerwidth=15)
+    
+    # Plot Legacy times and error bars (where successful)
+    legacy_means = [row.Legacy_Status == "Success" ? row.Legacy_SliceMean_s : 1e-4 for row in eachrow(df)]
+    legacy_stds = [row.Legacy_Status == "Success" ? row.Legacy_SliceStd_s : 0.0 for row in eachrow(df)]
+    barplot!(ax3, x_pos .+ 0.2, legacy_means, color="#ef4444", width=0.4, label="Legacy")
+    errorbars!(ax3, x_pos .+ 0.2, legacy_means, legacy_stds, color=:black, whiskerwidth=15)
     axislegend(ax3, position=:rt)
 
     save(joinpath(RESULTS_DIR, "v3_enterprise_dashboard.png"), fig)
-    println("\nDashboards saved successfully.")
+    println("\nDashboards saved successfully to $(joinpath(RESULTS_DIR, "v3_enterprise_dashboard.png"))")
 end
 
-# Ensure we process if run as the main script
 if abspath(PROGRAM_FILE) == @__FILE__
     run_v3_benchmarks()
 end

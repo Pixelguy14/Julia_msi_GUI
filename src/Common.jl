@@ -204,12 +204,12 @@ function create_bloom_filter_for_spectrum(mz::AbstractVector{<:Real})::BloomFilt
 end
 
 """
-    empty_bloom_filter() -> BloomFilter{Float64}
+    empty_bloom_filter() -> BloomFilter{Int}
 
 Creates an empty Bloom filter for spectra with no data.
 
 # Returns:
-- An empty `BloomFilter{Float64}`.
+- An empty `BloomFilter{Int}`.
 """
 function empty_bloom_filter()::BloomFilter{Int}
     return BloomFilter{Int}(size=DEFAULT_BLOOM_FILTER_SIZE, hash_count=3)

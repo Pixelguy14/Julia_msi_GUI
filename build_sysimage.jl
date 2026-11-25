@@ -1,4 +1,6 @@
 # build_sysimage.jl
+using Pkg
+Pkg.activate(@__DIR__)
 using PackageCompiler
 
 headless = "--headless" in ARGS
@@ -33,7 +35,7 @@ end
 create_sysimage(
     packages_to_include,
     sysimage_path = sysimage_path,
-    precompile_execution_file = "precompile_script.jl",
+    precompile_execution_file = joinpath(@__DIR__, "precompile_script.jl"),
     incremental = true,
     filter_stdlibs = false
 )

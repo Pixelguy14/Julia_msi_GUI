@@ -15,13 +15,21 @@
 # ===================================================================
 
 using Printf
-using CairoMakie
 import Pkg
 
 # --- Load the MSI_src Module ---
-# Activate the project environment at the parent directory of this test script
+# Activate the project environment before loading any project package.
 Pkg.activate(joinpath(@__DIR__, ".."))
 using MSI_src
+using CairoMakie
+using PlotlyBase
+using Base.Threads
+using MSI_src: ViridisPalette, save_bitmap, quantize_intensity, median_filter, TrIQ,
+               get_multiple_mz_slices, precompute_analytics, MutableSpectrum
+
+# GUI-only plotting helpers (plot_slice, generate_colorbar_image, ...) live in
+# the app layer so `using MSI_src` stays lightweight for headless use.
+include(joinpath(@__DIR__, "..", "julia_imzML_visual.jl"))
 
 
 # ===================================================================
